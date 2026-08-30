@@ -1,0 +1,88 @@
+package layout
+
+import "recruiting/internal/web/middleware"
+
+// Base is the chrome every signed-in page renders inside. htmx and Alpine are
+// loaded from the binary's own assets, never a CDN.
+templ Base(p Page) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<meta name="csrf-token" content={ p.CSRF }/>
+			<title>{ p.Title }</title>
+			<script src={ HTMXPath } defer></script>
+			<script src={ AlpinePath } defer></script>
+			@styles()
+		</head>
+		<body hx-headers={ csrfHeader(p.CSRF) }>
+			<header class="topbar">
+				<a class="brand" href={ templ.SafeURL(string(p.Surface) + "/") }>Recruiting</a>
+				<nav>
+					for _, item := range p.Nav {
+						if item.Active {
+							<a href={ templ.SafeURL(item.Href) } aria-current="page">{ item.Label }</a>
+						} else {
+							<a href={ templ.SafeURL(item.Href) }>{ item.Label }</a>
+						}
+					}
+				</nav>
+				if p.UserName != "" {
+					<form class="signout" method="post" action={ templ.SafeURL(p.LogoutPath()) }>
+						@CSRFField(p.CSRF)
+						<span class="who">{ p.UserName }</span>
+						<button type="submit">Sign out</button>
+					</form>
+				}
+			</header>
+			<main>
+				for _, f := range p.Flashes {
+					<p class={ p.flashClass(f) } role="status">{ f.Message }</p>
+				}
+				{ children... }
+			</main>
+		</body>
+	</html>
+}
+
+// CSRFField is the hidden input every non-htmx form must carry.
+templ CSRFField(token string) {
+	<input type="hidden" name={ middleware.CSRFField } value={ token }/>
+}
+
+templ styles() {
+	<style>
+		:root { color-scheme: light dark; --line: #d7d7d7; --muted: #5b5b5b; }
+		* { box-sizing: border-box; }
+		body { font-family: system-ui, sans-serif; margin: 0; color: #1a1a1a; background: #fff; }
+		.topbar { display: flex; align-items: center; gap: 1.5rem; padding: .75rem 1.5rem; border-bottom: 1px solid var(--line); }
+		.brand { font-weight: 600; text-decoration: none; color: inherit; }
+		.topbar nav { display: flex; gap: 1rem; }
+		.topbar nav a { color: var(--muted); text-decoration: none; }
+		.topbar nav a[aria-current="page"] { color: #1a1a1a; font-weight: 600; }
+		.signout { margin-left: auto; display: flex; align-items: center; gap: .75rem; }
+		.who { color: var(--muted); }
+		main { max-width: 60rem; margin: 2rem auto; padding: 0 1.5rem; }
+		h1 { font-size: 1.4rem; }
+		h2 { font-size: 1.1rem; margin-top: 2.5rem; }
+		table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+		th, td { text-align: left; padding: .5rem .75rem; border-bottom: 1px solid var(--line); }
+		form.stack { display: grid; gap: .75rem; max-width: 32rem; margin-top: 1rem; }
+		form.search { display: flex; align-items: end; gap: .75rem; margin-top: 1rem; max-width: 32rem; }
+		form.search label { flex: 1; }
+		input[type="search"], input[type="file"] { width: 100%; padding: .45rem; }
+		label { display: block; }
+		input[type="text"], input[type="email"], input[type="number"], select { width: 100%; padding: .45rem; }
+		fieldset { border: 1px solid var(--line); }
+		.flash { padding: .75rem 1rem; border-left: 4px solid; }
+		.flash-success { background: #eef7ee; border-color: #2e7d32; }
+		.flash-error { background: #fdeded; border-color: #b00020; }
+		.link { font-family: ui-monospace, monospace; word-break: break-all; }
+		pre.statement { white-space: pre-wrap; background: #f6f6f6; padding: .75rem; overflow-x: auto; }
+		pre.cell { white-space: pre-wrap; margin: 0; font-size: .85rem; max-width: 18rem; overflow-x: auto; }
+		textarea { width: 100%; padding: .45rem; font-family: ui-monospace, monospace; }
+		.pool-entry { border: 1px solid var(--line); padding: 1rem 1.25rem; margin-top: 1.5rem; }
+		.muted { color: var(--muted); }
+	</style>
+}

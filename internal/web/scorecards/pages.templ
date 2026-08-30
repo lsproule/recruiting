@@ -1,0 +1,181 @@
+package scorecards
+
+import (
+	"github.com/google/uuid"
+
+	"recruiting/internal/service"
+	"recruiting/internal/web/layout"
+)
+
+// assignmentsPage is the vetter's own list: the interviews assigned to them
+// and whether their scorecard is in.
+templ assignmentsPage(page layout.Page, rows []service.Assignment) {
+	@layout.Base(page) {
+		<h1>Scorecards</h1>
+		<p class="muted">The interviews assigned to you. An application leaves an interview stage once your scorecard is filed.</p>
+		if len(rows) == 0 {
+			<p class="muted">Nothing assigned to you.</p>
+		} else {
+			<table>
+				<thead><tr><th>Candidate</th><th>Job</th><th>Stage</th><th>Scorecard</th><th></th></tr></thead>
+				<tbody>
+					for _, a := range rows {
+						<tr>
+							<td>{ a.CandidateName } <span class="muted">{ a.CandidateEmail }</span></td>
+							<td>{ a.JobTitle }</td>
+							<td>{ a.StageName }</td>
+							<td>
+								if a.Submitted {
+									{ overallLabel(a.Overall) }
+								} else {
+									<span class="muted">Not filed</span>
+								}
+							</td>
+							<td>
+								<a href={ templ.SafeURL(FormPath(a.ApplicationID, a.StageID)) }>
+									if a.Submitted {
+										Edit
+									} else {
+										Fill in
+									}
+								</a>
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+	}
+}
+
+// scorecardPage is the form itself: the rubric's criteria, a note per
+// criterion, and the overall verdict.
+templ scorecardPage(page layout.Page, form service.ScorecardForm, filed bool, csrf string) {
+	@layout.Base(page) {
+		<h1>{ form.CandidateName }</h1>
+		<p class="muted">{ form.JobTitle } — { form.StageName }</p>
+		<form class="stack" method="post" action={ templ.SafeURL(FormPath(form.ApplicationID, form.StageID)) }>
+			@layout.CSRFField(csrf)
+			<input type="hidden" name="scorecard_id" value={ cardID(form.Card) }/>
+			if len(form.Criteria) == 0 {
+				<p class="muted">This stage has no rubric yet; record your notes and verdict.</p>
+			}
+			for _, c := range form.Criteria {
+				<fieldset>
+					<legend>{ c.Name }</legend>
+					if c.Description != "" {
+						<p class="muted">{ c.Description }</p>
+					}
+					<input type="hidden" name="criterion" value={ c.Name }/>
+					<label>
+						Score
+						<select name="score" required>
+							<option value="">–</option>
+							for _, n := range scoreValues {
+								<option value={ itoa(n) } selected?={ scoreOf(form.Card, c.Name) == n }>{ itoa(n) }</option>
+							}
+						</select>
+					</label>
+					<label>
+						Notes
+						<input type="text" name="criterion_notes" value={ criterionNotes(form.Card, c.Name) }/>
+					</label>
+				</fieldset>
+			}
+			<label>
+				Overall
+				<select name="overall" required>
+					<option value="">–</option>
+					for _, v := range service.Overalls {
+						<option value={ v } selected?={ cardOverall(form.Card) == v }>{ overallLabel(v) }</option>
+					}
+				</select>
+			</label>
+			<label>
+				Notes
+				<textarea name="notes" rows="5">{ cardNotes(form.Card) }</textarea>
+			</label>
+			<button type="submit">
+				if filed {
+					Update scorecard
+				} else {
+					Submit scorecard
+				}
+			</button>
+		</form>
+	}
+}
+
+// rubricPage is the recruiter's editor. Cards already filed keep the criteria
+// they were filed against, so an edit here only changes what comes next.
+templ rubricPage(page layout.Page, jobID uuid.UUID, rubric service.Rubric, csrf string) {
+	@layout.Base(page) {
+		<h1>Rubric — { rubric.StageName }</h1>
+		<p class="muted">What interviewers score on this stage, in order. Scorecards already filed keep the criteria they were filed against; clearing a name removes the criterion.</p>
+		<form class="stack" method="post" action={ templ.SafeURL(RubricPath(jobID, rubric.StageID)) }>
+			@layout.CSRFField(csrf)
+			<label>
+				Rubric name
+				<input type="text" name="name" value={ rubric.Name }/>
+			</label>
+			for _, c := range rubric.Criteria {
+				<fieldset>
+					<legend>Criterion</legend>
+					<label>
+						Name
+						<input type="text" name="name_of" value={ c.Name }/>
+					</label>
+					<label>
+						Description
+						<input type="text" name="description" value={ c.Description }/>
+					</label>
+				</fieldset>
+			}
+			for range blanks() {
+				<fieldset>
+					<legend>New criterion</legend>
+					<label>
+						Name
+						<input type="text" name="name_of" value=""/>
+					</label>
+					<label>
+						Description
+						<input type="text" name="description" value=""/>
+					</label>
+				</fieldset>
+			}
+			<button type="submit">Save rubric</button>
+		</form>
+	}
+}
+
+// SummaryFragment is the scorecards an application has collected. The
+// application page embeds it; the partial route serves the same markup.
+templ SummaryFragment(cards []service.Scorecard) {
+	<section id="scorecards">
+		<h2>Scorecards</h2>
+		if len(cards) == 0 {
+			<p class="muted">No scorecards yet.</p>
+		} else {
+			for _, c := range cards {
+				<article class="scorecard">
+					<h3>{ c.StageName } — { overallLabel(c.Overall) }</h3>
+					<p class="muted">{ c.VetterName }, { filedAt(c.CreatedAt) }</p>
+					if len(c.Scores) > 0 {
+						<table>
+							<thead><tr><th>Criterion</th><th>Score</th><th>Notes</th></tr></thead>
+							<tbody>
+								for _, s := range c.Scores {
+									<tr><td>{ s.Name }</td><td>{ itoa(s.Score) }</td><td>{ s.Notes }</td></tr>
+								}
+							</tbody>
+						</table>
+					}
+					if c.Notes != "" {
+						<p>{ c.Notes }</p>
+					}
+				</article>
+			}
+		}
+	</section>
+}

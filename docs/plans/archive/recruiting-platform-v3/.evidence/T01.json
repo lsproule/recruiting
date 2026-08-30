@@ -1,0 +1,23 @@
+{
+  "checks": [
+    {
+      "command": "make check",
+      "status": "passed"
+    },
+    {
+      "command": "make test",
+      "status": "passed"
+    },
+    {
+      "command": "make test-integration",
+      "status": "passed"
+    },
+    {
+      "command": "make openapi-lint",
+      "status": "passed"
+    }
+  ],
+  "manual": false,
+  "result_sha256": "cc5d7e55592d412971d532587c86dce6a90c46e9a3254d87c3a5b3e9a5e1d020",
+  "workspace": "/home/lucas/wrk/recruiting"
+}

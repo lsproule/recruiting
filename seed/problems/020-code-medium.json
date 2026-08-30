@@ -1,0 +1,140 @@
+[
+  {
+    "kind": "code",
+    "title": "Meeting Room Crunch",
+    "statement": "You are given a day's meeting requests as half-open intervals in minutes from midnight.\n\nThe first line is the number of meetings; each following line holds a start and an end. Print the smallest number of rooms that hosts every meeting.\n\nA meeting ending at the minute another starts may reuse the same room.",
+    "difficulty": "medium",
+    "tags": [
+      "sorting",
+      "greedy",
+      "intervals"
+    ],
+    "allowed_languages": [
+      "python",
+      "node",
+      "go",
+      "java"
+    ],
+    "time_limit_ms": 3000,
+    "memory_limit_kb": 262144,
+    "reference_solutions": [
+      {
+        "language": "python",
+        "source": "import sys\n\ndata = sys.stdin.read().split()\nn = int(data[0]) if data else 0\nevents = []\nfor i in range(n):\n    start = int(data[1 + i * 2])\n    end = int(data[2 + i * 2])\n    events.append((start, 1))\n    events.append((end, -1))\n\nevents.sort()\nbest = 0\nopen_rooms = 0\nfor _, delta in events:\n    open_rooms += delta\n    best = max(best, open_rooms)\nprint(best)\n"
+      },
+      {
+        "language": "node",
+        "source": "const parts = require('fs').readFileSync(0, 'utf8').split(/\\s+/).filter(Boolean).map(Number);\nconst n = parts.length ? parts[0] : 0;\nconst events = [];\nfor (let i = 0; i < n; i++) {\n  events.push([parts[1 + i * 2], 1]);\n  events.push([parts[2 + i * 2], -1]);\n}\nevents.sort((a, b) => a[0] - b[0] || a[1] - b[1]);\nlet open = 0;\nlet best = 0;\nfor (const [, delta] of events) {\n  open += delta;\n  if (open > best) best = open;\n}\nconsole.log(best);\n"
+      },
+      {
+        "language": "go",
+        "source": "package main\n\nimport (\n\t\"bufio\"\n\t\"fmt\"\n\t\"os\"\n\t\"sort\"\n)\n\ntype event struct{ at, delta int }\n\nfunc main() {\n\tin := bufio.NewReader(os.Stdin)\n\tvar n int\n\tif _, err := fmt.Fscan(in, &n); err != nil {\n\t\tfmt.Println(0)\n\t\treturn\n\t}\n\tevents := make([]event, 0, n*2)\n\tfor i := 0; i < n; i++ {\n\t\tvar start, end int\n\t\tif _, err := fmt.Fscan(in, &start, &end); err != nil {\n\t\t\tbreak\n\t\t}\n\t\tevents = append(events, event{start, 1}, event{end, -1})\n\t}\n\tsort.Slice(events, func(i, j int) bool {\n\t\tif events[i].at != events[j].at {\n\t\t\treturn events[i].at < events[j].at\n\t\t}\n\t\treturn events[i].delta < events[j].delta\n\t})\n\topen, best := 0, 0\n\tfor _, e := range events {\n\t\topen += e.delta\n\t\tif open > best {\n\t\t\tbest = open\n\t\t}\n\t}\n\tfmt.Println(best)\n}\n"
+      },
+      {
+        "language": "java",
+        "source": "import java.util.Arrays;\nimport java.util.Scanner;\n\npublic class Main {\n    public static void main(String[] args) {\n        Scanner in = new Scanner(System.in);\n        if (!in.hasNextInt()) {\n            System.out.println(0);\n            return;\n        }\n        int n = in.nextInt();\n        int[][] events = new int[n * 2][2];\n        for (int i = 0; i < n; i++) {\n            events[i * 2] = new int[] {in.nextInt(), 1};\n            events[i * 2 + 1] = new int[] {in.nextInt(), -1};\n        }\n        Arrays.sort(events, (a, b) -> a[0] != b[0] ? Integer.compare(a[0], b[0]) : Integer.compare(a[1], b[1]));\n        int open = 0;\n        int best = 0;\n        for (int[] e : events) {\n            open += e[1];\n            best = Math.max(best, open);\n        }\n        System.out.println(best);\n    }\n}\n"
+      }
+    ],
+    "test_cases": [
+      {
+        "input": "3\n540 600\n560 620\n610 640\n",
+        "expected": "2",
+        "visibility": "public",
+        "weight": 1
+      },
+      {
+        "input": "2\n540 600\n600 660\n",
+        "expected": "1",
+        "visibility": "public",
+        "weight": 1
+      },
+      {
+        "input": "0\n",
+        "expected": "0",
+        "visibility": "hidden",
+        "weight": 1
+      },
+      {
+        "input": "4\n0 100\n0 100\n0 100\n0 100\n",
+        "expected": "4",
+        "visibility": "hidden",
+        "weight": 2
+      },
+      {
+        "input": "5\n0 10\n5 15\n10 20\n15 25\n20 30\n",
+        "expected": "2",
+        "visibility": "hidden",
+        "weight": 2
+      }
+    ]
+  },
+  {
+    "kind": "code",
+    "title": "Log Window Peak",
+    "statement": "A service writes the durations of the requests it handled, in milliseconds.\n\nThe first line is the window size `k`. The second line is the number of durations `n`. The third line holds the `n` durations, non-negative and separated by spaces.\n\nPrint the largest duration in every window of `k` consecutive durations, one per line, left to right. If `k` is larger than `n` there is no such window: print nothing.",
+    "difficulty": "medium",
+    "tags": [
+      "sliding-window",
+      "deque",
+      "arrays"
+    ],
+    "allowed_languages": [
+      "python",
+      "node",
+      "go",
+      "java"
+    ],
+    "time_limit_ms": 3000,
+    "memory_limit_kb": 262144,
+    "reference_solutions": [
+      {
+        "language": "python",
+        "source": "import sys\nfrom collections import deque\n\ndata = list(map(int, sys.stdin.read().split()))\nk, n = data[0], data[1]\nvalues = data[2:2 + n]\nwindow = deque()\nout = []\nfor i, v in enumerate(values):\n    while window and values[window[-1]] <= v:\n        window.pop()\n    window.append(i)\n    if window[0] <= i - k:\n        window.popleft()\n    if i >= k - 1:\n        out.append(values[window[0]])\nif out:\n    print(\"\\n\".join(map(str, out)))\n"
+      },
+      {
+        "language": "node",
+        "source": "const data = require('fs').readFileSync(0, 'utf8').split(/\\s+/).filter(Boolean).map(Number);\nconst k = data[0];\nconst n = data[1];\nconst values = data.slice(2, 2 + n);\nconst window = [];\nconst out = [];\nfor (let i = 0; i < values.length; i++) {\n  while (window.length && values[window[window.length - 1]] <= values[i]) window.pop();\n  window.push(i);\n  if (window[0] <= i - k) window.shift();\n  if (i >= k - 1) out.push(values[window[0]]);\n}\nif (out.length) console.log(out.join('\\n'));\n"
+      },
+      {
+        "language": "go",
+        "source": "package main\n\nimport (\n\t\"bufio\"\n\t\"fmt\"\n\t\"os\"\n\t\"strconv\"\n)\n\nfunc main() {\n\tin := bufio.NewReader(os.Stdin)\n\tvar k, n int\n\tif _, err := fmt.Fscan(in, &k, &n); err != nil {\n\t\treturn\n\t}\n\tvalues := make([]int, 0, n)\n\tfor i := 0; i < n; i++ {\n\t\tvar v int\n\t\tif _, err := fmt.Fscan(in, &v); err != nil {\n\t\t\tbreak\n\t\t}\n\t\tvalues = append(values, v)\n\t}\n\tout := bufio.NewWriter(os.Stdout)\n\tdefer out.Flush()\n\twindow := make([]int, 0, len(values))\n\tfor i, v := range values {\n\t\tfor len(window) > 0 && values[window[len(window)-1]] <= v {\n\t\t\twindow = window[:len(window)-1]\n\t\t}\n\t\twindow = append(window, i)\n\t\tif window[0] <= i-k {\n\t\t\twindow = window[1:]\n\t\t}\n\t\tif i >= k-1 {\n\t\t\tout.WriteString(strconv.Itoa(values[window[0]]))\n\t\t\tout.WriteByte('\\n')\n\t\t}\n\t}\n}\n"
+      },
+      {
+        "language": "java",
+        "source": "import java.io.BufferedReader;\nimport java.io.InputStreamReader;\nimport java.io.StreamTokenizer;\nimport java.util.ArrayDeque;\nimport java.util.Deque;\n\npublic class Main {\n    public static void main(String[] args) throws Exception {\n        StreamTokenizer in = new StreamTokenizer(new BufferedReader(new InputStreamReader(System.in)));\n        if (in.nextToken() == StreamTokenizer.TT_EOF) return;\n        int k = (int) in.nval;\n        in.nextToken();\n        int n = (int) in.nval;\n        int[] values = new int[n];\n        for (int i = 0; i < n; i++) {\n            in.nextToken();\n            values[i] = (int) in.nval;\n        }\n        Deque<Integer> window = new ArrayDeque<>();\n        StringBuilder out = new StringBuilder();\n        for (int i = 0; i < n; i++) {\n            while (!window.isEmpty() && values[window.peekLast()] <= values[i]) window.pollLast();\n            window.addLast(i);\n            if (window.peekFirst() <= i - k) window.pollFirst();\n            if (i >= k - 1) out.append(values[window.peekFirst()]).append('\\n');\n        }\n        System.out.print(out);\n    }\n}\n"
+      }
+    ],
+    "test_cases": [
+      {
+        "input": "3\n8\n12 30 7 45 45 9 3 60\n",
+        "expected": "30\n45\n45\n45\n45\n60",
+        "visibility": "public",
+        "weight": 1
+      },
+      {
+        "input": "1\n4\n4 3 2 1\n",
+        "expected": "4\n3\n2\n1",
+        "visibility": "public",
+        "weight": 1
+      },
+      {
+        "input": "4\n4\n9 9 9 9\n",
+        "expected": "9",
+        "visibility": "hidden",
+        "weight": 1
+      },
+      {
+        "input": "2\n5\n5 4 3 2 1\n",
+        "expected": "5\n4\n3\n2",
+        "visibility": "hidden",
+        "weight": 2
+      },
+      {
+        "input": "5\n3\n1 2 3\n",
+        "expected": "",
+        "visibility": "hidden",
+        "weight": 2
+      }
+    ]
+  }
+]

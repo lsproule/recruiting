@@ -1,0 +1,75 @@
+package pool
+
+import (
+	"recruiting/internal/service"
+	"recruiting/internal/web/layout"
+)
+
+templ listPage(page layout.Page, query string, entries []service.PoolEntry) {
+	@layout.Base(page) {
+		<h1>Talent pool</h1>
+		<p class="muted">People worth coming back to: flagged by a recruiter, a strong yes at interview, or a passing assessment.</p>
+		<form class="search" method="get" action={ templ.SafeURL(Prefix) }>
+			<label>
+				Search names, addresses, and tags
+				<input type="search" name="q" value={ query } placeholder="go, Berlin, ada@example.com"/>
+			</label>
+			<button type="submit">Search</button>
+		</form>
+		if len(entries) == 0 {
+			if query == "" {
+				<p class="muted">Nobody is in the pool yet.</p>
+			} else {
+				<p class="muted">Nothing matches that search.</p>
+			}
+		} else {
+			for _, e := range entries {
+				@entryCard(page, e)
+			}
+		}
+	}
+}
+
+templ entryCard(page layout.Page, e service.PoolEntry) {
+	<section class="pool-entry">
+		<h2>{ e.CandidateName }</h2>
+		<p class="muted">
+			{ e.CandidateEmail }
+			if locationText(e) != "" {
+				{ " · " + locationText(e) }
+			}
+			{ " · " + sourceLabel(e.Source) }
+		</p>
+		if e.ScorecardSummary != "" {
+			<p class="muted">Last scorecard: { e.ScorecardSummary }</p>
+		}
+		<form class="stack" method="post" action={ templ.SafeURL(entryPath(e)) }>
+			@layout.CSRFField(page.CSRF)
+			<label>
+				Tags
+				<input type="text" name="skills" value={ skillsText(e) }/>
+			</label>
+			<label>
+				Location
+				<input type="text" name="location" value={ e.Location }/>
+			</label>
+			<label>
+				if e.RemoteOK {
+					<input type="checkbox" name="remote_ok" value="1" checked/>
+				} else {
+					<input type="checkbox" name="remote_ok" value="1"/>
+				}
+				Works remotely
+			</label>
+			<label>
+				Notes
+				<input type="text" name="notes" value={ e.Notes }/>
+			</label>
+			<button type="submit">Save</button>
+		</form>
+		<form method="post" action={ templ.SafeURL(removePath(e)) }>
+			@layout.CSRFField(page.CSRF)
+			<button type="submit">Remove from pool</button>
+		</form>
+	</section>
+}

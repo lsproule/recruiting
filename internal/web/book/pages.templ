@@ -1,0 +1,116 @@
+package book
+
+import (
+	"recruiting/internal/service"
+	"recruiting/internal/web/layout"
+)
+
+templ bookingPage(page layout.Page, b service.Booking, action string, tz string, csrf string) {
+	@layout.Base(page) {
+		<h1>{ b.JobTitle }</h1>
+		<p>Hi { b.CandidateName }. Pick a time for your phone screen with { b.VetterName }.</p>
+		if b.Current != nil {
+			<section class="current">
+				<h2>Your interview</h2>
+				<p><strong>{ local(b.Current.Start, b.Current.Timezone) }</strong></p>
+				if b.CanChange {
+					<p class="muted">You can move or cancel it until two hours before it starts. Choose a new time below to move it.</p>
+					<form method="post" action={ templ.SafeURL(action + "/cancel") }>
+						@layout.CSRFField(csrf)
+						<button type="submit">Cancel interview</button>
+					</form>
+				} else {
+					<p class="muted">It starts within two hours, so it can no longer be changed here. Contact us if you cannot make it.</p>
+				}
+			</section>
+		}
+		if b.Current == nil || b.CanChange {
+			<h2>
+				if b.Current != nil {
+					Move to another time
+				} else {
+					Available times
+				}
+			</h2>
+			<div x-data={ "picker(" + slotsJSON(b.Slots) + ", " + jsonString(tz) + ")" }>
+				<label>
+					Show times in
+					<select x-model="tz" @change="chosen = ''">
+						<template x-for="z in zones" :key="z">
+							<option :value="z" x-text="z" :selected="z === tz"></option>
+						</template>
+					</select>
+				</label>
+				<p class="muted" x-show="slots.length === 0">No times are open in the next two weeks. Check back soon, or reply to your invitation.</p>
+				<form method="post" action={ templ.SafeURL(action) } x-show="slots.length > 0">
+					@layout.CSRFField(csrf)
+					<input type="hidden" name="timezone" :value="tz"/>
+					<input type="hidden" name="starts_at" :value="chosen"/>
+					<div class="days">
+						<template x-for="day in days()" :key="day.date">
+							<div class="day">
+								<h3 x-text="day.title"></h3>
+								<template x-for="s in day.slots" :key="s.iso">
+									<button type="button" :class="{ pick: true, on: chosen === s.iso }" @click="chosen = s.iso" x-text="s.label"></button>
+								</template>
+							</div>
+						</template>
+					</div>
+					<p x-show="chosen"><button type="submit">Confirm <span x-text="describe(chosen)"></span></button></p>
+				</form>
+			</div>
+		}
+		@pickerScript()
+		<style>
+			.current { border: 1px solid var(--line); padding: .5rem 1rem; margin-top: 1rem; }
+			.days { display: grid; grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr)); gap: .75rem; margin-top: 1rem; }
+			.day h3 { font-size: 1rem; margin: 0 0 .5rem; }
+			.pick { display: block; width: 100%; margin-bottom: .3rem; }
+			.pick.on { outline: 2px solid #1a1a1a; font-weight: 600; }
+			select { width: auto; }
+		</style>
+	}
+}
+
+templ unavailablePage(page layout.Page, reason string) {
+	@layout.Base(page) {
+		<h1>Booking not open yet</h1>
+		<p>{ reason }</p>
+	}
+}
+
+// pickerScript groups the UTC slots by local day in the chosen zone. The
+// zone defaults to the browser's, so the candidate usually changes nothing.
+templ pickerScript() {
+	<script>
+		window.picker = function (isoSlots, initialTZ) {
+			const browserTZ = (Intl.DateTimeFormat().resolvedOptions().timeZone) || 'UTC';
+			let zones = [];
+			try { zones = Intl.supportedValuesOf('timeZone'); } catch (e) { zones = []; }
+			const tz = initialTZ || browserTZ;
+			for (const z of [tz, browserTZ, 'UTC']) { if (!zones.includes(z)) zones.unshift(z); }
+			return {
+				slots: isoSlots.map(iso => ({ iso, at: new Date(iso) })),
+				zones, tz, chosen: '',
+				fmt(d, opts) { return new Intl.DateTimeFormat(undefined, Object.assign({ timeZone: this.tz }, opts)).format(d); },
+				days() {
+					const out = [];
+					for (const s of this.slots) {
+						const date = this.fmt(s.at, { year: 'numeric', month: '2-digit', day: '2-digit' });
+						let day = out[out.length - 1];
+						if (!day || day.date !== date) {
+							day = { date, title: this.fmt(s.at, { weekday: 'short', day: 'numeric', month: 'short' }), slots: [] };
+							out.push(day);
+						}
+						day.slots.push({ iso: s.iso, label: this.fmt(s.at, { hour: '2-digit', minute: '2-digit', hour12: false }) });
+					}
+					return out;
+				},
+				describe(iso) {
+					if (!iso) return '';
+					return this.fmt(new Date(iso), { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }) + ' (' + this.tz + ')';
+				}
+			};
+		};
+	</script>
+}

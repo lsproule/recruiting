@@ -1,0 +1,70 @@
+[
+  {
+    "kind": "code",
+    "title": "Receipt Total",
+    "statement": "A till prints one line per item: a name, a quantity, and a unit price in cents, separated by spaces.\n\nThe first line of input is the number of item lines that follow. Print the total cost of the receipt in cents.\n\nExample:\n\n```\n2\ncoffee 2 250\nbagel 1 310\n```\n\nprints `810`.",
+    "difficulty": "easy",
+    "tags": ["arithmetic", "parsing", "warmup"],
+    "allowed_languages": ["python", "node", "go", "java"],
+    "time_limit_ms": 2000,
+    "memory_limit_kb": 262144,
+    "reference_solutions": [
+      {
+        "language": "python",
+        "source": "import sys\n\n\ndef main():\n    data = sys.stdin.read().split()\n    n = int(data[0])\n    total = 0\n    i = 1\n    for _ in range(n):\n        qty = int(data[i + 1])\n        price = int(data[i + 2])\n        total += qty * price\n        i += 3\n    print(total)\n\n\nmain()\n"
+      },
+      {
+        "language": "node",
+        "source": "const parts = require('fs').readFileSync(0, 'utf8').split(/\\s+/).filter(Boolean);\nconst n = Number(parts[0]);\nlet total = 0;\nfor (let k = 0; k < n; k++) {\n  const i = 1 + k * 3;\n  total += Number(parts[i + 1]) * Number(parts[i + 2]);\n}\nconsole.log(total);\n"
+      },
+      {
+        "language": "go",
+        "source": "package main\n\nimport (\n\t\"bufio\"\n\t\"fmt\"\n\t\"os\"\n)\n\nfunc main() {\n\tin := bufio.NewReader(os.Stdin)\n\tvar n int\n\tif _, err := fmt.Fscan(in, &n); err != nil {\n\t\treturn\n\t}\n\ttotal := 0\n\tfor i := 0; i < n; i++ {\n\t\tvar name string\n\t\tvar qty, price int\n\t\tif _, err := fmt.Fscan(in, &name, &qty, &price); err != nil {\n\t\t\tbreak\n\t\t}\n\t\ttotal += qty * price\n\t}\n\tfmt.Println(total)\n}\n"
+      },
+      {
+        "language": "java",
+        "source": "import java.util.Scanner;\n\npublic class Main {\n    public static void main(String[] args) {\n        Scanner in = new Scanner(System.in);\n        int n = in.nextInt();\n        long total = 0;\n        for (int i = 0; i < n; i++) {\n            in.next();\n            long qty = in.nextLong();\n            long price = in.nextLong();\n            total += qty * price;\n        }\n        System.out.println(total);\n    }\n}\n"
+      }
+    ],
+    "test_cases": [
+      {"input": "2\ncoffee 2 250\nbagel 1 310\n", "expected": "810", "visibility": "public", "weight": 1},
+      {"input": "1\nwater 1 0\n", "expected": "0", "visibility": "public", "weight": 1},
+      {"input": "0\n", "expected": "0", "visibility": "hidden", "weight": 1},
+      {"input": "3\na 1000 1000\nb 1 1\nc 2 3\n", "expected": "1000007", "visibility": "hidden", "weight": 2}
+    ]
+  },
+  {
+    "kind": "code",
+    "title": "Shift Handover",
+    "statement": "A support rota is given as a list of shift names, one per line, ending at end of input.\n\nPrint the name that appears most often. If several names tie, print the one that first appeared earliest in the list.",
+    "difficulty": "easy",
+    "tags": ["hash-map", "counting"],
+    "allowed_languages": ["python", "node", "go", "java"],
+    "time_limit_ms": 2000,
+    "memory_limit_kb": 262144,
+    "reference_solutions": [
+      {
+        "language": "python",
+        "source": "import sys\n\nfirst = {}\ncount = {}\nfor i, line in enumerate(sys.stdin.read().splitlines()):\n    name = line.strip()\n    if not name:\n        continue\n    count[name] = count.get(name, 0) + 1\n    first.setdefault(name, i)\n\nbest = min(count, key=lambda n: (-count[n], first[n]))\nprint(best)\n"
+      },
+      {
+        "language": "node",
+        "source": "const lines = require('fs').readFileSync(0, 'utf8').split('\\n');\nconst count = new Map();\nconst first = new Map();\nlines.forEach((raw, i) => {\n  const name = raw.trim();\n  if (!name) return;\n  count.set(name, (count.get(name) || 0) + 1);\n  if (!first.has(name)) first.set(name, i);\n});\nlet best = null;\nfor (const [name, n] of count) {\n  if (best === null || n > count.get(best) || (n === count.get(best) && first.get(name) < first.get(best))) best = name;\n}\nconsole.log(best);\n"
+      },
+      {
+        "language": "go",
+        "source": "package main\n\nimport (\n\t\"bufio\"\n\t\"fmt\"\n\t\"os\"\n\t\"strings\"\n)\n\nfunc main() {\n\tsc := bufio.NewScanner(os.Stdin)\n\tcount := map[string]int{}\n\tfirst := map[string]int{}\n\ti := 0\n\tfor sc.Scan() {\n\t\tname := strings.TrimSpace(sc.Text())\n\t\ti++\n\t\tif name == \"\" {\n\t\t\tcontinue\n\t\t}\n\t\tcount[name]++\n\t\tif _, ok := first[name]; !ok {\n\t\t\tfirst[name] = i\n\t\t}\n\t}\n\tbest := \"\"\n\tfor name, n := range count {\n\t\tif best == \"\" || n > count[best] || (n == count[best] && first[name] < first[best]) {\n\t\t\tbest = name\n\t\t}\n\t}\n\tfmt.Println(best)\n}\n"
+      },
+      {
+        "language": "java",
+        "source": "import java.io.BufferedReader;\nimport java.io.InputStreamReader;\nimport java.util.LinkedHashMap;\nimport java.util.Map;\n\npublic class Main {\n    public static void main(String[] args) throws Exception {\n        BufferedReader in = new BufferedReader(new InputStreamReader(System.in));\n        Map<String, Integer> count = new LinkedHashMap<>();\n        String line;\n        while ((line = in.readLine()) != null) {\n            String name = line.trim();\n            if (name.isEmpty()) continue;\n            count.merge(name, 1, Integer::sum);\n        }\n        String best = null;\n        for (Map.Entry<String, Integer> e : count.entrySet()) {\n            if (best == null || e.getValue() > count.get(best)) best = e.getKey();\n        }\n        System.out.println(best);\n    }\n}\n"
+      }
+    ],
+    "test_cases": [
+      {"input": "ada\ngrace\nada\n", "expected": "ada", "visibility": "public", "weight": 1},
+      {"input": "grace\nada\n", "expected": "grace", "visibility": "public", "weight": 1},
+      {"input": "solo\n", "expected": "solo", "visibility": "hidden", "weight": 1},
+      {"input": "b\na\na\nb\nc\n", "expected": "b", "visibility": "hidden", "weight": 2}
+    ]
+  }
+]

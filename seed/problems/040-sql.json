@@ -1,0 +1,173 @@
+[
+  {
+    "kind": "sql",
+    "title": "Customers Still Subscribed",
+    "statement": "The billing database holds `customer(id, name, country)` and `subscription(id, customer_id, plan, status)`. A subscription's status is `active`, `cancelled`, or `paused`.\n\nWrite one query returning the `name` of every customer with at least one `active` subscription, in alphabetical order. Each name must appear once; a `cancelled` or `paused` subscription does not count.",
+    "difficulty": "easy",
+    "tags": [
+      "sql",
+      "joins",
+      "filtering"
+    ],
+    "allowed_languages": [
+      "sql"
+    ],
+    "time_limit_ms": 5000,
+    "sql_schema": "create table customer (id int primary key, name text not null, country text not null);\ncreate table subscription (id int primary key, customer_id int not null references customer(id), plan text not null, status text not null);",
+    "sql_seed": "insert into customer (id, name, country) values (1, 'Ada', 'GB'), (2, 'Grace', 'US'), (3, 'Linus', 'FI'), (4, 'Barbara', 'US');\ninsert into subscription (id, customer_id, plan, status) values (1, 1, 'pro', 'active'), (2, 2, 'team', 'cancelled'), (3, 3, 'pro', 'active'), (4, 4, 'free', 'active'), (5, 1, 'team', 'cancelled'), (6, 2, 'pro', 'paused');",
+    "reference_solutions": [
+      {
+        "language": "sql",
+        "source": "select distinct c.name from customer c join subscription s on s.customer_id = c.id where s.status = 'active' order by c.name"
+      }
+    ],
+    "test_cases": [
+      {
+        "input": "",
+        "expected": "Ada\nBarbara\nLinus",
+        "visibility": "public",
+        "weight": 1
+      },
+      {
+        "input": "insert into customer (id, name, country) values (5, 'Ken', 'US');\ninsert into subscription (id, customer_id, plan, status) values (20, 5, 'pro', 'active');",
+        "expected": "Ada\nBarbara\nKen\nLinus",
+        "visibility": "public",
+        "weight": 1
+      },
+      {
+        "input": "insert into customer (id, name, country) values (6, 'Zoe', 'NL'), (7, 'Aaron', 'IE');\ninsert into subscription (id, customer_id, plan, status) values (21, 6, 'pro', 'active'), (22, 7, 'team', 'active');",
+        "expected": "Aaron\nAda\nBarbara\nLinus\nZoe",
+        "visibility": "public",
+        "weight": 2,
+        "unordered": false
+      },
+      {
+        "input": "update subscription set status = 'cancelled' where customer_id in (1, 3);",
+        "expected": "Barbara",
+        "visibility": "hidden",
+        "weight": 2
+      },
+      {
+        "input": "insert into subscription (id, customer_id, plan, status) values (23, 1, 'enterprise', 'active');",
+        "expected": "Ada\nBarbara\nLinus",
+        "visibility": "hidden",
+        "weight": 2
+      },
+      {
+        "input": "update subscription set status = 'paused' where customer_id = 4;\nupdate subscription set status = 'active' where id = 6;",
+        "expected": "Ada\nGrace\nLinus",
+        "visibility": "hidden",
+        "weight": 3
+      }
+    ]
+  },
+  {
+    "kind": "sql",
+    "title": "Best Sellers by Quantity",
+    "statement": "An order database holds `product(id, name)` and `order_item(id, product_id, quantity)`.\n\nWrite one query returning the three products with the largest total quantity sold, as two columns: the product `name` and the total quantity. Order by total quantity descending, then by name ascending. Products that were never ordered do not appear.",
+    "difficulty": "medium",
+    "tags": [
+      "sql",
+      "aggregation",
+      "ranking"
+    ],
+    "allowed_languages": [
+      "sql"
+    ],
+    "time_limit_ms": 5000,
+    "sql_schema": "create table product (id int primary key, name text not null);\ncreate table order_item (id int primary key, product_id int not null references product(id), quantity int not null);",
+    "sql_seed": "insert into product (id, name) values (1, 'Anvil'), (2, 'Bolt'), (3, 'Clamp'), (4, 'Drill'), (5, 'Ember');\ninsert into order_item (id, product_id, quantity) values (1, 1, 5), (2, 2, 12), (3, 3, 7), (4, 1, 3), (5, 2, 1), (6, 4, 7);",
+    "reference_solutions": [
+      {
+        "language": "sql",
+        "source": "select p.name, sum(i.quantity)::int as sold\nfrom product p join order_item i on i.product_id = p.id\ngroup by p.name\norder by sold desc, p.name asc\nlimit 3"
+      }
+    ],
+    "test_cases": [
+      {
+        "input": "",
+        "expected": "Bolt\t13\nAnvil\t8\nClamp\t7",
+        "visibility": "public",
+        "weight": 1
+      },
+      {
+        "input": "insert into order_item (id, product_id, quantity) values (7, 5, 100);",
+        "expected": "Ember\t100\nBolt\t13\nAnvil\t8",
+        "visibility": "public",
+        "weight": 1
+      },
+      {
+        "input": "delete from order_item where product_id in (2, 4);",
+        "expected": "Anvil\t8\nClamp\t7",
+        "visibility": "hidden",
+        "weight": 2
+      },
+      {
+        "input": "insert into order_item (id, product_id, quantity) values (8, 4, 1);",
+        "expected": "Bolt\t13\nAnvil\t8\nDrill\t8",
+        "visibility": "hidden",
+        "weight": 3
+      }
+    ]
+  },
+  {
+    "kind": "sql",
+    "title": "Reporting Depth",
+    "statement": "An org chart is stored as `employee(id, name, manager_id)`, where a null `manager_id` marks someone at the top.\n\nWrite one query returning every employee's `name` and how many managers sit above them: `0` for the top of a chain, `1` for their direct reports, and so on. Any order is accepted.",
+    "difficulty": "hard",
+    "tags": [
+      "sql",
+      "recursive-cte",
+      "hierarchies"
+    ],
+    "allowed_languages": [
+      "sql"
+    ],
+    "time_limit_ms": 5000,
+    "sql_schema": "create table employee (id int primary key, name text not null, manager_id int references employee(id));",
+    "sql_seed": "insert into employee (id, name, manager_id) values (1, 'Root', null), (2, 'Ada', 1), (3, 'Grace', 1), (4, 'Linus', 2), (5, 'Barbara', 4);",
+    "reference_solutions": [
+      {
+        "language": "sql",
+        "source": "with recursive chain as (\n  select id, name, 0 as depth from employee where manager_id is null\n  union all\n  select e.id, e.name, c.depth + 1 from employee e join chain c on e.manager_id = c.id\n)\nselect name, depth from chain"
+      }
+    ],
+    "test_cases": [
+      {
+        "input": "",
+        "expected": "Root\t0\nAda\t1\nGrace\t1\nLinus\t2\nBarbara\t3",
+        "visibility": "public",
+        "weight": 1,
+        "unordered": true
+      },
+      {
+        "input": "insert into employee (id, name, manager_id) values (6, 'Ken', null);",
+        "expected": "Root\t0\nKen\t0\nAda\t1\nGrace\t1\nLinus\t2\nBarbara\t3",
+        "visibility": "public",
+        "weight": 1,
+        "unordered": true
+      },
+      {
+        "input": "delete from employee where id = 5;",
+        "expected": "Root\t0\nAda\t1\nGrace\t1\nLinus\t2",
+        "visibility": "hidden",
+        "weight": 2,
+        "unordered": true
+      },
+      {
+        "input": "update employee set manager_id = 5 where id = 3;",
+        "expected": "Root\t0\nAda\t1\nLinus\t2\nBarbara\t3\nGrace\t4",
+        "visibility": "hidden",
+        "weight": 3,
+        "unordered": true
+      },
+      {
+        "input": "insert into employee (id, name, manager_id) values (7, 'Deep1', 5), (8, 'Deep2', 7), (9, 'Deep3', 8), (10, 'Deep4', 9);",
+        "expected": "Root\t0\nAda\t1\nGrace\t1\nLinus\t2\nBarbara\t3\nDeep1\t4\nDeep2\t5\nDeep3\t6\nDeep4\t7",
+        "visibility": "hidden",
+        "weight": 3,
+        "unordered": true
+      }
+    ]
+  }
+]

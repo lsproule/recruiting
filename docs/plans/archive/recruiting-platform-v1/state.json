@@ -1,0 +1,108 @@
+{
+  "acceptance": null,
+  "plan_hash": "b8f8a938dcc34582ef5e5c75a8dc394a2daba7907063375edd330ce7f5a5c571",
+  "plan_status": "active",
+  "schema_version": 1,
+  "tasks": {
+    "T01": {
+      "attempts": 2,
+      "result": null,
+      "status": "in_progress"
+    },
+    "T02": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    },
+    "T03": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    },
+    "T04": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    },
+    "T05": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    },
+    "T06": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    },
+    "T07": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    },
+    "T08": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    },
+    "T09": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    },
+    "T10": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    },
+    "T11": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    },
+    "T12": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    },
+    "T13": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    },
+    "T14": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    },
+    "T15": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    },
+    "T16": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    },
+    "T17": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    },
+    "T18": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    },
+    "T19": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    },
+    "T20": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    }
+  }
+}

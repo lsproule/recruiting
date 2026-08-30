@@ -1,0 +1,195 @@
+package client
+
+import (
+	"strconv"
+	"time"
+
+	"recruiting/internal/service"
+	"recruiting/internal/web/layout"
+)
+
+// Every template takes service.Client* view types only; never a domain
+// entity, so a field added elsewhere cannot show up here by default.
+
+templ jobsPage(page layout.Page, jobs []service.ClientJob) {
+	@layout.Base(page) {
+		<h1>Jobs</h1>
+		if len(jobs) == 0 {
+			<p class="muted">No jobs yet.</p>
+		} else {
+			<table>
+				<thead><tr><th>Job</th><th>Location</th><th>Status</th><th>Released candidates</th></tr></thead>
+				<tbody>
+					for _, j := range jobs {
+						<tr>
+							<td><a href={ templ.SafeURL(JobPath(j.ID)) }>{ j.Title }</a></td>
+							<td>{ j.Location } <span class="muted">{ j.RemotePolicy }</span></td>
+							<td>{ j.Status }</td>
+							<td>{ strconv.Itoa(j.ReleasedCount) }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+	}
+}
+
+templ jobPage(page layout.Page, job service.ClientJob, apps []service.ClientApplication) {
+	@layout.Base(page) {
+		<h1>{ job.Title }</h1>
+		if job.BlindMode {
+			<p class="muted">This job is blind: candidates are anonymous until they reach a stage that reveals them.</p>
+		}
+		if len(apps) == 0 {
+			<p class="muted">No candidates released yet.</p>
+		} else {
+			<table>
+				<thead><tr><th>Candidate</th><th>Stage</th><th>Status</th><th>Released</th></tr></thead>
+				<tbody>
+					for _, a := range apps {
+						<tr>
+							<td><a href={ templ.SafeURL(ApplicationPath(a.ID)) }>{ a.Candidate.Label }</a></td>
+							<td>{ a.StageName }</td>
+							<td>{ string(a.Status) }</td>
+							<td>{ when(a.ReleasedAt) }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+	}
+}
+
+templ applicationPage(page layout.Page, d service.ClientApplicationDetail, csrf string) {
+	@layout.Base(page) {
+		<p><a href={ templ.SafeURL(JobPath(d.Application.JobID)) }>← { d.Application.JobTitle }</a></p>
+		<h1>{ d.Application.Candidate.Label }</h1>
+		<p class="muted">{ d.Application.StageName } — { string(d.Application.Status) }</p>
+		@candidateSection(d)
+		<section>
+			<h2>Recruiter summary</h2>
+			if d.Application.RecruiterSummary == "" {
+				<p class="muted">No summary yet.</p>
+			} else {
+				<p>{ d.Application.RecruiterSummary }</p>
+			}
+		</section>
+		@scorecardsSection(d.Scorecards)
+		<section>
+			<h2>Assessment</h2>
+			if d.Assessment.Score == "" && d.Assessment.Verdict == "" {
+				<p class="muted">No assessment result yet.</p>
+			} else {
+				<p>Score: { d.Assessment.Score } — Verdict: { d.Assessment.Verdict }</p>
+			}
+		</section>
+		@actions(d, csrf)
+	}
+}
+
+templ candidateSection(d service.ClientApplicationDetail) {
+	<section>
+		<h2>Candidate</h2>
+		if d.Application.Candidate.Blind {
+			<p class="muted">Identity hidden while this job is in blind mode.</p>
+		} else {
+			<p>{ d.Application.Candidate.Email }
+				if d.Application.Candidate.Phone != "" {
+					· { d.Application.Candidate.Phone }
+				}
+			</p>
+			if len(d.Application.Candidate.Links) > 0 {
+				<ul>
+					for _, l := range d.Application.Candidate.Links {
+						<li><a href={ templ.URL(l) } rel="noopener">{ l }</a></li>
+					}
+				</ul>
+			}
+			if d.HasResume {
+				<p><a href={ templ.SafeURL(ResumePath(d.Application.ID)) }>Download resume</a></p>
+			}
+		}
+	</section>
+}
+
+templ scorecardsSection(cards []service.ClientScorecard) {
+	<section>
+		<h2>Interview scorecards</h2>
+		if len(cards) == 0 {
+			<p class="muted">No scorecards yet.</p>
+		} else {
+			for _, c := range cards {
+				<article>
+					<h3>{ c.StageName } — { overallLabel(c.Overall) }</h3>
+					<p class="muted">{ c.VetterName }, { when(c.FiledAt) }</p>
+					if len(c.Scores) > 0 {
+						<table>
+							<thead><tr><th>Criterion</th><th>Score</th></tr></thead>
+							<tbody>
+								for _, s := range c.Scores {
+									<tr><td>{ s.Name }</td><td>{ strconv.Itoa(s.Score) }</td></tr>
+								}
+							</tbody>
+						</table>
+					}
+				</article>
+			}
+		}
+	</section>
+}
+
+templ actions(d service.ClientApplicationDetail, csrf string) {
+	<section>
+		<h2>Actions</h2>
+		if len(d.AdvanceTo) > 0 {
+			<form class="stack" method="post" action={ templ.SafeURL(AdvancePath(d.Application.ID)) }>
+				@layout.CSRFField(csrf)
+				<label>
+					Advance to
+					<select name="to_stage_id" required>
+						for _, s := range d.AdvanceTo {
+							<option value={ s.ID.String() }>{ s.Name }</option>
+						}
+					</select>
+				</label>
+				<button type="submit">Advance</button>
+			</form>
+		}
+		if d.CanReject {
+			<form class="stack" method="post" action={ templ.SafeURL(RejectPath(d.Application.ID)) }>
+				@layout.CSRFField(csrf)
+				<label>
+					Reason
+					<input type="text" name="reason" required/>
+				</label>
+				<button type="submit">Reject</button>
+			</form>
+		}
+		if d.Application.Active() {
+			<form class="stack" method="post" action={ templ.SafeURL(RequestInfoPath(d.Application.ID)) }>
+				@layout.CSRFField(csrf)
+				<label>
+					Ask the recruiter
+					<textarea name="message" rows="3" required></textarea>
+				</label>
+				<button type="submit">Request information</button>
+			</form>
+		}
+	</section>
+}
+
+var overallLabels = map[string]string{
+	service.OverallStrongYes: "Strong yes",
+	service.OverallYes:       "Yes",
+	service.OverallNo:        "No",
+	service.OverallStrongNo:  "Strong no",
+}
+
+func overallLabel(v string) string {
+	if l, ok := overallLabels[v]; ok {
+		return l
+	}
+	return v
+}
+
+func when(t time.Time) string { return t.UTC().Format("2 Jan 2006 15:04 UTC") }

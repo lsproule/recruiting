@@ -1,0 +1,37 @@
+[
+  {
+    "kind": "code",
+    "title": "Deploy Order",
+    "statement": "A release depends on services that must be deployed in dependency order.\n\nThe first line holds two numbers: the number of services `n` and the number of dependencies `m`. Services are named `0` to `n-1`. Each of the next `m` lines holds `a b`, meaning `a` must be deployed before `b`.\n\nPrint one valid deploy order, one service per line. When several orders are valid, print the one that is smallest by service number at every step. If the dependencies contain a cycle, print `cycle` instead.",
+    "difficulty": "hard",
+    "tags": ["graphs", "topological-sort", "heap"],
+    "allowed_languages": ["python", "node", "go", "java"],
+    "time_limit_ms": 4000,
+    "memory_limit_kb": 262144,
+    "reference_solutions": [
+      {
+        "language": "python",
+        "source": "import heapq\nimport sys\n\ndata = list(map(int, sys.stdin.read().split()))\nn, m = data[0], data[1]\nedges = [[] for _ in range(n)]\nindegree = [0] * n\nfor i in range(m):\n    a, b = data[2 + i * 2], data[3 + i * 2]\n    edges[a].append(b)\n    indegree[b] += 1\n\nready = [v for v in range(n) if indegree[v] == 0]\nheapq.heapify(ready)\norder = []\nwhile ready:\n    v = heapq.heappop(ready)\n    order.append(v)\n    for w in edges[v]:\n        indegree[w] -= 1\n        if indegree[w] == 0:\n            heapq.heappush(ready, w)\n\nprint(\"cycle\" if len(order) != n else \"\\n\".join(map(str, order)))\n"
+      },
+      {
+        "language": "node",
+        "source": "const data = require('fs').readFileSync(0, 'utf8').split(/\\s+/).filter(Boolean).map(Number);\nconst n = data[0];\nconst m = data[1];\nconst edges = Array.from({ length: n }, () => []);\nconst indegree = new Array(n).fill(0);\nfor (let i = 0; i < m; i++) {\n  const a = data[2 + i * 2];\n  const b = data[3 + i * 2];\n  edges[a].push(b);\n  indegree[b]++;\n}\nconst ready = [];\nfor (let v = 0; v < n; v++) if (indegree[v] === 0) ready.push(v);\nconst order = [];\nwhile (ready.length) {\n  ready.sort((a, b) => a - b);\n  const v = ready.shift();\n  order.push(v);\n  for (const w of edges[v]) if (--indegree[w] === 0) ready.push(w);\n}\nconsole.log(order.length !== n ? 'cycle' : order.join('\\n'));\n"
+      },
+      {
+        "language": "go",
+        "source": "package main\n\nimport (\n\t\"bufio\"\n\t\"container/heap\"\n\t\"fmt\"\n\t\"os\"\n\t\"strconv\"\n)\n\ntype minHeap []int\n\nfunc (h minHeap) Len() int            { return len(h) }\nfunc (h minHeap) Less(i, j int) bool  { return h[i] < h[j] }\nfunc (h minHeap) Swap(i, j int)       { h[i], h[j] = h[j], h[i] }\nfunc (h *minHeap) Push(x any)         { *h = append(*h, x.(int)) }\nfunc (h *minHeap) Pop() any           { old := *h; v := old[len(old)-1]; *h = old[:len(old)-1]; return v }\n\nfunc main() {\n\tin := bufio.NewReader(os.Stdin)\n\tvar n, m int\n\tif _, err := fmt.Fscan(in, &n, &m); err != nil {\n\t\treturn\n\t}\n\tedges := make([][]int, n)\n\tindegree := make([]int, n)\n\tfor i := 0; i < m; i++ {\n\t\tvar a, b int\n\t\tif _, err := fmt.Fscan(in, &a, &b); err != nil {\n\t\t\tbreak\n\t\t}\n\t\tedges[a] = append(edges[a], b)\n\t\tindegree[b]++\n\t}\n\tready := &minHeap{}\n\tfor v := 0; v < n; v++ {\n\t\tif indegree[v] == 0 {\n\t\t\t*ready = append(*ready, v)\n\t\t}\n\t}\n\theap.Init(ready)\n\torder := make([]int, 0, n)\n\tfor ready.Len() > 0 {\n\t\tv := heap.Pop(ready).(int)\n\t\torder = append(order, v)\n\t\tfor _, w := range edges[v] {\n\t\t\tindegree[w]--\n\t\t\tif indegree[w] == 0 {\n\t\t\t\theap.Push(ready, w)\n\t\t\t}\n\t\t}\n\t}\n\tout := bufio.NewWriter(os.Stdout)\n\tdefer out.Flush()\n\tif len(order) != n {\n\t\tout.WriteString(\"cycle\\n\")\n\t\treturn\n\t}\n\tfor _, v := range order {\n\t\tout.WriteString(strconv.Itoa(v))\n\t\tout.WriteByte('\\n')\n\t}\n}\n"
+      },
+      {
+        "language": "java",
+        "source": "import java.io.BufferedReader;\nimport java.io.InputStreamReader;\nimport java.io.StreamTokenizer;\nimport java.util.ArrayList;\nimport java.util.List;\nimport java.util.PriorityQueue;\n\npublic class Main {\n    public static void main(String[] args) throws Exception {\n        StreamTokenizer in = new StreamTokenizer(new BufferedReader(new InputStreamReader(System.in)));\n        if (in.nextToken() == StreamTokenizer.TT_EOF) return;\n        int n = (int) in.nval;\n        in.nextToken();\n        int m = (int) in.nval;\n        List<List<Integer>> edges = new ArrayList<>();\n        for (int i = 0; i < n; i++) edges.add(new ArrayList<>());\n        int[] indegree = new int[n];\n        for (int i = 0; i < m; i++) {\n            in.nextToken();\n            int a = (int) in.nval;\n            in.nextToken();\n            int b = (int) in.nval;\n            edges.get(a).add(b);\n            indegree[b]++;\n        }\n        PriorityQueue<Integer> ready = new PriorityQueue<>();\n        for (int v = 0; v < n; v++) if (indegree[v] == 0) ready.add(v);\n        StringBuilder out = new StringBuilder();\n        int seen = 0;\n        while (!ready.isEmpty()) {\n            int v = ready.poll();\n            seen++;\n            out.append(v).append('\\n');\n            for (int w : edges.get(v)) if (--indegree[w] == 0) ready.add(w);\n        }\n        System.out.print(seen != n ? \"cycle\\n\" : out);\n    }\n}\n"
+      }
+    ],
+    "test_cases": [
+      {"input": "4 3\n0 1\n0 2\n1 3\n", "expected": "0\n1\n2\n3", "visibility": "public", "weight": 1},
+      {"input": "2 2\n0 1\n1 0\n", "expected": "cycle", "visibility": "public", "weight": 1},
+      {"input": "3 0\n", "expected": "0\n1\n2", "visibility": "hidden", "weight": 1},
+      {"input": "6 6\n5 2\n5 0\n4 0\n4 1\n2 3\n3 1\n", "expected": "4\n5\n0\n2\n3\n1", "visibility": "hidden", "weight": 3},
+      {"input": "3 3\n0 1\n1 2\n2 0\n", "expected": "cycle", "visibility": "hidden", "weight": 2}
+    ]
+  }
+]

@@ -1,0 +1,130 @@
+package candidates
+
+import (
+	"recruiting/internal/service"
+	"recruiting/internal/web/layout"
+)
+
+templ listPage(page layout.Page, query string, list []service.Candidate) {
+	@layout.Base(page) {
+		<h1>Candidates</h1>
+		<p><a href={ templ.SafeURL(Prefix + "/new") }>Add candidate</a></p>
+		<form class="search" method="get" action={ templ.SafeURL(Prefix) }>
+			<label>
+				Search names and resumes
+				<input type="search" name="q" value={ query } placeholder="elixir, product manager, Berlin"/>
+			</label>
+			<button type="submit">Search</button>
+		</form>
+		if len(list) == 0 {
+			if query == "" {
+				<p class="muted">No candidates yet.</p>
+			} else {
+				<p class="muted">Nothing matches that search.</p>
+			}
+		} else {
+			<table>
+				<thead>
+					<tr><th>Name</th><th>Email</th><th>Phone</th><th>Applications</th></tr>
+				</thead>
+				<tbody>
+					for _, c := range list {
+						<tr>
+							<td><a href={ templ.SafeURL(candidatePath(c)) }>{ c.Name }</a></td>
+							<td>{ c.Email }</td>
+							<td>{ c.Phone }</td>
+							<td>{ applicationCount(c) }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+	}
+}
+
+templ detailPage(page layout.Page, d service.CandidateDetail) {
+	@layout.Base(page) {
+		<h1>{ d.Candidate.Name }</h1>
+		<p class="muted">{ d.Candidate.Email }</p>
+		if d.Candidate.Phone != "" {
+			<p class="muted">{ d.Candidate.Phone }</p>
+		}
+		if len(d.Candidate.Links) > 0 {
+			<ul>
+				for _, l := range d.Candidate.Links {
+					<li><a class="link" href={ templ.SafeURL(l) } rel="noreferrer noopener nofollow">{ l }</a></li>
+				}
+			</ul>
+		}
+		<h2>Applications</h2>
+		if len(d.Applications) == 0 {
+			<p class="muted">Not applied to anything yet.</p>
+		} else {
+			<table>
+				<thead><tr><th>Job</th><th>Stage</th><th>Status</th></tr></thead>
+				<tbody>
+					for _, a := range d.Applications {
+						<tr><td>{ a.JobTitle }</td><td>{ a.StageName }</td><td>{ a.Status }</td></tr>
+					}
+				</tbody>
+			</table>
+		}
+		<h2>Resumes</h2>
+		if len(d.Resumes) == 0 {
+			<p class="muted">No resume on file.</p>
+		} else {
+			<ul>
+				for _, r := range d.Resumes {
+					<li>
+						<a href={ templ.SafeURL(resumePath(r)) }>{ r.Filename }</a>
+						if resumeNote(r) != "" {
+							<span class="muted">{ " — " + resumeNote(r) }</span>
+						}
+					</li>
+				}
+			</ul>
+		}
+	}
+}
+
+templ formPage(page layout.Page, f candidateForm) {
+	@layout.Base(page) {
+		<h1>Add candidate</h1>
+		if f.Error != "" {
+			<p class="flash flash-error" role="alert">{ f.Error }</p>
+		}
+		<form class="stack" method="post" action={ templ.SafeURL(Prefix) } enctype="multipart/form-data">
+			@layout.CSRFField(page.CSRF)
+			<label>
+				Name
+				<input type="text" name="name" value={ f.Name } required/>
+			</label>
+			<label>
+				Email
+				<input type="email" name="email" value={ f.Email } required/>
+			</label>
+			<label>
+				Phone
+				<input type="text" name="phone" value={ f.Phone }/>
+			</label>
+			<label>
+				Links
+				<input type="text" name="links" value={ f.Links } placeholder="https://github.com/them"/>
+			</label>
+			<label>
+				Apply to a job (optional)
+				<select name="job_id">
+					<option value="">No job yet</option>
+					for _, j := range f.Jobs {
+						<option value={ j.ID.String() } selected?={ j.ID.String() == f.JobID }>{ j.Title }</option>
+					}
+				</select>
+			</label>
+			<label>
+				Resume (PDF or Word .docx, up to 10 MB, optional)
+				<input type="file" name="resume" accept=".pdf,.docx"/>
+			</label>
+			<button type="submit">Add candidate</button>
+		</form>
+	}
+}

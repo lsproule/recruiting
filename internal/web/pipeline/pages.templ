@@ -1,0 +1,266 @@
+package pipeline
+
+import (
+	"recruiting/internal/service"
+	"recruiting/internal/web/layout"
+)
+
+templ boardPage(page layout.Page, board service.Board, csrf string, problem moveProblem) {
+	@layout.Base(page) {
+		<h1>{ board.Job.Title }</h1>
+		<p class="muted">
+			{ board.Job.ClientCompanyName }
+			&middot; <a href={ templ.SafeURL(listPath(board.Job.ID)) }>List view</a>
+			&middot; <a href={ templ.SafeURL("/app/jobs/" + board.Job.ID.String() + "/pipeline") }>Edit pipeline</a>
+		</p>
+		@boardView(board, csrf, problem)
+		@boardScript()
+	}
+}
+
+// boardView is the htmx swap target: every drag re-renders it, and a refused
+// move re-renders it with the prompt for a reason or an override.
+templ boardView(board service.Board, csrf string, problem moveProblem) {
+	<section id="board" x-data="board()">
+		if !problem.Empty() {
+			@movePrompt(problem, csrf, "board")
+		}
+		<div class="columns">
+			for _, col := range board.Columns {
+				<div
+					class="column"
+					data-stage={ col.Stage.ID.String() }
+					@dragover.prevent
+					@drop.prevent={ "drop('" + col.Stage.ID.String() + "')" }
+				>
+					<h3>{ col.Stage.Name } <span class="muted">{ count(len(col.Cards)) }</span></h3>
+					for _, a := range col.Cards {
+						<article
+							class={ "card", templ.KV("closed", !a.Active()) }
+							draggable="true"
+							@dragstart={ "dragging = '" + a.ID.String() + "'" }
+							@dragend="dragging = null"
+						>
+							<a href={ templ.SafeURL(applicationPath(a.ID)) }>{ a.CandidateName }</a>
+							<div class="muted">{ a.CandidateEmail }</div>
+							if !a.Active() {
+								<div class="muted">{ string(a.Status) }</div>
+							}
+							if a.Released {
+								<div class="muted">released</div>
+							}
+						</article>
+					}
+				</div>
+			}
+		</div>
+	</section>
+}
+
+// movePrompt is the retry form for a refused move: the reason field, and the
+// override confirmation when a prerequisite is missing. A move that cannot be
+// retried (not permitted, or already moved) shows only its message.
+templ movePrompt(problem moveProblem, csrf string, view string) {
+	if !problem.NeedsReason && !problem.NeedsOverride {
+		<p class="flash flash-error" role="alert">{ problem.Message }</p>
+	} else {
+		<form
+			class="stack prompt"
+			hx-post={ applicationPath(problem.ApplicationID) + "/move" }
+			hx-target="#board"
+			hx-swap="outerHTML"
+			method="post"
+			action={ templ.SafeURL(applicationPath(problem.ApplicationID) + "/move") }
+		>
+			@layout.CSRFField(csrf)
+			<input type="hidden" name="to_stage_id" value={ problem.ToStageID.String() }/>
+			<input type="hidden" name="view" value={ view }/>
+			<p class="flash flash-error" role="alert">{ problem.Message }</p>
+			<label>Reason <input type="text" name="reason" value={ problem.Reason } required/></label>
+			if problem.NeedsOverride {
+				<label>
+					<input type="checkbox" name="override" value="1" checked/>
+					Move anyway, without the stage's scorecard or verdict
+				</label>
+			}
+			<button type="submit">Move</button>
+		</form>
+	}
+}
+
+// boardScript is the drag state: a card is picked up, and dropping it on a
+// column posts the move for that column's stage. htmx does not swap a 4xx
+// response by default; a 422 carries the retry prompt, so it is let through.
+templ boardScript() {
+	<script>
+		window.board = function () {
+			return {
+				dragging: null,
+				drop(stageId) {
+					if (!this.dragging) return;
+					const id = this.dragging;
+					this.dragging = null;
+					htmx.ajax('POST', '/app/applications/' + id + '/move', {
+						source: this.$el, target: '#board', swap: 'outerHTML',
+						values: { to_stage_id: stageId, view: 'board' },
+					});
+				},
+			};
+		};
+		document.addEventListener('htmx:beforeSwap', function (e) {
+			if (e.detail.xhr && e.detail.xhr.status === 422) e.detail.shouldSwap = true;
+		});
+	</script>
+	<style>
+		.columns { display: flex; gap: 1rem; overflow-x: auto; align-items: flex-start; }
+		.column { flex: 0 0 15rem; background: #f4f4f4; border-radius: .5rem; padding: .75rem; min-height: 8rem; }
+		.column h3 { margin: 0 0 .5rem; font-size: 1rem; }
+		.card { background: #fff; border: 1px solid var(--line); border-radius: .4rem; padding: .5rem; margin-bottom: .5rem; cursor: grab; }
+		.card.closed { opacity: .6; }
+		.prompt { border: 1px solid var(--line); padding: 1rem; margin-bottom: 1rem; }
+		.timeline li { margin-bottom: .5rem; }
+	</style>
+}
+
+templ listPage(page layout.Page, board service.Board, rows []service.Application, f listFilter) {
+	@layout.Base(page) {
+		<h1>{ board.Job.Title }</h1>
+		<p class="muted"><a href={ templ.SafeURL(boardPath(board.Job.ID)) }>Board view</a></p>
+		<form class="search" method="get" action={ templ.SafeURL(listPath(board.Job.ID)) }>
+			<label>
+				Stage
+				<select name="stage">
+					<option value="">Any stage</option>
+					for _, col := range board.Columns {
+						<option value={ col.Stage.ID.String() } selected?={ col.Stage.ID.String() == f.StageID }>{ col.Stage.Name }</option>
+					}
+				</select>
+			</label>
+			<label>
+				Status
+				<select name="status">
+					<option value="">Any status</option>
+					for _, s := range statuses {
+						<option value={ string(s) } selected?={ string(s) == f.Status }>{ string(s) }</option>
+					}
+				</select>
+			</label>
+			<label>Search <input type="search" name="q" value={ f.Query } placeholder="name or email"/></label>
+			<button type="submit">Filter</button>
+		</form>
+		if len(rows) == 0 {
+			<p class="muted">No applications match.</p>
+		} else {
+			<table>
+				<thead>
+					<tr><th>Candidate</th><th>Email</th><th>Stage</th><th>Status</th><th>Released</th><th>Applied</th></tr>
+				</thead>
+				<tbody>
+					for _, a := range rows {
+						<tr>
+							<td><a href={ templ.SafeURL(applicationPath(a.ID)) }>{ a.CandidateName }</a></td>
+							<td>{ a.CandidateEmail }</td>
+							<td>{ a.StageName }</td>
+							<td>{ string(a.Status) }</td>
+							<td>
+								if a.Released {
+									yes
+								} else {
+									no
+								}
+							</td>
+							<td>{ when(a.CreatedAt) }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+	}
+}
+
+templ applicationPage(page layout.Page, d service.ApplicationDetail, csrf string, problem moveProblem) {
+	@layout.Base(page) {
+		<h1>{ d.Application.CandidateName }</h1>
+		<p class="muted">
+			<a href={ templ.SafeURL("/app/candidates/" + d.Application.CandidateID.String()) }>Candidate</a>
+			&middot; <a href={ templ.SafeURL(boardPath(d.Application.JobID)) }>{ d.Application.JobTitle } board</a>
+		</p>
+		<dl>
+			<dt>Stage</dt>
+			<dd>{ d.Application.StageName }</dd>
+			<dt>Status</dt>
+			<dd>{ string(d.Application.Status) }</dd>
+			<dt>Released to client</dt>
+			<dd>
+				if d.Application.Released {
+					yes, since { when(d.Application.ReleasedAt) }
+				} else {
+					no
+				}
+			</dd>
+		</dl>
+		if d.Application.Active() {
+			<h2>Move</h2>
+			if !problem.Empty() {
+				<p class="flash flash-error" role="alert">{ problem.Message }</p>
+			}
+			<form class="stack" id="move" method="post" action={ templ.SafeURL(applicationPath(d.Application.ID) + "/move") }>
+				@layout.CSRFField(csrf)
+				<label>
+					To stage
+					<select name="to_stage_id" required>
+						for _, s := range moveTargets(d) {
+							<option value={ s.ID.String() } selected?={ s.ID == problem.ToStageID }>{ stageLabel(s) }</option>
+						}
+					</select>
+				</label>
+				<label>Reason (required to reject or to override) <input type="text" name="reason" value={ problem.Reason }/></label>
+				if problem.NeedsOverride {
+					<label>
+						<input type="checkbox" name="override" value="1" checked/>
+						Move anyway, without the stage's scorecard or verdict
+					</label>
+				} else {
+					<label><input type="checkbox" name="override" value="1"/> Override a missing scorecard or verdict</label>
+				}
+				<button type="submit">Move</button>
+			</form>
+			<h2>Withdraw</h2>
+			<form class="stack" method="post" action={ templ.SafeURL(applicationPath(d.Application.ID) + "/withdraw") }>
+				@layout.CSRFField(csrf)
+				<label>Reason <input type="text" name="reason"/></label>
+				<button type="submit">Mark withdrawn</button>
+			</form>
+		}
+		<h2>Client visibility</h2>
+		if d.Application.Released {
+			<form method="post" action={ templ.SafeURL(applicationPath(d.Application.ID) + "/unrelease") }>
+				@layout.CSRFField(csrf)
+				<button type="submit">Hide from client</button>
+			</form>
+		} else {
+			<form method="post" action={ templ.SafeURL(applicationPath(d.Application.ID) + "/release") }>
+				@layout.CSRFField(csrf)
+				<button type="submit">Release to client</button>
+			</form>
+		}
+		<h2>Timeline</h2>
+		if len(d.Events) == 0 {
+			<p class="muted">Nothing yet.</p>
+		} else {
+			<ol class="timeline">
+				for _, e := range d.Events {
+					<li>
+						<span class="muted">{ when(e.CreatedAt) }</span>
+						{ eventLine(e) }
+						<span class="muted">by { e.ActorKind }</span>
+						if e.Reason != "" {
+							<div>Reason: { e.Reason }</div>
+						}
+					</li>
+				}
+			</ol>
+		}
+		@boardScript()
+	}
+}

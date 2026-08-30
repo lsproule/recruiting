@@ -1,0 +1,154 @@
+package availability
+
+import (
+	"recruiting/internal/service"
+	"recruiting/internal/web/layout"
+)
+
+templ availabilityPage(page layout.Page, av service.Availability, csrf string) {
+	@layout.Base(page) {
+		<h1>Availability</h1>
+		<p class="muted">Candidates book phone screens inside these hours, in your timezone. Times are stored as wall-clock hours, so they follow daylight saving.</p>
+		<form class="stack" method="post" action={ templ.SafeURL(Prefix + "/rules") } x-data={ "weekGrid(" + rulesJSON(av.Rules) + ", " + weekdaysJSON() + ")" } @submit="serialise()">
+			@layout.CSRFField(csrf)
+			<input type="hidden" name="rules" x-ref="rules"/>
+			<div class="settings">
+				<label>
+					Timezone
+					<input type="text" name="timezone" value={ av.Timezone } list="zones" required/>
+				</label>
+				<label>
+					Slot length (minutes)
+					<input type="number" name="slot_minutes" value={ itoa(av.SlotMinutes) } min="5" max="240" required/>
+				</label>
+				<label>
+					Buffer between interviews (minutes)
+					<input type="number" name="buffer_minutes" value={ itoa(av.BufferMinutes) } min="0" max="240" required/>
+				</label>
+			</div>
+			<div class="grid">
+				<template x-for="day in days" :key="day.n">
+					<div class="day">
+						<h3 x-text="day.name"></h3>
+						<template x-for="(block, i) in blocksFor(day.n)" :key="block.key">
+							<div class="block">
+								<input type="time" x-model="block.start" required/>
+								<span>–</span>
+								<input type="time" x-model="block.end" required/>
+								<button type="button" @click="remove(block)" aria-label="Remove">×</button>
+							</div>
+						</template>
+						<button type="button" class="add" @click="add(day.n)">+ Add hours</button>
+					</div>
+				</template>
+			</div>
+			<button type="submit">Save availability</button>
+		</form>
+		<h2>Exceptions</h2>
+		<p class="muted">Time you are away. Nothing is offered inside an exception, whatever the grid says.</p>
+		if len(av.Exceptions) > 0 {
+			<table>
+				<thead><tr><th>From</th><th>To</th><th>Reason</th><th></th></tr></thead>
+				<tbody>
+					for _, e := range av.Exceptions {
+						<tr>
+							<td>{ local(e.Start, av.Timezone) }</td>
+							<td>{ local(e.End, av.Timezone) }</td>
+							<td>{ e.Reason }</td>
+							<td>
+								<form method="post" action={ templ.SafeURL(Prefix + "/exceptions/" + e.ID.String() + "/delete") }>
+									@layout.CSRFField(csrf)
+									<button type="submit">Remove</button>
+								</form>
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+		<form class="stack" method="post" action={ templ.SafeURL(Prefix + "/exceptions") }>
+			@layout.CSRFField(csrf)
+			<input type="hidden" name="timezone" value={ av.Timezone }/>
+			<label>
+				From ({ av.Timezone })
+				<input type="datetime-local" name="start" required/>
+			</label>
+			<label>
+				To ({ av.Timezone })
+				<input type="datetime-local" name="end" required/>
+			</label>
+			<label>
+				Reason
+				<input type="text" name="reason"/>
+			</label>
+			<button type="submit">Add exception</button>
+		</form>
+		<h2>Interviews</h2>
+		if len(av.Slots) == 0 {
+			<p class="muted">Nothing booked.</p>
+		} else {
+			<table>
+				<thead><tr><th>When ({ av.Timezone })</th><th>Candidate</th><th>Job</th><th>Status</th><th></th></tr></thead>
+				<tbody>
+					for _, s := range av.Slots {
+						<tr>
+							<td>{ local(s.Start, av.Timezone) }</td>
+							<td>{ s.CandidateName } <span class="muted">{ s.CandidateEmail }</span></td>
+							<td>{ s.JobTitle }</td>
+							<td>{ s.Status }</td>
+							<td>
+								<form class="inline" method="post" action={ templ.SafeURL(Prefix + "/slots/" + s.ID.String() + "/outcome") }>
+									@layout.CSRFField(csrf)
+									for _, o := range slotOutcomes {
+										<button type="submit" name="outcome" value={ o.Value }>{ o.Label }</button>
+									}
+								</form>
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+		<datalist id="zones"></datalist>
+		@gridScript()
+		<style>
+			.settings { display: grid; grid-template-columns: repeat(3, 1fr); gap: .75rem; }
+			.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: .75rem; }
+			.day { border: 1px solid var(--line); padding: .5rem; }
+			.day h3 { margin: 0 0 .5rem; font-size: 1rem; }
+			.block { display: flex; align-items: center; gap: .25rem; margin-bottom: .35rem; }
+			.block input { width: auto; }
+			.add { margin-top: .25rem; }
+			form.inline { display: flex; gap: .25rem; }
+			form.stack { max-width: none; }
+		</style>
+	}
+}
+
+// gridScript keeps the weekly blocks in the browser and posts them as one
+// JSON field when the form submits.
+templ gridScript() {
+	<script>
+		window.weekGrid = function (initial, days) {
+			let seq = 0;
+			return {
+				days: days,
+				blocks: initial.map(b => ({ key: ++seq, weekday: b.weekday, start: b.start, end: b.end })),
+				blocksFor(n) { return this.blocks.filter(b => b.weekday === n); },
+				add(n) { this.blocks.push({ key: ++seq, weekday: n, start: '09:00', end: '17:00' }); },
+				remove(block) { this.blocks = this.blocks.filter(b => b.key !== block.key); },
+				serialise() {
+					this.$refs.rules.value = JSON.stringify(this.blocks.map(b => ({ weekday: b.weekday, start: b.start, end: b.end })));
+				},
+				init() {
+					const list = document.getElementById('zones');
+					if (list && typeof Intl.supportedValuesOf === 'function') {
+						for (const z of Intl.supportedValuesOf('timeZone')) {
+							const o = document.createElement('option'); o.value = z; list.appendChild(o);
+						}
+					}
+				}
+			};
+		};
+	</script>
+}

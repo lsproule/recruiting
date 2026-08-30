@@ -1,0 +1,146 @@
+package admin
+
+import (
+	"strconv"
+
+	"github.com/google/uuid"
+
+	"recruiting/internal/service"
+	"recruiting/internal/web/layout"
+)
+
+templ usersPage(page layout.Page, users []service.OrgUser, self uuid.UUID) {
+	@layout.Base(page) {
+		<h1>Users</h1>
+		<table>
+			<thead>
+				<tr><th>Name</th><th>Email</th><th>Roles</th></tr>
+			</thead>
+			<tbody>
+				for _, u := range users {
+					<tr>
+						<td>{ u.Name }</td>
+						<td>{ u.Email }</td>
+						<td>
+							<form class="roles" method="post" action={ templ.SafeURL(Prefix + "/users/" + u.ID.String() + "/roles") }>
+								@layout.CSRFField(page.CSRF)
+								for _, role := range service.Roles {
+									<label>
+										<input
+											type="checkbox"
+											name="roles"
+											value={ role }
+											checked?={ hasRole(u.Roles, role) }
+											disabled?={ u.ID == self && role == service.RoleAdmin }
+										/>
+										{ role }
+									</label>
+								}
+								if u.ID == self {
+									<input type="hidden" name="roles" value={ service.RoleAdmin }/>
+								}
+								<button type="submit">Save</button>
+							</form>
+						</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+		<h2>Add a user</h2>
+		<form class="stack" method="post" action={ templ.SafeURL(Prefix + "/users") }>
+			@layout.CSRFField(page.CSRF)
+			<label>Name <input type="text" name="name" required/></label>
+			<label>Email <input type="email" name="email" required/></label>
+			<fieldset>
+				<legend>Roles</legend>
+				for _, role := range service.Roles {
+					<label><input type="checkbox" name="roles" value={ role }/> { role }</label>
+				}
+			</fieldset>
+			<button type="submit">Create user</button>
+		</form>
+		<p class="muted">The new user chooses their own password through the one-time link shown after creation.</p>
+	}
+}
+
+templ clientsPage(page layout.Page, companies []service.ClientCompany, users []service.ClientUser) {
+	@layout.Base(page) {
+		<h1>Client companies</h1>
+		if len(companies) == 0 {
+			<p class="muted">No client companies yet.</p>
+		} else {
+			<table>
+				<thead><tr><th>Name</th></tr></thead>
+				<tbody>
+					for _, c := range companies {
+						<tr><td>{ c.Name }</td></tr>
+					}
+				</tbody>
+			</table>
+		}
+		<form class="stack" method="post" action={ templ.SafeURL(Prefix + "/clients") }>
+			@layout.CSRFField(page.CSRF)
+			<label>Company name <input type="text" name="name" required/></label>
+			<button type="submit">Add company</button>
+		</form>
+		<h2>Client users</h2>
+		if len(users) == 0 {
+			<p class="muted">No client users yet.</p>
+		} else {
+			<table>
+				<thead><tr><th>Name</th><th>Email</th><th>Company</th></tr></thead>
+				<tbody>
+					for _, u := range users {
+						<tr><td>{ u.Name }</td><td>{ u.Email }</td><td>{ u.CompanyName }</td></tr>
+					}
+				</tbody>
+			</table>
+		}
+		if len(companies) == 0 {
+			<p class="muted">Add a client company before inviting client users.</p>
+		} else {
+			<form class="stack" method="post" action={ templ.SafeURL(Prefix + "/clients/users") }>
+				@layout.CSRFField(page.CSRF)
+				<label>Name <input type="text" name="name" required/></label>
+				<label>Email <input type="email" name="email" required/></label>
+				<label>
+					Company
+					<select name="client_company_id" required>
+						for _, c := range companies {
+							<option value={ c.ID.String() }>{ c.Name }</option>
+						}
+					</select>
+				</label>
+				<button type="submit">Create client user</button>
+			</form>
+		}
+	}
+}
+
+templ settingsPage(page layout.Page, s service.Settings) {
+	@layout.Base(page) {
+		<h1>Organisation settings</h1>
+		<form class="stack" method="post" action={ templ.SafeURL(Prefix + "/settings") }>
+			@layout.CSRFField(page.CSRF)
+			<label>
+				Talent pool score threshold ({ service.SettingPoolScoreThreshold })
+				<input type="number" name={ service.SettingPoolScoreThreshold } min="0" max="100" value={ strconv.Itoa(s.PoolScoreThreshold) } required/>
+			</label>
+			<label>
+				Assessment invite validity in days ({ service.SettingAssessmentInviteDays })
+				<input type="number" name={ service.SettingAssessmentInviteDays } min="1" value={ strconv.Itoa(s.AssessmentInviteDays) } required/>
+			</label>
+			<fieldset>
+				<legend>Integrity signal weights</legend>
+				<p class="muted">Weights scale each signal's contribution to the risk score. They never move an application on their own.</p>
+				for _, name := range service.IntegritySignalNames {
+					<label>
+						{ name }
+						<input type="number" name={ "weight." + name } min="0" step="any" value={ weight(s, name) } required/>
+					</label>
+				}
+			</fieldset>
+			<button type="submit">Save settings</button>
+		</form>
+	}
+}

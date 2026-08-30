@@ -1,0 +1,174 @@
+{
+  "acceptance": null,
+  "plan_hash": "a0e7c283c1261c03ed0358c773c7e6f5819f3cdc3a6cb9620d43b8ca868b5fc3",
+  "plan_status": "active",
+  "schema_version": 1,
+  "tasks": {
+    "T01": {
+      "attempts": 1,
+      "result": {
+        "checks": [
+          {
+            "command": "make check",
+            "status": "passed"
+          },
+          {
+            "command": "make test",
+            "status": "passed"
+          },
+          {
+            "command": "make test-integration",
+            "status": "passed"
+          },
+          {
+            "command": "make openapi-lint",
+            "status": "passed"
+          }
+        ],
+        "discovery": null,
+        "files_changed": [
+          "go.mod",
+          "go.sum",
+          "Makefile",
+          "docker-compose.yml",
+          ".env.example",
+          ".gitignore",
+          ".golangci.yml",
+          "sqlc.yaml",
+          "README.md",
+          "cmd/recruiting/main.go",
+          "cmd/recruiting/modes.go",
+          "cmd/recruiting/main_test.go",
+          "internal/config/config.go",
+          "internal/config/config_test.go",
+          "internal/api/router.go",
+          "internal/api/router_test.go",
+          "internal/api/openapi_lint_test.go",
+          "internal/store/store_integration_test.go",
+          "internal/domain/doc.go",
+          "internal/store/doc.go",
+          "internal/service/doc.go",
+          "internal/web/doc.go",
+          "internal/runner/doc.go",
+          "internal/mail/doc.go",
+          "internal/blob/doc.go",
+          "internal/queue/doc.go",
+          "db/migrations/.gitkeep",
+          "db/queries/.gitkeep"
+        ],
+        "interfaces": [
+          "Go module path `recruiting`",
+          "config.Config{DatabaseURL,BlobEndpoint,BlobBucket,BlobKey,BlobSecret,SMTPURL,RunnerURL,RunnerSecret,SessionSecret,BaseURL}; config.Load() (*Config,error); config.IsMissing(err)",
+          "api.NewRouter() *api.Router{Mux *chi.Mux, API huma.API}; GET /healthz; Huma at /api/v1, OpenAPI at /api/v1/openapi.json",
+          "cmd/recruiting modes map in main.go; runServe/runWorker/runRunner/runMigrate/runAdmin func(*slog.Logger,*config.Config,[]string) error in modes.go",
+          "Makefile targets check,fmt,test,test-integration,openapi-lint,generate,migrate,migration name=...,build,tidy,dev-up,dev-down; tools via pinned go run",
+          "Integration tests build tag `integration`; openapi contract test tag `openapilint`",
+          "Compose: Postgres 5433 recruiting/recruiting/recruiting; MinIO 9000/9001; Mailpit 1025/8025",
+          "sqlc: schema db/migrations, queries db/queries, package store at internal/store/db (pgx/v5); goose migrations in db/migrations",
+          "golangci-lint via pinned go run; staticcheck+unused disabled (panic on Go 1.27 stdlib)"
+        ],
+        "status": "done",
+        "validation": {
+          "mode": "checks-only",
+          "red_observed": "not-applicable"
+        }
+      },
+      "status": "done"
+    },
+    "T02": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    },
+    "T03": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    },
+    "T04": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    },
+    "T05": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    },
+    "T06": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    },
+    "T07": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    },
+    "T08": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    },
+    "T09": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    },
+    "T10": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    },
+    "T11": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    },
+    "T12": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    },
+    "T13": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    },
+    "T14": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    },
+    "T15": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    },
+    "T16": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    },
+    "T17": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    },
+    "T18": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    },
+    "T19": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    },
+    "T20": {
+      "attempts": 0,
+      "result": null,
+      "status": "pending"
+    }
+  }
+}

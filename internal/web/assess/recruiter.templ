@@ -1,0 +1,212 @@
+package assess
+
+import (
+	"fmt"
+	"strings"
+	"recruiting/internal/domain"
+	"recruiting/internal/service"
+	"recruiting/internal/web/layout"
+)
+
+templ listPage(page layout.Page, found []service.Assessment) {
+	@layout.Base(page) {
+		<h1>Assessments</h1>
+		<p class="muted">An assessment is an ordered set of problems with a time limit. Attach one to a job's assessment stage and every candidate entering the stage is invited.</p>
+		<p><a href={ templ.SafeURL(Prefix + "/new") }>New assessment</a></p>
+		if len(found) == 0 {
+			<p class="muted">No assessments yet.</p>
+		} else {
+			<table>
+				<thead><tr><th>Name</th><th>Problems</th><th>Duration</th><th>Language</th><th>Invite window</th></tr></thead>
+				<tbody>
+					for _, a := range found {
+						<tr>
+							<td><a href={ templ.SafeURL(Prefix + "/" + a.ID.String()) }>{ a.Name }</a></td>
+							<td>{ fmt.Sprint(a.ProblemCount) }</td>
+							<td>{ fmt.Sprintf("%d min", a.DurationMinutes) }</td>
+							<td>{ orAny(a.LanguageOverride) }</td>
+							<td>{ fmt.Sprintf("%d days", a.InviteWindowDays) }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+	}
+}
+
+func orAny(s string) string {
+	if s == "" {
+		return "problem's own"
+	}
+	return s
+}
+
+templ detailPage(page layout.Page, a service.Assessment) {
+	@layout.Base(page) {
+		<h1>{ a.Name }</h1>
+		<p class="muted">{ fmt.Sprintf("%d minutes · language %s · invite valid %d days", a.DurationMinutes, orAny(a.LanguageOverride), a.InviteWindowDays) }</p>
+		<p>
+			<a href={ templ.SafeURL(Prefix + "/" + a.ID.String() + "/edit") }>Edit</a>
+		</p>
+		<h2>Problems</h2>
+		<ol>
+			for _, p := range a.Problems {
+				<li>
+					<a href={ templ.SafeURL("/app/problems/" + p.ID.String()) }>{ p.Title }</a>
+					<span class="muted">{ " · " + p.Kind + " · " + p.Difficulty + " · " + strings.Join(p.AllowedLanguages, ", ") }</span>
+				</li>
+			}
+		</ol>
+		<form method="post" action={ templ.SafeURL(Prefix + "/" + a.ID.String() + "/delete") } onsubmit="return confirm('Delete this assessment?')">
+			@layout.CSRFField(page.CSRF)
+			<button type="submit">Delete</button>
+		</form>
+	}
+}
+
+templ formPage(page layout.Page, f assessmentForm, problems []string) {
+	@layout.Base(page) {
+		if f.New {
+			<h1>New assessment</h1>
+		} else {
+			<h1>Edit { f.Name }</h1>
+		}
+		for _, msg := range problems {
+			<p class="flash flash-error" role="alert">{ msg }</p>
+		}
+		<form id="assessment" class="stack" method="post" action={ templ.SafeURL(f.action()) }>
+			@layout.CSRFField(page.CSRF)
+			<label>Name <input type="text" name="name" value={ f.Name } required/></label>
+			<label>Duration (minutes) <input type="number" name="duration_minutes" min="1" max="1440" value={ fmt.Sprint(f.DurationMinutes) } required/></label>
+			<label>
+				Language override
+				<select name="language_override">
+					<option value="">problem's own languages</option>
+					for _, l := range domain.ProblemLanguages {
+						if l == f.LanguageOverride {
+							<option value={ l } selected>{ l }</option>
+						} else {
+							<option value={ l }>{ l }</option>
+						}
+					}
+				</select>
+			</label>
+			<label>Invite valid for (days) <input type="number" name="invite_window_days" min="1" value={ fmt.Sprint(f.InviteWindowDays) } required/></label>
+			<fieldset>
+				<legend>Picked problems, in order</legend>
+				if len(f.Picked) == 0 {
+					<p class="muted">None yet. Pick from the bank below.</p>
+				}
+				for i, p := range f.Picked {
+					<label class="pick">
+						<input type="checkbox" name="problem_id" value={ p.ID.String() } checked/>
+						<input type="number" name="order" value={ fmt.Sprint(i + 1) } min="1" class="order"/>
+						{ p.Title } <span class="muted">({ p.Kind }, { p.Difficulty })</span>
+					</label>
+				}
+			</fieldset>
+			<fieldset>
+				<legend>Problem bank</legend>
+				<p class="muted">Filter, then tick problems to add them. The filter keeps what you have typed.</p>
+				<div class="search">
+					<label>Tag <input type="search" name="tag" value={ f.Filter.Tag } form="filter"/></label>
+					<label>
+						Difficulty
+						<select name="difficulty" form="filter">
+							<option value="">any</option>
+							for _, d := range domain.ProblemDifficulties {
+								if d == f.Filter.Difficulty {
+									<option value={ d } selected>{ d }</option>
+								} else {
+									<option value={ d }>{ d }</option>
+								}
+							}
+						</select>
+					</label>
+					<label>Title <input type="search" name="q" value={ f.Filter.Query } form="filter"/></label>
+					<button type="submit" form="filter" formmethod="get" formaction={ f.filterAction() }>Filter</button>
+				</div>
+				for _, p := range f.Bank {
+					if !f.picked(p.ID) {
+						<label class="pick">
+							<input type="checkbox" name="problem_id" value={ p.ID.String() }/>
+							<input type="number" name="order" value={ fmt.Sprint(len(f.Picked) + 1) } min="1" class="order"/>
+							{ p.Title } <span class="muted">({ p.Kind }, { p.Difficulty }, { strings.Join(p.Tags, " ") })</span>
+						</label>
+					}
+				}
+				if len(f.Bank) == 0 {
+					<p class="muted">No problem matches that filter.</p>
+				}
+			</fieldset>
+			<button type="submit">Save</button>
+		</form>
+		// The filter form re-renders this screen as a GET carrying every field of
+		// the main form, so a filter change loses nothing typed.
+		<form id="filter" method="get" action={ templ.SafeURL(f.filterAction()) }>
+			<input type="hidden" name="name" value={ f.Name }/>
+			<input type="hidden" name="duration_minutes" value={ fmt.Sprint(f.DurationMinutes) }/>
+			<input type="hidden" name="language_override" value={ f.LanguageOverride }/>
+			<input type="hidden" name="invite_window_days" value={ fmt.Sprint(f.InviteWindowDays) }/>
+			for i, p := range f.Picked {
+				<input type="hidden" name="problem_id" value={ p.ID.String() }/>
+				<input type="hidden" name="order" value={ fmt.Sprint(i + 1) }/>
+			}
+		</form>
+		<style>
+			.pick { display: flex; gap: .5rem; align-items: center; padding: .2rem 0; }
+			.pick input[type="number"].order { width: 4rem; }
+		</style>
+	}
+}
+
+func (f assessmentForm) filterAction() string {
+	if f.New {
+		return Prefix + "/new"
+	}
+	return Prefix + "/" + f.ID.String() + "/edit"
+}
+
+templ attachPage(page layout.Page, v attachView) {
+	@layout.Base(page) {
+		<h1>Attach an assessment</h1>
+		<p class="muted">Job: <a href={ templ.SafeURL("/app/jobs/" + v.Job.ID.String()) }>{ v.Job.Title }</a></p>
+		if len(v.Stages) == 0 {
+			<p>This job has no assessment stage. Add one in the job's pipeline first.</p>
+		} else {
+			<form class="stack" method="post" action={ templ.SafeURL(AttachPath) }>
+				@layout.CSRFField(page.CSRF)
+				<input type="hidden" name="job_id" value={ v.Job.ID.String() }/>
+				<label>
+					Stage
+					<select name="stage_id">
+						for _, st := range v.Stages {
+							if st.ID == v.StageID {
+								<option value={ st.ID.String() } selected>{ st.Name }</option>
+							} else {
+								<option value={ st.ID.String() }>{ st.Name }</option>
+							}
+						}
+					</select>
+				</label>
+				<label>
+					Assessment
+					<select name="assessment_id">
+						<option value="">none (detach)</option>
+						for _, a := range v.Assessments {
+							if v.Current != nil && a.ID == v.Current.ID {
+								<option value={ a.ID.String() } selected>{ a.Name }</option>
+							} else {
+								<option value={ a.ID.String() }>{ a.Name }</option>
+							}
+						}
+					</select>
+				</label>
+				<button type="submit">Save</button>
+			</form>
+			if v.Current != nil {
+				<p class="muted">Currently attached: <a href={ templ.SafeURL(Prefix + "/" + v.Current.ID.String()) }>{ v.Current.Name }</a></p>
+			}
+		}
+	}
+}

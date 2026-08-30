@@ -1,0 +1,42 @@
+version: "2"
+
+linters:
+  # staticcheck and unused are disabled: their IR builder (honnef.co/go/tools
+  # v0.7.0) panics on the Go 1.27 standard library. Re-enable once golangci-lint
+  # ships a staticcheck that parses it.
+  default: standard
+  disable:
+    - staticcheck
+    - unused
+  enable:
+    - bodyclose
+    - errorlint
+    - misspell
+    - nolintlint
+    - revive
+  settings:
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - path: _test\.go$
+        linters:
+          - bodyclose
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - recruiting

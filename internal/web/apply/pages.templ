@@ -1,0 +1,60 @@
+package apply
+
+import (
+	"recruiting/internal/service"
+	"recruiting/internal/web/layout"
+)
+
+templ applyPage(page layout.Page, job service.PublicJob, f applyForm) {
+	@layout.Base(page) {
+		<h1>{ job.Title }</h1>
+		if jobSummary(job) != "" {
+			<p class="muted">{ jobSummary(job) }</p>
+		}
+		if job.Description != "" {
+			<p>{ job.Description }</p>
+		}
+		if f.Error != "" {
+			<p class="flash flash-error" role="alert">{ f.Error }</p>
+		}
+		<h2>Apply</h2>
+		<form class="stack" method="post" action={ templ.SafeURL(applyPath(job)) } enctype="multipart/form-data">
+			@layout.CSRFField(page.CSRF)
+			<label>
+				Your name
+				<input type="text" name="name" value={ f.Name } required autocomplete="name"/>
+			</label>
+			<label>
+				Email
+				<input type="email" name="email" value={ f.Email } required autocomplete="email"/>
+			</label>
+			<label>
+				Phone
+				<input type="text" name="phone" value={ f.Phone } autocomplete="tel"/>
+			</label>
+			<label>
+				Links
+				<input type="text" name="links" value={ f.Links } placeholder="https://github.com/you, https://you.example"/>
+			</label>
+			<label>
+				Resume (PDF or Word .docx, up to 10 MB)
+				<input type="file" name="resume" accept=".pdf,.docx" required/>
+			</label>
+			<button type="submit">Send application</button>
+		</form>
+	}
+}
+
+templ thanksPage(page layout.Page, job service.PublicJob) {
+	@layout.Base(page) {
+		<h1>Thank you</h1>
+		<p>Your application for { job.Title } is in. We will be in touch by email.</p>
+	}
+}
+
+templ notFoundPage(page layout.Page) {
+	@layout.Base(page) {
+		<h1>Job not found</h1>
+		<p>This role is no longer accepting applications, or the address is wrong.</p>
+	}
+}

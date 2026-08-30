@@ -1,0 +1,73 @@
+package pool
+
+import (
+	"github.com/google/uuid"
+
+	"recruiting/internal/service"
+)
+
+// SuggestionsFragment is what a job screen embeds: an empty panel that pulls
+// its ranked suggestions once the page has loaded, so a slow ranking never
+// holds up the job form. The panel replaces itself on every add.
+templ SuggestionsFragment(jobID uuid.UUID) {
+	<section id="pool-suggestions" hx-get={ SuggestionsPath(jobID) } hx-trigger="load" hx-swap="outerHTML">
+		<h2>Suggested candidates</h2>
+		<p class="muted">Ranking the talent pool…</p>
+	</section>
+}
+
+templ suggestionsPanel(jobID uuid.UUID, list []service.PoolSuggestion, note panelNote) {
+	<section id="pool-suggestions">
+		<h2>Suggested candidates</h2>
+		if note.Message != "" {
+			<p class={ note.class() } role="status">{ note.Message }</p>
+		}
+		if len(list) == 0 {
+			<p class="muted">Nobody in the pool matches this job yet.</p>
+		} else {
+			<table>
+				<thead>
+					<tr><th>Candidate</th><th>Match</th><th>Why</th><th></th></tr>
+				</thead>
+				<tbody>
+					for _, s := range list {
+						<tr>
+							<td>
+								{ s.Entry.CandidateName }
+								if locationText(s.Entry) != "" {
+									<span class="muted">{ " · " + locationText(s.Entry) }</span>
+								}
+							</td>
+							<td>{ scoreText(s.Score) }</td>
+							<td class="muted">
+								{ "Skills " + percent(s.Breakdown.Skills) }
+								{ " · Seniority " + percent(s.Breakdown.Seniority) }
+								{ " · Location " + percent(s.Breakdown.Location) }
+								{ " · Assessment " + percent(s.Breakdown.Assessment) }
+							</td>
+							<td>
+								<button type="button" hx-post={ addPath(jobID, s.Entry.ID) } hx-target="#pool-suggestions" hx-swap="outerHTML">Add to job</button>
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+	</section>
+}
+
+// FlagButton is the "mark high quality" action a pipeline or application
+// screen embeds: one click files the candidate in the talent pool. It
+// replaces itself with what the flag did.
+templ FlagButton(applicationID uuid.UUID) {
+	<span id="pool-flag">
+		<button type="button" hx-post={ FlagPath(applicationID) } hx-target="#pool-flag" hx-swap="outerHTML">Mark high quality</button>
+	</span>
+}
+
+templ flagged(e service.PoolEntry) {
+	<span id="pool-flag" class="muted">
+		In the talent pool ·
+		<a href={ templ.SafeURL(entryPath(e)) }>edit the entry</a>
+	</span>
+}

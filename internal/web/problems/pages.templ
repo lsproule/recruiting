@@ -1,0 +1,348 @@
+package problems
+
+import (
+	"recruiting/internal/domain"
+	"recruiting/internal/service"
+	"recruiting/internal/web/layout"
+)
+
+templ listPage(page layout.Page, f service.ProblemFilter, found []service.Problem) {
+	@layout.Base(page) {
+		<h1>Problem bank</h1>
+		<p class="muted">Your org's problems and the shared platform seed. Platform problems can be used but not edited.</p>
+		<p>
+			<a href={ templ.SafeURL(Prefix + "/new") }>New problem</a>
+			{ " · " }
+			<a href={ templ.SafeURL(ImportPath) }>Import a JSON batch</a>
+		</p>
+		<form class="search" method="get" action={ templ.SafeURL(Prefix) }>
+			<label>
+				Title
+				<input type="search" name="q" value={ f.Query } placeholder="meeting rooms"/>
+			</label>
+			<label>
+				Tag
+				<input type="search" name="tag" value={ f.Tag } placeholder="sorting"/>
+			</label>
+			<label>
+				Difficulty
+				<select name="difficulty">
+					<option value="">any</option>
+					for _, d := range domain.ProblemDifficulties {
+						if selected(f.Difficulty, d) {
+							<option value={ d } selected>{ d }</option>
+						} else {
+							<option value={ d }>{ d }</option>
+						}
+					}
+				</select>
+			</label>
+			<label>
+				Kind
+				<select name="kind">
+					<option value="">any</option>
+					for _, k := range []string{domain.ProblemKindCode, domain.ProblemKindSQL} {
+						if selected(f.Kind, k) {
+							<option value={ k } selected>{ k }</option>
+						} else {
+							<option value={ k }>{ k }</option>
+						}
+					}
+				</select>
+			</label>
+			<button type="submit">Filter</button>
+		</form>
+		if len(found) == 0 {
+			<p class="muted">No problem matches that filter.</p>
+		} else {
+			<table>
+				<thead>
+					<tr><th>Title</th><th>Kind</th><th>Difficulty</th><th>Languages</th><th>Tags</th><th>Owner</th></tr>
+				</thead>
+				<tbody>
+					for _, p := range found {
+						<tr>
+							<td><a href={ templ.SafeURL(problemPath(p)) }>{ p.Title }</a></td>
+							<td>{ p.Kind }</td>
+							<td>{ p.Difficulty }</td>
+							<td>{ languagesText(p) }</td>
+							<td>{ tagsText(p) }</td>
+							<td class="muted">{ ownerLabel(p) }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+	}
+}
+
+templ detailPage(page layout.Page, p service.Problem) {
+	@layout.Base(page) {
+		<h1>{ p.Title }</h1>
+		<p class="muted">
+			{ p.Kind } { " · " } { p.Difficulty } { " · " } { languagesText(p) }
+			if tagsText(p) != "" {
+				{ " · " } { tagsText(p) }
+			}
+			{ " · " } { ownerLabel(p) }
+		</p>
+		if p.Platform() {
+			<p class="muted">This problem belongs to the shared platform bank and is read-only.</p>
+		} else {
+			<p>
+				<a href={ templ.SafeURL(editPath(p)) }>Edit</a>
+			</p>
+			<form method="post" action={ templ.SafeURL(deletePath(p)) }>
+				@layout.CSRFField(page.CSRF)
+				<button type="submit">Delete problem</button>
+			</form>
+		}
+		<h2>Statement</h2>
+		<pre class="statement">{ p.Statement }</pre>
+		if p.SQLSchema != "" {
+			<h2>Schema</h2>
+			<pre class="statement">{ p.SQLSchema }</pre>
+		}
+		if p.SQLSeed != "" {
+			<h2>Seed rows</h2>
+			<pre class="statement">{ p.SQLSeed }</pre>
+		}
+		<h2>Reference solutions</h2>
+		for _, ref := range p.References {
+			<h3>{ ref.Language }</h3>
+			<pre class="statement">{ ref.Source }</pre>
+		}
+		<h2>Test cases</h2>
+		<table>
+			<thead>
+				<tr><th>#</th><th>Input</th><th>Expected</th><th>Visibility</th><th>Weight</th><th>Unordered</th></tr>
+			</thead>
+			<tbody>
+				for _, c := range p.TestCases {
+					<tr>
+						<td>{ itoa(c.Position) }</td>
+						<td><pre class="cell">{ c.Input }</pre></td>
+						<td><pre class="cell">{ c.Expected }</pre></td>
+						<td>{ c.Visibility }</td>
+						<td>{ weightText(c.Weight) }</td>
+						<td>
+							if c.Unordered {
+								yes
+							} else {
+								no
+							}
+						</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+		<p><a href={ templ.SafeURL(Prefix) }>Back to the bank</a></p>
+	}
+}
+
+templ formPage(page layout.Page, f problemForm, problems []string) {
+	@layout.Base(page) {
+		if f.New {
+			<h1>New problem</h1>
+		} else {
+			<h1>Edit problem</h1>
+		}
+		<p class="muted">Every reference solution is run against every test case before the problem is saved.</p>
+		if len(problems) > 0 {
+			<div class="flash flash-error" role="alert">
+				<p>The problem was not saved:</p>
+				<ul>
+					for _, msg := range problems {
+						<li>{ msg }</li>
+					}
+				</ul>
+			</div>
+		}
+		<form class="stack" method="post" action={ templ.SafeURL(f.action()) }>
+			@layout.CSRFField(page.CSRF)
+			<label>
+				Title
+				<input type="text" name="title" value={ f.Title } required/>
+			</label>
+			<label>
+				Kind
+				<select name="kind">
+					for _, k := range []string{domain.ProblemKindCode, domain.ProblemKindSQL} {
+						if selected(f.Kind, k) {
+							<option value={ k } selected>{ k }</option>
+						} else {
+							<option value={ k }>{ k }</option>
+						}
+					}
+				</select>
+			</label>
+			<label>
+				Difficulty
+				<select name="difficulty">
+					for _, d := range domain.ProblemDifficulties {
+						if selected(f.Difficulty, d) {
+							<option value={ d } selected>{ d }</option>
+						} else {
+							<option value={ d }>{ d }</option>
+						}
+					}
+				</select>
+			</label>
+			<label>
+				Tags (comma separated)
+				<input type="text" name="tags" value={ f.Tags }/>
+			</label>
+			<label>
+				Allowed languages (comma separated: { languageList() })
+				<input type="text" name="allowed_languages" value={ f.AllowedLanguages }/>
+			</label>
+			<label>
+				Time limit per test (ms)
+				<input type="number" name="time_limit_ms" value={ itoa(f.TimeLimitMs) }/>
+			</label>
+			<label>
+				Memory limit (kB)
+				<input type="number" name="memory_limit_kb" value={ itoa(f.MemoryLimitKB) }/>
+			</label>
+			<label>
+				Statement (Markdown)
+				<textarea name="statement" rows="10">{ f.Statement }</textarea>
+			</label>
+			<label>
+				SQL schema (SQL problems only)
+				<textarea name="sql_schema" rows="5">{ f.SQLSchema }</textarea>
+			</label>
+			<label>
+				SQL seed rows (SQL problems only)
+				<textarea name="sql_seed" rows="5">{ f.SQLSeed }</textarea>
+			</label>
+			<fieldset>
+				<legend>Reference solutions</legend>
+				for i, ref := range f.References {
+					<label>
+						Language
+						<input type="text" name={ rowIndex("ref_language", i) } value={ ref.Language }/>
+					</label>
+					<label>
+						Source
+						<textarea name={ rowIndex("ref_source", i) } rows="8">{ ref.Source }</textarea>
+					</label>
+				}
+			</fieldset>
+			<fieldset>
+				<legend>Test cases</legend>
+				for i, tc := range f.TestCases {
+					<label>
+						Input
+						<textarea name={ rowIndex("tc_input", i) } rows="3">{ tc.Input }</textarea>
+					</label>
+					<label>
+						Expected output
+						<textarea name={ rowIndex("tc_expected", i) } rows="3">{ tc.Expected }</textarea>
+					</label>
+					<label>
+						Visibility
+						<select name={ rowIndex("tc_visibility", i) }>
+							for _, v := range []string{domain.VisibilityPublic, domain.VisibilityHidden} {
+								if selected(tc.Visibility, v) {
+									<option value={ v } selected>{ v }</option>
+								} else {
+									<option value={ v }>{ v }</option>
+								}
+							}
+						</select>
+					</label>
+					<label>
+						Weight
+						<input type="text" name={ rowIndex("tc_weight", i) } value={ tc.Weight }/>
+					</label>
+					<label>
+						if tc.Unordered {
+							<input type="checkbox" name={ rowIndex("tc_unordered", i) } value="1" checked/>
+						} else {
+							<input type="checkbox" name={ rowIndex("tc_unordered", i) } value="1"/>
+						}
+						Compare rows in any order (SQL)
+					</label>
+				}
+			</fieldset>
+			<button type="submit">Save problem</button>
+		</form>
+		<p><a href={ templ.SafeURL(Prefix) }>Back to the bank</a></p>
+	}
+}
+
+templ importPage(page layout.Page, report domain.ProblemImportErrors, problems []string) {
+	@layout.Base(page) {
+		<h1>Import problems</h1>
+		<p class="muted">
+			A batch is a JSON array of problems. Every reference solution is run
+			against every test case; one failure rejects the whole batch and
+			nothing is stored.
+		</p>
+		if len(problems) > 0 {
+			<div class="flash flash-error" role="alert">
+				<ul>
+					for _, msg := range problems {
+						<li>{ msg }</li>
+					}
+				</ul>
+			</div>
+		}
+		if len(report) > 0 {
+			<div class="flash flash-error" role="alert">
+				<p>The batch was rejected. Nothing was imported.</p>
+			</div>
+			<table>
+				<thead>
+					<tr><th>#</th><th>Problem</th><th>What is wrong</th></tr>
+				</thead>
+				<tbody>
+					for _, p := range report {
+						<tr>
+							<td>{ reportPosition(p) }</td>
+							<td>{ p.Label() }</td>
+							<td>
+								<ul>
+									for _, msg := range p.Errors {
+										<li>{ msg }</li>
+									}
+								</ul>
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+		<form class="stack" method="post" action={ templ.SafeURL(ImportPath) } enctype="multipart/form-data">
+			@layout.CSRFField(page.CSRF)
+			<label>
+				JSON file
+				<input type="file" name="document" accept="application/json,.json"/>
+			</label>
+			<label>
+				…or paste the batch
+				<textarea name="document_text" rows="14" placeholder="[ { &#34;kind&#34;: &#34;code&#34;, … } ]"></textarea>
+			</label>
+			<button type="submit">Import</button>
+		</form>
+		<p><a href={ templ.SafeURL(Prefix) }>Back to the bank</a></p>
+	}
+}
+
+templ importedPage(page layout.Page, imported []service.Problem) {
+	@layout.Base(page) {
+		<h1>Import problems</h1>
+		<p class="flash flash-success" role="status">Imported { itoa(len(imported)) } problems.</p>
+		<ul>
+			for _, p := range imported {
+				<li><a href={ templ.SafeURL(problemPath(p)) }>{ p.Title }</a></li>
+			}
+		</ul>
+		<p>
+			<a href={ templ.SafeURL(Prefix) }>Back to the bank</a>
+			{ " · " }
+			<a href={ templ.SafeURL(ImportPath) }>Import another batch</a>
+		</p>
+	}
+}

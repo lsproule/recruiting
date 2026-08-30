@@ -1,0 +1,238 @@
+package jobs
+
+import (
+	"recruiting/internal/domain"
+	"recruiting/internal/service"
+	"recruiting/internal/web/layout"
+)
+
+templ jobsPage(page layout.Page, list []service.Job) {
+	@layout.Base(page) {
+		<h1>Jobs</h1>
+		<p><a href={ templ.SafeURL(Prefix + "/new") }>New job</a></p>
+		if len(list) == 0 {
+			<p class="muted">No jobs yet.</p>
+		} else {
+			<table>
+				<thead>
+					<tr><th>Title</th><th>Client</th><th>Seniority</th><th>Status</th><th>Pipeline</th></tr>
+				</thead>
+				<tbody>
+					for _, j := range list {
+						<tr>
+							<td><a href={ templ.SafeURL(Prefix + "/" + j.ID.String()) }>{ j.Title }</a></td>
+							<td>{ j.ClientCompanyName }</td>
+							<td>{ j.Seniority }</td>
+							<td>{ j.Status }</td>
+							<td><a href={ templ.SafeURL(Prefix + "/" + j.ID.String() + "/pipeline") }>Edit pipeline</a></td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+	}
+}
+
+templ jobFormPage(page layout.Page, f jobForm) {
+	@layout.Base(page) {
+		if f.Job.ID.String() == "00000000-0000-0000-0000-000000000000" {
+			<h1>New job</h1>
+		} else {
+			<h1>{ f.Job.Title }</h1>
+			<p><a href={ templ.SafeURL(Prefix + "/" + f.Job.ID.String() + "/pipeline") }>Edit pipeline</a></p>
+		}
+		if f.Error != "" {
+			<p class="flash flash-error" role="alert">{ f.Error }</p>
+		}
+		if f.Saved {
+			<p class="flash flash-success" role="status">Job saved.</p>
+		}
+		if len(f.Companies) == 0 {
+			<p class="muted">Add a client company under Clients before creating a job.</p>
+		}
+		<form class="stack" method="post" action={ templ.SafeURL(f.Action) }>
+			@layout.CSRFField(page.CSRF)
+			<label>
+				Client company
+				<select name="client_company_id" required>
+					<option value="">Choose a client</option>
+					for _, c := range f.Companies {
+						<option value={ c.ID.String() } selected?={ c.ID == f.Job.ClientCompanyID }>{ c.Name }</option>
+					}
+				</select>
+			</label>
+			<label>Title <input type="text" name="title" value={ f.Job.Title } required/></label>
+			<label>
+				URL slug
+				<input type="text" name="slug" value={ f.Job.Slug } placeholder="derived from the title"/>
+			</label>
+			<label>
+				Description (markdown)
+				<textarea name="description" rows="8">{ f.Job.Description }</textarea>
+			</label>
+			<label>
+				Required skills (comma separated)
+				<input type="text" name="skills" value={ skillsText(f.Job) }/>
+			</label>
+			<label>
+				Seniority
+				<select name="seniority">
+					<option value="">Unspecified</option>
+					for _, s := range service.Seniorities {
+						<option value={ s } selected?={ s == f.Job.Seniority }>{ s }</option>
+					}
+				</select>
+			</label>
+			<label>Location <input type="text" name="location" value={ f.Job.Location }/></label>
+			<label>
+				Remote policy
+				<select name="remote_policy">
+					<option value="">Unspecified</option>
+					for _, s := range service.RemotePolicies {
+						<option value={ s } selected?={ s == f.Job.RemotePolicy }>{ s }</option>
+					}
+				</select>
+			</label>
+			<label>Salary from <input type="number" name="salary_min" min="0" value={ numberValue(f.Job.SalaryMin) }/></label>
+			<label>Salary to <input type="number" name="salary_max" min="0" value={ numberValue(f.Job.SalaryMax) }/></label>
+			<label>
+				<input type="checkbox" name="blind_mode" value="1" checked?={ f.Job.BlindMode }/>
+				Blind mode: hide candidate identity from the client until an unblind stage
+			</label>
+			<label>
+				Status
+				<select name="status">
+					for _, s := range service.JobStatuses {
+						<option value={ s } selected?={ s == f.Job.Status }>{ s }</option>
+					}
+				</select>
+			</label>
+			<button type="submit">{ f.Submit }</button>
+		</form>
+	}
+}
+
+templ pipelinePage(page layout.Page, job service.Job, stages []domain.Stage, csrf string, errMessage string) {
+	@layout.Base(page) {
+		<h1>{ job.Title } pipeline</h1>
+		<p><a href={ templ.SafeURL(Prefix + "/" + job.ID.String()) }>Back to the job</a></p>
+		@pipelineEditor(job, stages, csrf, errMessage)
+	}
+}
+
+// pipelineEditor is the htmx swap target: every stage change re-renders it.
+templ pipelineEditor(job service.Job, stages []domain.Stage, csrf string, errMessage string) {
+	<section id="pipeline">
+		if errMessage != "" {
+			<p class="flash flash-error" role="alert">{ errMessage }</p>
+		}
+		<div x-data={ "stageOrder(" + stagesJSON(stages) + ")" }>
+			<form
+				hx-post={ Prefix + "/" + job.ID.String() + "/stages/order" }
+				hx-target="#pipeline"
+				hx-swap="outerHTML"
+			>
+				@layout.CSRFField(csrf)
+				<ol class="stages">
+					<template x-for="(s, i) in stages" :key="s.id">
+						<li>
+							<input type="hidden" name="stage" :value="s.id"/>
+							<span class="stage-name" x-text="s.name"></span>
+							<span class="muted" x-text="s.kind"></span>
+							<span class="muted" x-text="s.note"></span>
+							<button type="button" @click="move(i, -1)" :disabled="i === 0" aria-label="Move up">&uarr;</button>
+							<button type="button" @click="move(i, 1)" :disabled="i === stages.length - 1" aria-label="Move down">&darr;</button>
+						</li>
+					</template>
+				</ol>
+				<button type="submit" :disabled="!dirty">Save order</button>
+			</form>
+		</div>
+		<h2>Stages</h2>
+		<table>
+			<thead>
+				<tr><th>#</th><th>Name</th><th>Kind</th><th>On entry</th><th></th></tr>
+			</thead>
+			<tbody>
+				for _, s := range stages {
+					<tr>
+						<td>{ positionLabel(s) }</td>
+						<td>
+							<form method="post" action={ templ.SafeURL(stagePath(job.ID.String(), s.ID.String())) }>
+								@layout.CSRFField(csrf)
+								<input type="text" name="name" value={ s.Name } required/>
+								<select name="kind">
+									for _, k := range domain.StageKinds {
+										<option value={ string(k) } selected?={ k == s.Kind }>{ string(k) }</option>
+									}
+								</select>
+								<select name="terminal_status">
+									<option value="">not terminal</option>
+									<option value="hired" selected?={ s.Terminal == domain.StatusHired }>hired</option>
+									<option value="rejected" selected?={ s.Terminal == domain.StatusRejected }>rejected</option>
+								</select>
+								<label>
+									<input type="checkbox" name="unblind" value="1" checked?={ s.Unblind }/>
+									unblind
+								</label>
+								<button type="submit">Save</button>
+							</form>
+						</td>
+						<td>{ string(s.Kind) }</td>
+						<td>{ terminalLabel(s) }</td>
+						<td>
+							<form method="post" action={ templ.SafeURL(stagePath(job.ID.String(), s.ID.String()) + "/delete") }>
+								@layout.CSRFField(csrf)
+								<button type="submit">Remove</button>
+							</form>
+						</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+		<h2>Add a stage</h2>
+		<form class="stack" method="post" action={ templ.SafeURL(Prefix + "/" + job.ID.String() + "/stages") }>
+			@layout.CSRFField(csrf)
+			<label>Name <input type="text" name="name" required/></label>
+			<label>
+				Kind
+				<select name="kind">
+					for _, k := range domain.StageKinds {
+						<option value={ string(k) }>{ string(k) }</option>
+					}
+				</select>
+			</label>
+			<label>
+				Terminal outcome (terminal stages only)
+				<select name="terminal_status">
+					<option value="">not terminal</option>
+					<option value="hired">hired</option>
+					<option value="rejected">rejected</option>
+				</select>
+			</label>
+			<label><input type="checkbox" name="unblind" value="1"/> unblind the candidate here</label>
+			<button type="submit">Add stage</button>
+		</form>
+		@stageOrderScript()
+	</section>
+}
+
+// stageOrderScript keeps reordering in the browser until the recruiter saves,
+// so a drag that is thought better of costs no round trip.
+templ stageOrderScript() {
+	<script>
+		window.stageOrder = function (initial) {
+			return {
+				stages: initial,
+				dirty: false,
+				move(i, delta) {
+					const j = i + delta;
+					if (j < 0 || j >= this.stages.length) return;
+					const [s] = this.stages.splice(i, 1);
+					this.stages.splice(j, 0, s);
+					this.dirty = true;
+				},
+			};
+		};
+	</script>
+}

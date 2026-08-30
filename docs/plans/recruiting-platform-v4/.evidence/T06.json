@@ -1,0 +1,19 @@
+{
+  "checks": [
+    {
+      "command": "make check",
+      "status": "passed"
+    },
+    {
+      "command": "make test",
+      "status": "passed"
+    },
+    {
+      "command": "make test-integration",
+      "status": "passed"
+    }
+  ],
+  "manual": false,
+  "result_sha256": "376f364677b46f8faacba303722cda42b7eae78b308690bd741062f8bb5918c0",
+  "workspace": "/home/lucas/wrk/recruiting"
+}

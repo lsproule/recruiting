@@ -1,0 +1,107 @@
+package assess
+
+import (
+	"fmt"
+	"recruiting/internal/service"
+	"recruiting/internal/web/layout"
+	"recruiting/internal/web/middleware"
+)
+
+// candidateShell is the chrome of the candidate pages: no navigation, no
+// sign-out, and the island script from the binary's own assets.
+templ candidateShell(title string, island bool) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ title }</title>
+			if island {
+				<script src={ layout.AssessPath } defer></script>
+			}
+			@candidateStyles()
+		</head>
+		<body>
+			<main class="assess-main">
+				{ children... }
+			</main>
+		</body>
+	</html>
+}
+
+templ sessionPage(s service.AttemptSession, cfgJSON string, csrf string) {
+	@candidateShell(s.Assessment.Name, s.Attempt.Status == service.AttemptStarted) {
+		<header class="assess-head">
+			<h1>{ s.Assessment.Name }</h1>
+			<p class="muted">{ s.JobTitle } · { fmt.Sprintf("%d problems · %d minutes", len(s.Problems), s.Assessment.DurationMinutes) }</p>
+		</header>
+		switch s.Attempt.Status {
+			case service.AttemptInvited:
+				<section class="assess-intro">
+					<p>Hi { s.CandidateName }. This assessment has { fmt.Sprint(len(s.Problems)) } problem(s) and a time limit of { fmt.Sprint(s.Assessment.DurationMinutes) } minutes. The clock starts when you press Start and cannot be paused.</p>
+					<ul>
+						for _, p := range s.Problems {
+							<li>{ p.Title } <span class="muted">({ p.Difficulty })</span></li>
+						}
+					</ul>
+					<p>Your invite is valid until { s.Attempt.InviteExpiresAt.Format("2006-01-02 15:04 UTC") }.</p>
+					<form method="post" action={ templ.SafeURL(SessionPath + "start") }>
+						<input type="hidden" name={ middleware.CSRFField } value={ csrf }/>
+						<button type="submit" class="primary">Start the assessment</button>
+					</form>
+				</section>
+			case service.AttemptStarted:
+				<script id="assess-config" type="application/json">
+					@templ.Raw(jsonForScript(cfgJSON))
+				</script>
+				<div id="assess"></div>
+				<noscript><p class="assess-banner">This assessment needs JavaScript enabled.</p></noscript>
+			default:
+				<section class="assess-intro">
+					<p>Thank you, { s.CandidateName }. Your work has been submitted for review.</p>
+				</section>
+		}
+	}
+}
+
+templ closedPage(title, msg string) {
+	@candidateShell(title, false) {
+		<section class="assess-intro">
+			<h1>{ title }</h1>
+			<p>{ msg }</p>
+		</section>
+	}
+}
+
+templ candidateStyles() {
+	<style>
+		:root { color-scheme: light; --line: #d7d7d7; --muted: #5b5b5b; }
+		* { box-sizing: border-box; }
+		body { font-family: system-ui, sans-serif; margin: 0; color: #1a1a1a; background: #fff; }
+		.assess-main { max-width: 72rem; margin: 1.5rem auto; padding: 0 1.5rem; }
+		.assess-head h1 { font-size: 1.4rem; margin: 0; }
+		.muted { color: var(--muted); }
+		.assess-intro { max-width: 40rem; }
+		button { padding: .5rem .9rem; cursor: pointer; }
+		button.primary { background: #1a1a1a; color: #fff; border: 1px solid #1a1a1a; }
+		button.danger { background: #fff; color: #b00020; border: 1px solid #b00020; }
+		.assess-timer { position: sticky; top: 0; background: #fff; padding: .5rem 0; font-weight: 600; border-bottom: 1px solid var(--line); z-index: 2; }
+		.assess-banner { padding: .75rem 1rem; border-left: 4px solid #b00020; background: #fdeded; }
+		.assess-layout { display: grid; grid-template-columns: 14rem 1fr; gap: 1.5rem; margin-top: 1rem; }
+		.assess-tabs { display: flex; flex-direction: column; gap: .25rem; }
+		.assess-tab { text-align: left; background: none; border: 1px solid var(--line); }
+		.assess-tab.active { background: #eef; border-color: #88a; }
+		.assess-problem h2 { margin-top: 0; }
+		.assess-statement { white-space: pre-wrap; }
+		.assess-test { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
+		.assess-test pre, .assess-results pre { background: #f6f6f6; padding: .5rem; overflow: auto; margin: .25rem 0; }
+		.assess-bar { display: flex; gap: .5rem; align-items: center; margin: .75rem 0; }
+		.assess-editor { border: 1px solid var(--line); min-height: 20rem; }
+		.assess-editor .cm-editor { height: 24rem; font-size: .95rem; }
+		.assess-editor .cm-scroller { overflow: auto; }
+		.assess-results { margin-top: .75rem; }
+		.assess-finish { margin: 2rem 0; }
+		.assess-closed .assess-editor { opacity: .6; pointer-events: none; }
+		@media (max-width: 50rem) { .assess-layout { grid-template-columns: 1fr; } }
+	</style>
+}
