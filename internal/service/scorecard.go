@@ -129,9 +129,17 @@ type Assignment struct {
 
 // ScorecardService keeps the per-stage rubrics and the cards interviewers
 // file against them.
-type ScorecardService struct{ st *store.Store }
+type ScorecardService struct {
+	st   *store.Store
+	pool *PoolService
+}
 
-func NewScorecardService(st *store.Store) *ScorecardService { return &ScorecardService{st: st} }
+// NewScorecardService wires the store and the talent pool a strong yes files
+// the candidate in. A nil pool disables that hook, which suits tests of the
+// scorecards alone.
+func NewScorecardService(st *store.Store, pool *PoolService) *ScorecardService {
+	return &ScorecardService{st: st, pool: pool}
+}
 
 // Rubric is the stage's criteria. Any org user may read them; the vetter's
 // form and the recruiter's editor show the same list.
@@ -362,14 +370,19 @@ func (s *ScorecardService) Save(ctx context.Context, p Principal, in ScorecardIn
 		if err != nil {
 			return err
 		}
-		_, err = tx.Q.CreateApplicationEvent(ctx, db.CreateApplicationEventParams{
+		if _, err := tx.Q.CreateApplicationEvent(ctx, db.CreateApplicationEventParams{
 			OrgID: p.OrgID, ApplicationID: in.ApplicationID, ActorKind: actorKind(p),
 			ActorID:     uuid.NullUUID{UUID: p.UserID, Valid: p.UserID != uuid.Nil},
 			Kind:        EventScorecardStrongYes,
 			FromStageID: uuid.NullUUID{UUID: in.StageID, Valid: true},
 			Payload:     payload,
-		})
-		return err
+		}); err != nil {
+			return err
+		}
+		if s.pool == nil {
+			return nil
+		}
+		return s.pool.OnStrongYes(ctx, tx, p.OrgID, in.ApplicationID)
 	})
 	if err != nil {
 		return Scorecard{}, wrapScorecard("save scorecard", err)
@@ -385,6 +398,10 @@ func (s *ScorecardService) List(ctx context.Context, p Principal, applicationID 
 	}
 	var out []Scorecard
 	err := s.st.WithTx(ctx, p, func(ctx context.Context, tx *store.Tx) error {
+		// An application outside the org is not found, not an empty list.
+		if _, err := tx.Q.GetApplication(ctx, applicationID); err != nil {
+			return err
+		}
 		rows, err := tx.Q.ListScorecardsForApplication(ctx, applicationID)
 		if err != nil {
 			return err

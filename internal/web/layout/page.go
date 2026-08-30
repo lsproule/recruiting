@@ -73,6 +73,7 @@ func AppNav(p service.Principal, current string) []NavItem {
 		items = append(items,
 			NavItem{Label: "Availability", Href: "/app/availability"},
 			NavItem{Label: "Scorecards", Href: "/app/scorecards"},
+			NavItem{Label: "Reviews", Href: "/app/reviews"},
 		)
 	}
 	if p.HasRole(service.RoleAdmin) {

@@ -12,6 +12,47 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const createAPIToken = `-- name: CreateAPIToken :one
+insert into api_token (org_id, org_user_id, client_user_id, name, prefix, token_hash, expires_at)
+values ($1, $2, $3, $4, $5, $6, $7) returning id, org_id, org_user_id, name, token_hash, created_at, revoked_at, prefix, expires_at, client_user_id
+`
+
+type CreateAPITokenParams struct {
+	OrgID        uuid.UUID
+	OrgUserID    uuid.NullUUID
+	ClientUserID uuid.NullUUID
+	Name         string
+	Prefix       string
+	TokenHash    string
+	ExpiresAt    pgtype.Timestamptz
+}
+
+func (q *Queries) CreateAPIToken(ctx context.Context, arg CreateAPITokenParams) (ApiToken, error) {
+	row := q.db.QueryRow(ctx, createAPIToken,
+		arg.OrgID,
+		arg.OrgUserID,
+		arg.ClientUserID,
+		arg.Name,
+		arg.Prefix,
+		arg.TokenHash,
+		arg.ExpiresAt,
+	)
+	var i ApiToken
+	err := row.Scan(
+		&i.ID,
+		&i.OrgID,
+		&i.OrgUserID,
+		&i.Name,
+		&i.TokenHash,
+		&i.CreatedAt,
+		&i.RevokedAt,
+		&i.Prefix,
+		&i.ExpiresAt,
+		&i.ClientUserID,
+	)
+	return i, err
+}
+
 const createPasswordReset = `-- name: CreatePasswordReset :one
 insert into password_reset (org_id, org_user_id, client_user_id, token_hash, expires_at)
 values ($1, $2, $3, $4, $5) returning id, org_id, org_user_id, client_user_id, token_hash, expires_at, used_at, created_at
@@ -93,6 +134,54 @@ func (q *Queries) GetClientUser(ctx context.Context, id uuid.UUID) (ClientUser, 
 	return i, err
 }
 
+const listAPITokens = `-- name: ListAPITokens :many
+select t.id, t.org_id, t.org_user_id, t.name, t.token_hash, t.created_at, t.revoked_at, t.prefix, t.expires_at, t.client_user_id, coalesce(o.email, c.email, '')::text as user_email
+from api_token t
+left join org_user o on o.id = t.org_user_id
+left join client_user c on c.id = t.client_user_id
+where t.org_id = $1
+  and t.revoked_at is null
+  and (t.expires_at is null or t.expires_at > now())
+order by t.created_at desc
+`
+
+type ListAPITokensRow struct {
+	ApiToken  ApiToken
+	UserEmail string
+}
+
+func (q *Queries) ListAPITokens(ctx context.Context, orgID uuid.UUID) ([]ListAPITokensRow, error) {
+	rows, err := q.db.Query(ctx, listAPITokens, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAPITokensRow{}
+	for rows.Next() {
+		var i ListAPITokensRow
+		if err := rows.Scan(
+			&i.ApiToken.ID,
+			&i.ApiToken.OrgID,
+			&i.ApiToken.OrgUserID,
+			&i.ApiToken.Name,
+			&i.ApiToken.TokenHash,
+			&i.ApiToken.CreatedAt,
+			&i.ApiToken.RevokedAt,
+			&i.ApiToken.Prefix,
+			&i.ApiToken.ExpiresAt,
+			&i.ApiToken.ClientUserID,
+			&i.UserEmail,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lookupPasswordReset = `-- name: LookupPasswordReset :one
 select id, org_id, org_user_id, client_user_id, token_hash, expires_at, used_at, created_at from password_reset where token_hash = $1
 `
@@ -141,6 +230,18 @@ update password_reset set used_at = now() where org_user_id = $1 and used_at is 
 func (q *Queries) MarkPasswordResetsUsedForOrgUser(ctx context.Context, orgUserID uuid.NullUUID) error {
 	_, err := q.db.Exec(ctx, markPasswordResetsUsedForOrgUser, orgUserID)
 	return err
+}
+
+const revokeAPIToken = `-- name: RevokeAPIToken :execrows
+update api_token set revoked_at = now() where id = $1 and revoked_at is null
+`
+
+func (q *Queries) RevokeAPIToken(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeAPIToken, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const revokeMagicLink = `-- name: RevokeMagicLink :exec

@@ -534,7 +534,7 @@ func (s *ScheduleService) Book(ctx context.Context, p Principal, token string, s
 			return ErrSlotTaken
 		}
 		if b.current != nil {
-			if _, err := tx.Q.UpdateInterviewSlotStatus(ctx, db.UpdateInterviewSlotStatusParams{ID: b.current.ID, Status: SlotCancelled}); err != nil {
+			if err := s.cancelSlot(ctx, tx, *b.current); err != nil {
 				return err
 			}
 		}
@@ -555,15 +555,23 @@ func (s *ScheduleService) Book(ctx context.Context, p Principal, token string, s
 			return nil
 		}
 		bookingURL := s.baseURL + bookingPath + token
+		var remindJobs []int64
 		for _, r := range domain.ReminderTimes(slot.Start) {
 			if !r.At.After(s.Now()) {
 				continue
 			}
-			if err := s.q.EnqueueAt(ctx, tx, queue.KindInterviewRemind, RemindPayload{
+			id, err := s.q.EnqueueAt(ctx, tx, queue.KindInterviewRemind, RemindPayload{
 				SlotID: row.ID, Offset: r.Offset, OrgID: p.OrgID, StartsAt: slot.Start, BookingURL: bookingURL,
-			}, r.At); err != nil {
+			}, r.At)
+			if err != nil {
 				return err
 			}
+			remindJobs = append(remindJobs, id)
+		}
+		// The ids are kept on the slot so cancelling or rescheduling can
+		// cancel the reminders in the same transaction.
+		if err := tx.Q.SetInterviewSlotRemindJobs(ctx, db.SetInterviewSlotRemindJobsParams{ID: row.ID, RemindJobIds: remindJobs}); err != nil {
+			return err
 		}
 		if b.current != nil {
 			if err := s.notifyChange(ctx, tx, p.OrgID, b, bookingURL, "rescheduled to "+bothTimes(slot.Start, tz, b.vetter.Timezone)); err != nil {
@@ -594,7 +602,7 @@ func (s *ScheduleService) Cancel(ctx context.Context, p Principal, token string)
 		if !domain.CanChangeBooking(b.current.StartsAt.Time, s.Now()) {
 			return ErrTooLate
 		}
-		if _, err := tx.Q.UpdateInterviewSlotStatus(ctx, db.UpdateInterviewSlotStatusParams{ID: b.current.ID, Status: SlotCancelled}); err != nil {
+		if err := s.cancelSlot(ctx, tx, *b.current); err != nil {
 			return err
 		}
 		if s.q == nil {
@@ -606,6 +614,23 @@ func (s *ScheduleService) Cancel(ctx context.Context, p Principal, token string)
 		return wrapBooking("cancel booking", err)
 	}
 	return nil
+}
+
+// cancelSlot marks the slot cancelled and cancels its pending reminder jobs,
+// so a reminder never goes out for a booking that no longer stands.
+func (s *ScheduleService) cancelSlot(ctx context.Context, tx *store.Tx, slot db.InterviewSlot) error {
+	if _, err := tx.Q.UpdateInterviewSlotStatus(ctx, db.UpdateInterviewSlotStatusParams{ID: slot.ID, Status: SlotCancelled}); err != nil {
+		return err
+	}
+	if s.q == nil || len(slot.RemindJobIds) == 0 {
+		return nil
+	}
+	for _, id := range slot.RemindJobIds {
+		if err := s.q.CancelTx(ctx, tx, id); err != nil {
+			return err
+		}
+	}
+	return tx.Q.SetInterviewSlotRemindJobs(ctx, db.SetInterviewSlotRemindJobsParams{ID: slot.ID, RemindJobIds: []int64{}})
 }
 
 // confirm sends the confirmation to both parties, each in their own zone and
@@ -648,7 +673,7 @@ func (s *ScheduleService) email(ctx context.Context, tx *store.Tx, orgID uuid.UU
 	if s.q == nil {
 		return nil
 	}
-	return s.q.Enqueue(ctx, tx, queue.KindEmailSend, queue.EmailPayload{Template: template, To: to, OrgID: orgID, Data: data})
+	return enqueued(s.q.Enqueue(ctx, tx, queue.KindEmailSend, queue.EmailPayload{Template: template, To: to, OrgID: orgID, Data: data}))
 }
 
 // bothTimes renders one instant in two zones: "Mon 1 Jun 2026 14:00 Europe/Berlin (19:00 Asia/Ho_Chi_Minh)".

@@ -290,7 +290,7 @@ func (s *ApplicationService) onEnter(ctx context.Context, tx *store.Tx, orgID uu
 		}); err != nil {
 			return err
 		}
-		return s.q.Enqueue(ctx, tx, queue.KindEmailSend, queue.EmailPayload{
+		return enqueued(s.q.Enqueue(ctx, tx, queue.KindEmailSend, queue.EmailPayload{
 			Template: mail.TemplateBookingInvite, To: app.CandidateEmail, OrgID: orgID,
 			Data: map[string]any{
 				"CandidateName": app.CandidateName,
@@ -298,13 +298,13 @@ func (s *ApplicationService) onEnter(ctx context.Context, tx *store.Tx, orgID uu
 				"BookingURL":    s.baseURL + bookingPath + token,
 				"ExpiresAt":     expires.UTC().Format("2006-01-02 15:04 UTC"),
 			},
-		})
+		}))
 	case domain.StageAssessment:
 		// No attempt exists yet; the assessment surface creates one from the
 		// application and stage the payload names.
-		return s.q.Enqueue(ctx, tx, queue.KindAssessmentInvite, AssessmentInvitePayload{
+		return enqueued(s.q.Enqueue(ctx, tx, queue.KindAssessmentInvite, AssessmentInvitePayload{
 			ApplicationID: app.ID, StageID: to.ID, OrgID: orgID,
-		})
+		}))
 	}
 	return nil
 }

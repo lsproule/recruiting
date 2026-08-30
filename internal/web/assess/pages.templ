@@ -51,9 +51,7 @@ templ sessionPage(s service.AttemptSession, cfgJSON string, csrf string) {
 					</form>
 				</section>
 			case service.AttemptStarted:
-				<script id="assess-config" type="application/json">
-					@templ.Raw(jsonForScript(cfgJSON))
-				</script>
+				@configScript(configID, cfgJSON)
 				<div id="assess"></div>
 				<noscript><p class="assess-banner">This assessment needs JavaScript enabled.</p></noscript>
 			default:

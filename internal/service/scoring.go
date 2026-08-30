@@ -170,7 +170,7 @@ func (s *ScoringService) Finalize(ctx context.Context, p AttemptFinalizePayload,
 		if s.q == nil {
 			return nil
 		}
-		return s.q.Enqueue(ctx, tx, queue.KindSignalsCompute, SignalsComputePayload{AttemptID: p.AttemptID, OrgID: p.OrgID})
+		return enqueued(s.q.Enqueue(ctx, tx, queue.KindSignalsCompute, SignalsComputePayload{AttemptID: p.AttemptID, OrgID: p.OrgID}))
 	})
 	if err != nil {
 		return fmt.Errorf("attempt.finalize: %w", err)
@@ -203,8 +203,8 @@ func (s *ScoringService) collect(ctx context.Context, p AttemptFinalizePayload, 
 		if pending := pendingSubmissions(subs); len(pending) > 0 {
 			if wait < MaxFinalizeWaits && s.q != nil {
 				waiting = true
-				return s.q.EnqueueAt(ctx, tx, queue.KindAttemptFinalize,
-					AttemptFinalizeJob{AttemptFinalizePayload: p, Wait: wait + 1}, s.now().Add(FinalizeWaitDelay))
+				return enqueued(s.q.EnqueueAt(ctx, tx, queue.KindAttemptFinalize,
+					AttemptFinalizeJob{AttemptFinalizePayload: p, Wait: wait + 1}, s.now().Add(FinalizeWaitDelay)))
 			}
 			// The wait is spent. Give the submissions up here, under the
 			// attempt's lock, so the score and the error count describe what

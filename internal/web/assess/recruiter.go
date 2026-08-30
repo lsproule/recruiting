@@ -24,6 +24,11 @@ const Prefix = "/app/assessments"
 // the jobs stage editor links to it with ?job=&stage=.
 const AttachPath = Prefix + "/attach"
 
+// AttachStagePath is the attach screen for one stage of a job.
+func AttachStagePath(jobID, stageID uuid.UUID) string {
+	return AttachPath + "?job=" + jobID.String() + "&stage=" + stageID.String()
+}
+
 // RecruiterDeps is what MountRecruiter needs.
 type RecruiterDeps struct {
 	Assessments *service.AssessmentService

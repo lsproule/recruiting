@@ -78,6 +78,15 @@ func moveTargets(d service.ApplicationDetail) []domain.Stage {
 	return out
 }
 
+// userLabel names a user in a select: their name, or their email when they
+// have none.
+func userLabel(u service.OrgUser) string {
+	if u.Name != "" {
+		return u.Name
+	}
+	return u.Email
+}
+
 func stageLabel(s domain.Stage) string {
 	if s.Kind == domain.StageTerminal {
 		return s.Name + " (closes as " + string(s.Terminal) + ")"

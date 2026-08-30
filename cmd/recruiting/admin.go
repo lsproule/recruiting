@@ -21,7 +21,8 @@ type adminCommand struct {
 
 func adminCommands() map[string]adminCommand {
 	return map[string]adminCommand{
-		"create-org": {"create an org and its first admin", createOrg},
+		"create-org":    {"create an org and its first admin", createOrg},
+		"seed-problems": {"import the platform's built-in problem bank", seedProblems},
 	}
 }
 

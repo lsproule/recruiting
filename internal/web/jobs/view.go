@@ -22,6 +22,15 @@ type jobForm struct {
 
 func skillsText(j service.Job) string { return strings.Join(j.Skills, ", ") }
 
+// userLabel names a user in a select: their name, or their email when they
+// have none.
+func userLabel(u service.OrgUser) string {
+	if u.Name != "" {
+		return u.Name
+	}
+	return u.Email
+}
+
 // numberValue leaves an unset salary bound blank rather than showing a zero.
 func numberValue(n int) string {
 	if n == 0 {

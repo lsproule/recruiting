@@ -55,6 +55,7 @@ func (s *JobService) AddStage(ctx context.Context, p Principal, jobID uuid.UUID,
 		row, err := tx.Q.CreateStage(ctx, db.CreateStageParams{
 			OrgID: p.OrgID, JobID: jobID, Position: int32(len(existing) + 1),
 			Name: in.Name, Kind: string(in.Kind), TerminalStatus: terminalParam(in.Terminal), Unblind: in.Unblind,
+			DefaultVetterID: vetterParam(in.DefaultVetterID),
 		})
 		if err != nil {
 			return err
@@ -95,6 +96,7 @@ func (s *JobService) UpdateStage(ctx context.Context, p Principal, jobID, stageI
 		row, err := tx.Q.UpdateStage(ctx, db.UpdateStageParams{
 			ID: stageID, Name: in.Name, Kind: string(in.Kind),
 			TerminalStatus: terminalParam(in.Terminal), Unblind: in.Unblind,
+			DefaultVetterID: vetterParam(in.DefaultVetterID),
 		})
 		if err != nil {
 			return err
@@ -272,6 +274,9 @@ func cleanStage(in StageInput) (StageInput, error) {
 	if !in.Kind.Valid() {
 		return in, fmt.Errorf("%w: %q is not a stage kind", domain.ErrInvalidPipeline, in.Kind)
 	}
+	if in.Kind != domain.StageInterview {
+		in.DefaultVetterID = uuid.Nil
+	}
 	if in.Kind != domain.StageTerminal {
 		in.Terminal = ""
 		return in, nil
@@ -355,7 +360,14 @@ func toStage(row db.Stage) domain.Stage {
 	if row.TerminalStatus != nil {
 		st.Terminal = domain.ApplicationStatus(*row.TerminalStatus)
 	}
+	if row.DefaultVetterID.Valid {
+		st.DefaultVetterID = row.DefaultVetterID.UUID
+	}
 	return st
+}
+
+func vetterParam(id uuid.UUID) uuid.NullUUID {
+	return uuid.NullUUID{UUID: id, Valid: id != uuid.Nil}
 }
 
 func terminalParam(s domain.ApplicationStatus) *string {

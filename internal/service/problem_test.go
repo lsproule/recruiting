@@ -2,10 +2,7 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -232,68 +229,6 @@ func contains(list []string, v string) bool {
 		}
 	}
 	return false
-}
-
-// A saturated runner answers 503 with Retry-After instead of queueing, so the
-// caller waits it out rather than failing the import.
-func TestHTTPExecutorWaitsOutASaturatedRunner(t *testing.T) {
-	var calls atomic.Int64
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if calls.Add(1) <= 2 {
-			w.Header().Set("Retry-After", "0")
-			http.Error(w, "runner saturated; retry later", http.StatusServiceUnavailable)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(server.Response{ID: "abc", Status: server.StatusOK})
-	}))
-	defer srv.Close()
-
-	res, err := NewHTTPExecutor(srv.URL, "s").Execute(context.Background(), server.Request{ID: "abc"})
-	if err != nil {
-		t.Fatalf("execute: %v", err)
-	}
-	if res.Status != server.StatusOK {
-		t.Errorf("status = %q, want ok", res.Status)
-	}
-	if got := calls.Load(); got != 3 {
-		t.Errorf("runner called %d times, want 2 refusals then the answer", got)
-	}
-}
-
-func TestHTTPExecutorGivesUpOnAPermanentlySaturatedRunner(t *testing.T) {
-	var calls atomic.Int64
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls.Add(1)
-		w.Header().Set("Retry-After", "0")
-		http.Error(w, "runner saturated; retry later", http.StatusServiceUnavailable)
-	}))
-	defer srv.Close()
-
-	_, err := NewHTTPExecutor(srv.URL, "s").Execute(context.Background(), server.Request{ID: "abc"})
-	if err == nil || !strings.Contains(err.Error(), "saturated") {
-		t.Fatalf("err = %v, want the saturation reported", err)
-	}
-	if got := calls.Load(); got != executorRetryLimit {
-		t.Errorf("runner called %d times, want the %d-attempt limit", got, executorRetryLimit)
-	}
-}
-
-func TestHTTPExecutorReadsRetryAfterInBothForms(t *testing.T) {
-	for _, tc := range []struct {
-		header string
-		want   time.Duration
-	}{
-		{"", executorRetryDelay},
-		{"2", 2 * time.Second},
-		{"0", time.Millisecond},
-		{"nonsense", executorRetryDelay},
-		{time.Now().Add(-time.Hour).UTC().Format(http.TimeFormat), time.Millisecond},
-	} {
-		if got := retryAfter(tc.header); got != tc.want {
-			t.Errorf("retryAfter(%q) = %v, want %v", tc.header, got, tc.want)
-		}
-	}
 }
 
 func TestProblemServiceConcurrencyDefaultsToTheRunnerDefault(t *testing.T) {

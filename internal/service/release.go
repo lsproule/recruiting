@@ -19,8 +19,14 @@ const clientJobPath = "/client/jobs/"
 
 // Enqueuer is the slice of the queue a release needs; queue.Client satisfies it.
 type Enqueuer interface {
-	Enqueue(ctx context.Context, tx pgx.Tx, kind string, payload any) error
+	Enqueue(ctx context.Context, tx pgx.Tx, kind string, payload any) (int64, error)
+	EnqueueAt(ctx context.Context, tx pgx.Tx, kind string, payload any, runAt time.Time) (int64, error)
+	CancelTx(ctx context.Context, tx pgx.Tx, id int64) error
 }
+
+// enqueued drops the job id from an Enqueue result for callers that only
+// need to know whether the job was queued.
+func enqueued(_ int64, err error) error { return err }
 
 // ReleaseService is the recruiter's release switch. A release sets
 // released_at, records the event, and queues the notice to the client
@@ -105,7 +111,7 @@ func (s *ReleaseService) notify(ctx context.Context, tx *store.Tx, orgID, compan
 		return err
 	}
 	for _, u := range users {
-		err := s.q.Enqueue(ctx, tx, queue.KindEmailSend, queue.EmailPayload{
+		_, err := s.q.Enqueue(ctx, tx, queue.KindEmailSend, queue.EmailPayload{
 			Template: mail.TemplateClientReleaseNotice, To: u.Email, OrgID: orgID,
 			Data: map[string]any{
 				"ContactName":    u.Name,

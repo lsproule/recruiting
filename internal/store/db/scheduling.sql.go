@@ -96,7 +96,7 @@ func (q *Queries) CreateAvailabilityRule(ctx context.Context, arg CreateAvailabi
 
 const createInterviewSlot = `-- name: CreateInterviewSlot :one
 insert into interview_slot (org_id, vetter_id, application_id, stage_id, candidate_timezone, starts_at, ends_at)
-values ($1, $2, $3, $4, $5, $6, $7) returning id, org_id, vetter_id, application_id, stage_id, candidate_timezone, starts_at, ends_at, status, created_at, updated_at
+values ($1, $2, $3, $4, $5, $6, $7) returning id, org_id, vetter_id, application_id, stage_id, candidate_timezone, starts_at, ends_at, status, created_at, updated_at, remind_job_ids
 `
 
 type CreateInterviewSlotParams struct {
@@ -132,6 +132,7 @@ func (q *Queries) CreateInterviewSlot(ctx context.Context, arg CreateInterviewSl
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RemindJobIds,
 	)
 	return i, err
 }
@@ -163,7 +164,7 @@ func (q *Queries) DeleteAvailabilityRules(ctx context.Context, vetterID uuid.UUI
 }
 
 const getBookedSlotForApplication = `-- name: GetBookedSlotForApplication :one
-select id, org_id, vetter_id, application_id, stage_id, candidate_timezone, starts_at, ends_at, status, created_at, updated_at from interview_slot where application_id = $1 and status = 'booked' order by starts_at desc limit 1
+select id, org_id, vetter_id, application_id, stage_id, candidate_timezone, starts_at, ends_at, status, created_at, updated_at, remind_job_ids from interview_slot where application_id = $1 and status = 'booked' order by starts_at desc limit 1
 `
 
 func (q *Queries) GetBookedSlotForApplication(ctx context.Context, applicationID uuid.NullUUID) (InterviewSlot, error) {
@@ -181,12 +182,13 @@ func (q *Queries) GetBookedSlotForApplication(ctx context.Context, applicationID
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RemindJobIds,
 	)
 	return i, err
 }
 
 const getInterviewSlot = `-- name: GetInterviewSlot :one
-select id, org_id, vetter_id, application_id, stage_id, candidate_timezone, starts_at, ends_at, status, created_at, updated_at from interview_slot where id = $1
+select id, org_id, vetter_id, application_id, stage_id, candidate_timezone, starts_at, ends_at, status, created_at, updated_at, remind_job_ids from interview_slot where id = $1
 `
 
 func (q *Queries) GetInterviewSlot(ctx context.Context, id uuid.UUID) (InterviewSlot, error) {
@@ -204,6 +206,7 @@ func (q *Queries) GetInterviewSlot(ctx context.Context, id uuid.UUID) (Interview
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RemindJobIds,
 	)
 	return i, err
 }
@@ -283,7 +286,7 @@ func (q *Queries) ListAvailabilityRules(ctx context.Context, vetterID uuid.UUID)
 }
 
 const listInterviewSlots = `-- name: ListInterviewSlots :many
-select id, org_id, vetter_id, application_id, stage_id, candidate_timezone, starts_at, ends_at, status, created_at, updated_at from interview_slot where vetter_id = $1 and status <> 'cancelled' and ends_at > $2 and starts_at < $3
+select id, org_id, vetter_id, application_id, stage_id, candidate_timezone, starts_at, ends_at, status, created_at, updated_at, remind_job_ids from interview_slot where vetter_id = $1 and status <> 'cancelled' and ends_at > $2 and starts_at < $3
 `
 
 type ListInterviewSlotsParams struct {
@@ -313,6 +316,7 @@ func (q *Queries) ListInterviewSlots(ctx context.Context, arg ListInterviewSlots
 			&i.Status,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.RemindJobIds,
 		); err != nil {
 			return nil, err
 		}
@@ -325,7 +329,7 @@ func (q *Queries) ListInterviewSlots(ctx context.Context, arg ListInterviewSlots
 }
 
 const listVetterSlots = `-- name: ListVetterSlots :many
-select s.id, s.org_id, s.vetter_id, s.application_id, s.stage_id, s.candidate_timezone, s.starts_at, s.ends_at, s.status, s.created_at, s.updated_at, c.name as candidate_name, c.email as candidate_email, j.title as job_title
+select s.id, s.org_id, s.vetter_id, s.application_id, s.stage_id, s.candidate_timezone, s.starts_at, s.ends_at, s.status, s.created_at, s.updated_at, s.remind_job_ids, c.name as candidate_name, c.email as candidate_email, j.title as job_title
 from interview_slot s
 join application a on a.id = s.application_id
 join candidate c on c.id = a.candidate_id
@@ -351,6 +355,7 @@ type ListVetterSlotsRow struct {
 	Status            string
 	CreatedAt         pgtype.Timestamptz
 	UpdatedAt         pgtype.Timestamptz
+	RemindJobIds      []int64
 	CandidateName     string
 	CandidateEmail    string
 	JobTitle          string
@@ -378,6 +383,7 @@ func (q *Queries) ListVetterSlots(ctx context.Context, arg ListVetterSlotsParams
 			&i.Status,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.RemindJobIds,
 			&i.CandidateName,
 			&i.CandidateEmail,
 			&i.JobTitle,
@@ -425,7 +431,7 @@ func (q *Queries) SetApplicationVetter(ctx context.Context, arg SetApplicationVe
 
 const setInterviewSlotOutcome = `-- name: SetInterviewSlotOutcome :one
 update interview_slot set status = $3, updated_at = now()
-where id = $1 and vetter_id = $2 and status in ('booked', 'completed', 'no_show') returning id, org_id, vetter_id, application_id, stage_id, candidate_timezone, starts_at, ends_at, status, created_at, updated_at
+where id = $1 and vetter_id = $2 and status in ('booked', 'completed', 'no_show') returning id, org_id, vetter_id, application_id, stage_id, candidate_timezone, starts_at, ends_at, status, created_at, updated_at, remind_job_ids
 `
 
 type SetInterviewSlotOutcomeParams struct {
@@ -450,8 +456,23 @@ func (q *Queries) SetInterviewSlotOutcome(ctx context.Context, arg SetInterviewS
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RemindJobIds,
 	)
 	return i, err
+}
+
+const setInterviewSlotRemindJobs = `-- name: SetInterviewSlotRemindJobs :exec
+update interview_slot set remind_job_ids = $2, updated_at = now() where id = $1
+`
+
+type SetInterviewSlotRemindJobsParams struct {
+	ID           uuid.UUID
+	RemindJobIds []int64
+}
+
+func (q *Queries) SetInterviewSlotRemindJobs(ctx context.Context, arg SetInterviewSlotRemindJobsParams) error {
+	_, err := q.db.Exec(ctx, setInterviewSlotRemindJobs, arg.ID, arg.RemindJobIds)
+	return err
 }
 
 const setOrgUserTimezone = `-- name: SetOrgUserTimezone :exec
@@ -470,7 +491,7 @@ func (q *Queries) SetOrgUserTimezone(ctx context.Context, arg SetOrgUserTimezone
 }
 
 const updateInterviewSlotStatus = `-- name: UpdateInterviewSlotStatus :one
-update interview_slot set status = $2, updated_at = now() where id = $1 returning id, org_id, vetter_id, application_id, stage_id, candidate_timezone, starts_at, ends_at, status, created_at, updated_at
+update interview_slot set status = $2, updated_at = now() where id = $1 returning id, org_id, vetter_id, application_id, stage_id, candidate_timezone, starts_at, ends_at, status, created_at, updated_at, remind_job_ids
 `
 
 type UpdateInterviewSlotStatusParams struct {
@@ -493,6 +514,7 @@ func (q *Queries) UpdateInterviewSlotStatus(ctx context.Context, arg UpdateInter
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RemindJobIds,
 	)
 	return i, err
 }

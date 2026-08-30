@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"strings"
 
@@ -133,9 +132,15 @@ type attemptInput struct {
 type attemptStatusOutput struct{ Body AttemptStatus }
 
 func (h attemptHandlers) get(ctx context.Context, in *attemptInput) (*attemptStatusOutput, error) {
-	s, err := h.d.Attempts.Session(ctx, principal(ctx))
+	p := principal(ctx)
+	// The sealed cookie names the attempt; the path must agree, or the
+	// caller is asking about someone else's sitting.
+	if p.SubjectID != in.ID {
+		return nil, problemDetail(service.ErrNotFound)
+	}
+	s, err := h.d.Attempts.Session(ctx, p)
 	if err != nil {
-		return nil, attemptError(err)
+		return nil, problemDetail(err)
 	}
 	out := AttemptStatus{ID: s.Attempt.ID, Status: s.Attempt.Status, LastSeq: s.Attempt.LastEventSeq, RemainingMs: s.Remaining.Milliseconds()}
 	if !s.Attempt.ExpiresAt.IsZero() {
@@ -167,7 +172,7 @@ func (h attemptHandlers) events(ctx context.Context, in *eventsInput) (*eventsOu
 	}
 	last, err := h.d.Attempts.RecordEvents(ctx, principal(ctx), in.ID, in.Body.Events)
 	if err != nil {
-		return nil, attemptError(err)
+		return nil, problemDetail(err)
 	}
 	out := &eventsOutput{}
 	out.Body.LastSeq = last
@@ -188,7 +193,7 @@ type sourceInput struct {
 
 func (h attemptHandlers) saveSource(ctx context.Context, in *sourceInput) (*struct{}, error) {
 	if err := h.d.Attempts.SaveSource(ctx, principal(ctx), in.ID, in.ProblemID, in.Body.Language, in.Body.Source); err != nil {
-		return nil, attemptError(err)
+		return nil, problemDetail(err)
 	}
 	return nil, nil
 }
@@ -225,7 +230,7 @@ func (h attemptHandlers) submit(ctx context.Context, in *sourceInput) (*queuedOu
 
 func queued(sub service.Submission, err error) (*queuedOutput, error) {
 	if err != nil {
-		return nil, attemptError(err)
+		return nil, problemDetail(err)
 	}
 	out := &queuedOutput{}
 	out.Body.SubmissionID, out.Body.Status = sub.ID, sub.Status
@@ -240,7 +245,7 @@ type submissionInput struct {
 func (h attemptHandlers) submission(ctx context.Context, in *submissionInput) (*submissionOutput, error) {
 	sub, err := h.d.Attempts.Submission(ctx, principal(ctx), in.ID, in.SubmissionID)
 	if err != nil {
-		return nil, attemptError(err)
+		return nil, problemDetail(err)
 	}
 	return &submissionOutput{Body: SubmissionView{ID: sub.ID, Kind: sub.Kind, Status: sub.Status, Result: sub.CandidateResult, Score: sub.Score}}, nil
 }
@@ -254,32 +259,9 @@ type finishOutput struct {
 func (h attemptHandlers) finish(ctx context.Context, in *attemptInput) (*finishOutput, error) {
 	att, err := h.d.Attempts.Finish(ctx, principal(ctx), in.ID)
 	if err != nil {
-		return nil, attemptError(err)
+		return nil, problemDetail(err)
 	}
 	out := &finishOutput{}
 	out.Body.Status = att.Status
 	return out, nil
-}
-
-// attemptError maps service errors to statuses. Expiry of either window is
-// 410: the page is told to stop, and the island shows the closing message.
-func attemptError(err error) error {
-	msg := strings.TrimPrefix(err.Error(), "service: ")
-	switch {
-	case errors.Is(err, service.ErrAttemptExpired), errors.Is(err, service.ErrInviteExpired):
-		return huma.NewError(http.StatusGone, msg)
-	case errors.Is(err, service.ErrForbidden):
-		return huma.Error403Forbidden(msg)
-	case errors.Is(err, service.ErrNotFound), errors.Is(err, service.ErrProblemNotInSet):
-		return huma.Error404NotFound(msg)
-	case errors.Is(err, service.ErrEventSeq):
-		return huma.Error409Conflict(msg)
-	case errors.Is(err, service.ErrSubmissionPending):
-		return huma.NewError(http.StatusTooManyRequests, msg)
-	case errors.Is(err, service.ErrAttemptNotStarted), errors.Is(err, service.ErrAttemptClosed),
-		errors.Is(err, service.ErrLanguageNotAllowed), errors.Is(err, service.ErrEventKind),
-		errors.Is(err, service.ErrEventInvalid), errors.Is(err, service.ErrSourceTooLarge):
-		return huma.Error422UnprocessableEntity(msg)
-	}
-	return huma.Error500InternalServerError("something went wrong")
 }

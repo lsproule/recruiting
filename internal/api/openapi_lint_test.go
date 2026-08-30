@@ -20,7 +20,9 @@ import (
 // TestOpenAPIDocumentIsValid fetches the served document and validates it
 // against the OpenAPI specification schema.
 func TestOpenAPIDocumentIsValid(t *testing.T) {
-	srv := httptest.NewServer(api.NewRouter().Mux)
+	r := api.NewRouter()
+	api.MountAll(r, api.Deps{})
+	srv := httptest.NewServer(r.Mux)
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/v1/openapi.json")

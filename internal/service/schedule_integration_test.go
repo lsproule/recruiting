@@ -330,3 +330,51 @@ func TestReminderSkipsSlotAtAnotherTimeAndSetAvailabilityMovesUserTimezone(t *te
 		t.Fatalf("assigning a non-vetter: %v", err)
 	}
 }
+
+// liveReminders counts the org's reminder jobs river would still work.
+func (f *scheduleFixture) liveReminders(t *testing.T) int {
+	t.Helper()
+	var n int
+	err := f.sys.QueryRow(context.Background(),
+		`select count(*) from river_job where kind = $1 and state in ('available', 'scheduled', 'retryable') and args->>'payload' like '%' || $2 || '%'`,
+		queue.KindInterviewRemind, f.orgID.String()).Scan(&n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func TestCancelAndRescheduleCancelReminderJobs(t *testing.T) {
+	f := newScheduleFixture(t)
+	ctx := context.Background()
+	start := time.Date(2026, time.June, 2, 9, 0, 0, 0, time.UTC)
+	if _, err := f.sched.Book(ctx, f.candidate(), "tok", start, "UTC"); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.liveReminders(t); n != 2 {
+		t.Fatalf("live reminders after book = %d, want 2", n)
+	}
+	// Rescheduling cancels the old slot's reminders and queues the new slot's.
+	if _, err := f.sched.Book(ctx, f.candidate(), "tok", start.Add(time.Hour), "UTC"); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.liveReminders(t); n != 2 {
+		t.Fatalf("live reminders after reschedule = %d, want 2", n)
+	}
+	if n := f.jobs(t, queue.KindInterviewRemind); n != 4 {
+		t.Fatalf("reminder jobs total = %d, want 4", n)
+	}
+	if err := f.sched.Cancel(ctx, f.candidate(), "tok"); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.liveReminders(t); n != 0 {
+		t.Fatalf("live reminders after cancel = %d, want 0", n)
+	}
+	var ids []int64
+	if err := f.sys.QueryRow(ctx, `select remind_job_ids from interview_slot where org_id = $1 and status = 'cancelled' order by created_at desc limit 1`, f.orgID).Scan(&ids); err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("cancelled slot still holds job ids %v", ids)
+	}
+}

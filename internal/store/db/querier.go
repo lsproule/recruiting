@@ -26,6 +26,7 @@ type Querier interface {
 	CountAttemptsForAssessment(ctx context.Context, assessmentID uuid.UUID) (int64, error)
 	CountCandidateApplications(ctx context.Context, arg CountCandidateApplicationsParams) (int64, error)
 	CountPendingSubmissions(ctx context.Context, arg CountPendingSubmissionsParams) (int64, error)
+	CreateAPIToken(ctx context.Context, arg CreateAPITokenParams) (ApiToken, error)
 	CreateApplication(ctx context.Context, arg CreateApplicationParams) (Application, error)
 	CreateApplicationEvent(ctx context.Context, arg CreateApplicationEventParams) (ApplicationEvent, error)
 	CreateAssessment(ctx context.Context, arg CreateAssessmentParams) (Assessment, error)
@@ -113,6 +114,7 @@ type Querier interface {
 	GetProblemByTitle(ctx context.Context, arg GetProblemByTitleParams) (Problem, error)
 	GetReleasedApplication(ctx context.Context, id uuid.UUID) (GetReleasedApplicationRow, error)
 	GetResume(ctx context.Context, id uuid.UUID) (Resume, error)
+	GetReviewForAttempt(ctx context.Context, attemptID uuid.UUID) (GetReviewForAttemptRow, error)
 	GetScorecard(ctx context.Context, id uuid.UUID) (Scorecard, error)
 	GetScorecardForVetter(ctx context.Context, arg GetScorecardForVetterParams) (Scorecard, error)
 	GetScorecardRubric(ctx context.Context, id uuid.UUID) (ScorecardRubric, error)
@@ -124,12 +126,19 @@ type Querier interface {
 	HasScorecardForStage(ctx context.Context, arg HasScorecardForStageParams) (bool, error)
 	HasVerdictForStage(ctx context.Context, arg HasVerdictForStageParams) (bool, error)
 	LatestScorecardForCandidate(ctx context.Context, candidateID uuid.UUID) (LatestScorecardForCandidateRow, error)
+	ListAPITokens(ctx context.Context, orgID uuid.UUID) ([]ListAPITokensRow, error)
 	ListApplicationEvents(ctx context.Context, applicationID uuid.UUID) ([]ApplicationEvent, error)
 	ListApplicationsByJob(ctx context.Context, jobID uuid.UUID) ([]Application, error)
 	ListAssessmentProblems(ctx context.Context, assessmentID uuid.UUID) ([]Problem, error)
 	ListAssessments(ctx context.Context, orgID uuid.UUID) ([]Assessment, error)
 	ListAttemptEvents(ctx context.Context, attemptID uuid.UUID) ([]AttemptEvent, error)
+	// One page of the recording, in seq order: the replay viewer pages through
+	// the stream rather than loading a whole sitting at once.
+	ListAttemptEventsAfter(ctx context.Context, arg ListAttemptEventsAfterParams) ([]AttemptEvent, error)
 	ListAttemptSources(ctx context.Context, attemptID uuid.UUID) ([]AttemptSource, error)
+	// The score and verdict of every attempt on an application, for the
+	// recruiter's summary of it.
+	ListAttemptSummariesForApplication(ctx context.Context, applicationID uuid.UUID) ([]ListAttemptSummariesForApplicationRow, error)
 	ListAvailabilityExceptions(ctx context.Context, arg ListAvailabilityExceptionsParams) ([]AvailabilityException, error)
 	ListAvailabilityRules(ctx context.Context, vetterID uuid.UUID) ([]AvailabilityRule, error)
 	ListCandidateApplications(ctx context.Context, candidateID uuid.UUID) ([]ListCandidateApplicationsRow, error)
@@ -150,6 +159,9 @@ type Querier interface {
 	ListClientUsersByCompany(ctx context.Context, clientCompanyID uuid.UUID) ([]ClientUser, error)
 	ListDueAttemptOrgs(ctx context.Context, at pgtype.Timestamptz) ([]uuid.UUID, error)
 	ListDueAttempts(ctx context.Context, expiresAt pgtype.Timestamptz) ([]Attempt, error)
+	// The problems the recording holds an edit for. The rest never changed, so
+	// the text still synced for them is the text they started from.
+	ListEditedProblems(ctx context.Context, attemptID uuid.UUID) ([]uuid.NullUUID, error)
 	ListIntegritySignals(ctx context.Context, attemptID uuid.UUID) ([]IntegritySignal, error)
 	ListInterviewSlots(ctx context.Context, arg ListInterviewSlotsParams) ([]InterviewSlot, error)
 	// One row per application on a job, with what a board card or list row shows.
@@ -161,8 +173,9 @@ type Querier interface {
 	ListOrgUserRolesForOrg(ctx context.Context, orgID uuid.UUID) ([]ListOrgUserRolesForOrgRow, error)
 	ListOrgUsers(ctx context.Context, orgID uuid.UUID) ([]OrgUser, error)
 	ListOrgUsersWithRole(ctx context.Context, arg ListOrgUsersWithRoleParams) ([]OrgUser, error)
-	// The latest submit of the problem by every other attempt RLS lets the
-	// caller see, which is every attempt of the org.
+	// The latest submit of the problem, in the language, by each of the 200
+	// most recent other attempts RLS lets the caller see (every attempt of
+	// the org).
 	ListOtherProblemSubmits(ctx context.Context, arg ListOtherProblemSubmitsParams) ([]ListOtherProblemSubmitsRow, error)
 	ListPipelineTemplateStages(ctx context.Context, templateID uuid.UUID) ([]PipelineTemplateStage, error)
 	ListProblemReferences(ctx context.Context, problemID uuid.UUID) ([]ProblemReference, error)
@@ -179,6 +192,10 @@ type Querier interface {
 	// The interviews waiting on the signed-in vetter, with their own card if they
 	// have already filed one.
 	ListVetterAssignments(ctx context.Context, vetterID uuid.UUID) ([]ListVetterAssignmentsRow, error)
+	// The closed attempts waiting on the signed-in vetter, with their verdict if
+	// one is filed. The application's own vetter decides; until one is set the
+	// stage's default stands in, the same rule the scorecard queue uses.
+	ListVetterAttemptReviews(ctx context.Context, vetterID uuid.NullUUID) ([]ListVetterAttemptReviewsRow, error)
 	// A vetter's calendar: booked and finished interviews with who they are with.
 	ListVetterSlots(ctx context.Context, arg ListVetterSlotsParams) ([]ListVetterSlotsRow, error)
 	LookupAPIToken(ctx context.Context, tokenHash string) (ApiToken, error)
@@ -198,6 +215,11 @@ type Querier interface {
 	// A removal stands until a recruiter asks for the person back; the automatic
 	// sources refresh the aggregates of a removed entry without reviving it.
 	RestoreTalentPoolEntry(ctx context.Context, id uuid.UUID) error
+	// Withdraws the entry a passing assessment review filed once that verdict is
+	// amended down. Only an entry the review is the latest source of goes; one a
+	// recruiter flagged, or whose application they marked high quality, stays.
+	RetractTalentPoolEntryFromReview(ctx context.Context, arg RetractTalentPoolEntryFromReviewParams) (int64, error)
+	RevokeAPIToken(ctx context.Context, id uuid.UUID) (int64, error)
 	RevokeBookLinks(ctx context.Context, subjectID uuid.UUID) error
 	RevokeMagicLink(ctx context.Context, id uuid.UUID) error
 	// Only a closed attempt is scored, and only once: concurrent deliveries of
@@ -210,9 +232,11 @@ type Querier interface {
 	SetApplicationReleased(ctx context.Context, arg SetApplicationReleasedParams) (Application, error)
 	SetApplicationVetter(ctx context.Context, arg SetApplicationVetterParams) (Application, error)
 	SetAttemptLastEventSeq(ctx context.Context, arg SetAttemptLastEventSeqParams) error
+	SetAttemptReviewed(ctx context.Context, id uuid.UUID) error
 	SetAttemptRiskScore(ctx context.Context, arg SetAttemptRiskScoreParams) error
 	// Only the slot's own vetter records how it went.
 	SetInterviewSlotOutcome(ctx context.Context, arg SetInterviewSlotOutcomeParams) (InterviewSlot, error)
+	SetInterviewSlotRemindJobs(ctx context.Context, arg SetInterviewSlotRemindJobsParams) error
 	SetOrgUserTimezone(ctx context.Context, arg SetOrgUserTimezoneParams) error
 	SetStageAssessment(ctx context.Context, arg SetStageAssessmentParams) (int64, error)
 	SetStagePosition(ctx context.Context, arg SetStagePositionParams) error
@@ -241,6 +265,9 @@ type Querier interface {
 	UpsertEmailLogForJob(ctx context.Context, arg UpsertEmailLogForJobParams) (EmailLog, error)
 	UpsertOrgSetting(ctx context.Context, arg UpsertOrgSettingParams) error
 	UpsertOrgUserCredential(ctx context.Context, arg UpsertOrgUserCredentialParams) error
+	// One review per attempt. A second reviewer matches no row rather than
+	// overwriting the verdict the first one filed.
+	UpsertReviewByAuthor(ctx context.Context, arg UpsertReviewByAuthorParams) (Review, error)
 	// One card per interviewer per stage: a card filed twice at once updates the
 	// first rather than failing on the key. The guard restates the authorship the
 	// conflict target already carries, and the snapshot of what the interviewer

@@ -98,6 +98,14 @@ type ProblemFilter struct {
 	Query      string
 }
 
+// Executor runs one execution request against the sandboxed runner. The
+// import path needs the runner synchronously — a reference solution is proof
+// the problem is solvable — so it calls this rather than the queue.
+// internal/runner/client.Client is the wire implementation.
+type Executor interface {
+	Execute(ctx context.Context, req server.Request) (server.Response, error)
+}
+
 // ProblemService owns the problem bank: what is in it, the JSON import that
 // fills it, and the platform seed every org reads.
 type ProblemService struct {

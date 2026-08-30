@@ -14,6 +14,7 @@ require (
 	github.com/pb33f/libopenapi v0.38.6
 	github.com/pb33f/libopenapi-validator v0.14.0
 	github.com/pressly/goose/v3 v3.27.3
+	github.com/prometheus/client_golang v1.21.1
 	github.com/riverqueue/river v0.46.0
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.46.0
 	github.com/riverqueue/river/rivertype v0.46.0
@@ -24,6 +25,7 @@ require (
 require (
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/basgys/goxml2json v1.1.1-0.20231018121955-e66ee54ceaad // indirect
+	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
@@ -38,9 +40,13 @@ require (
 	github.com/mfridman/interpolate v0.0.2 // indirect
 	github.com/minio/crc64nvme v1.1.1 // indirect
 	github.com/minio/md5-simd v1.1.2 // indirect
+	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/pb33f/jsonpath v0.8.2 // indirect
 	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
+	github.com/prometheus/client_model v0.6.1 // indirect
+	github.com/prometheus/common v0.62.0 // indirect
+	github.com/prometheus/procfs v0.21.1 // indirect
 	github.com/riverqueue/river/riverdriver v0.46.0 // indirect
 	github.com/riverqueue/river/rivershared v0.46.0 // indirect
 	github.com/rs/xid v1.6.0 // indirect
@@ -58,5 +64,6 @@ require (
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
+	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/ini.v1 v1.67.3 // indirect
 )

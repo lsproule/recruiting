@@ -658,15 +658,16 @@ func (q *Queries) UpdateJob(ctx context.Context, arg UpdateJobParams) (Job, erro
 }
 
 const updateStage = `-- name: UpdateStage :one
-update stage set name = $2, kind = $3, terminal_status = $4, unblind = $5 where id = $1 returning id, org_id, job_id, position, name, kind, unblind, scorecard_rubric_id, default_vetter_id, assessment_id, terminal_status
+update stage set name = $2, kind = $3, terminal_status = $4, unblind = $5, default_vetter_id = $6 where id = $1 returning id, org_id, job_id, position, name, kind, unblind, scorecard_rubric_id, default_vetter_id, assessment_id, terminal_status
 `
 
 type UpdateStageParams struct {
-	ID             uuid.UUID
-	Name           string
-	Kind           string
-	TerminalStatus *string
-	Unblind        bool
+	ID              uuid.UUID
+	Name            string
+	Kind            string
+	TerminalStatus  *string
+	Unblind         bool
+	DefaultVetterID uuid.NullUUID
 }
 
 func (q *Queries) UpdateStage(ctx context.Context, arg UpdateStageParams) (Stage, error) {
@@ -676,6 +677,7 @@ func (q *Queries) UpdateStage(ctx context.Context, arg UpdateStageParams) (Stage
 		arg.Kind,
 		arg.TerminalStatus,
 		arg.Unblind,
+		arg.DefaultVetterID,
 	)
 	var i Stage
 	err := row.Scan(

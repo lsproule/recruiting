@@ -54,3 +54,6 @@ update application set vetter_id = $2, updated_at = now() where id = $1 returnin
 
 -- name: SetOrgUserTimezone :exec
 update org_user set timezone = $3 where id = $1 and org_id = $2;
+
+-- name: SetInterviewSlotRemindJobs :exec
+update interview_slot set remind_job_ids = $2, updated_at = now() where id = $1;

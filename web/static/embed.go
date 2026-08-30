@@ -11,7 +11,7 @@ import (
 	"io/fs"
 )
 
-//go:embed *.js assess/*.js
+//go:embed *.js assess/*.js replay/*.js
 var FS embed.FS
 
 // Asset is one embedded file, with the validator computed from its bytes.
@@ -23,7 +23,7 @@ type Asset struct {
 }
 
 // Assets is the closed set of servable files, keyed by path relative to this
-// directory ("htmx.min.js", "assess/assess.js"). Anything not in it does not
+// directory ("htmx.min.js", "assess/assess.js", "replay/replay.js"). Anything not in it does not
 // exist as far as the server is concerned.
 var Assets = map[string]Asset{}
 

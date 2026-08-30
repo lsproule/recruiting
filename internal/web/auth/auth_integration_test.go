@@ -330,3 +330,11 @@ func lockSchema(t *testing.T, ownerURL string) {
 	}
 	t.Cleanup(func() { _ = conn.Close(context.Background()) })
 }
+
+func TestBareLoginRedirectsToTheOrgSurface(t *testing.T) {
+	f := newWebFixture(t)
+	res, _ := f.get(t, "/login")
+	if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != "/app/login" {
+		t.Fatalf("/login = %d %q, want 303 to /app/login", res.StatusCode, res.Header.Get("Location"))
+	}
+}

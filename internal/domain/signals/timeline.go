@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf16"
 
 	"github.com/google/uuid"
 )
@@ -23,13 +24,26 @@ type Event struct {
 	Payload   json.RawMessage `json:"payload"`
 }
 
+// MaxClientSkew is how far the client clock may lead or trail the server
+// clock; a client time further out is pulled back to that bound, so a
+// wrong clock cannot place a paste hours before its submit.
+const MaxClientSkew = 5 * time.Minute
+
 // At is when the event happened: the client's clock, which orders edits at
-// the resolution typing needs, or the server's when the client sent none.
+// the resolution typing needs, clamped to the server's, or the server's
+// when the client sent none.
 func (e Event) At() time.Time {
-	if e.ClientTs != nil {
-		return *e.ClientTs
+	if e.ClientTs == nil {
+		return e.ServerTs
 	}
-	return e.ServerTs
+	switch at := *e.ClientTs; {
+	case at.Before(e.ServerTs.Add(-MaxClientSkew)):
+		return e.ServerTs.Add(-MaxClientSkew)
+	case at.After(e.ServerTs.Add(MaxClientSkew)):
+		return e.ServerTs.Add(MaxClientSkew)
+	default:
+		return at
+	}
 }
 
 // PasteMatchWindow is how close to a paste event an edit inserting exactly
@@ -37,7 +51,8 @@ func (e Event) At() time.Time {
 // typing. The editor emits both for one paste, the changeset carrying the text.
 const PasteMatchWindow = 2 * time.Second
 
-// Edit is one changeset applied to a problem's editor.
+// Edit is one changeset applied to a problem's editor. Counts are UTF-16
+// units, as CodeMirror and the paste event measure text.
 type Edit struct {
 	Seq       int64
 	At        time.Time
@@ -46,7 +61,7 @@ type Edit struct {
 	FromPaste bool
 }
 
-// Paste is one paste event. Internal pastes moved text the candidate copied
+// Paste is one paste event; Len is in UTF-16 units. Internal pastes moved text the candidate copied
 // from the page's own editor and are not evidence of anything.
 type Paste struct {
 	Seq      int64
@@ -66,11 +81,14 @@ type Blur struct {
 // Timeline is one problem's history, built once from the stream.
 type Timeline struct {
 	ProblemID uuid.UUID
-	First     time.Time // first event on the problem
-	Last      time.Time
-	Edits     []Edit
-	Pastes    []Paste
-	Blurs     []Blur
+	First     time.Time // first event on the problem, client clock
+	// FirstServer is the same on the server clock, for durations measured
+	// against other server times.
+	FirstServer time.Time
+	Last        time.Time
+	Edits       []Edit
+	Pastes      []Paste
+	Blurs       []Blur
 	// Source is the editor text replayed from the changesets, starting from
 	// an empty document. Reconstructed is false once a changeset did not fit
 	// the document it was applied to; Source is then unreliable and only the
@@ -80,14 +98,16 @@ type Timeline struct {
 }
 
 // Build folds the stream into one timeline per problem. Events are taken in
-// seq order regardless of the order given.
-func Build(events []Event) map[uuid.UUID]*Timeline {
+// seq order regardless of the order given. initial is each problem's editor
+// text before the first event (starter text, if any); a stream that starts
+// with a retain over it reconstructs only from that.
+func Build(events []Event, initial map[uuid.UUID]string) map[uuid.UUID]*Timeline {
 	sorted := make([]Event, len(events))
 	copy(sorted, events)
 	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Seq < sorted[j].Seq })
 
 	out := map[uuid.UUID]*Timeline{}
-	docs := map[uuid.UUID]*strings.Builder{}
+	docs := map[uuid.UUID][]uint16{}
 	open := map[uuid.UUID]int{} // index of the unclosed blur
 	for _, ev := range sorted {
 		if ev.ProblemID == nil {
@@ -96,9 +116,9 @@ func Build(events []Event) map[uuid.UUID]*Timeline {
 		id := *ev.ProblemID
 		tl := out[id]
 		if tl == nil {
-			tl = &Timeline{ProblemID: id, First: ev.At(), Reconstructed: true}
+			tl = &Timeline{ProblemID: id, First: ev.At(), FirstServer: ev.ServerTs, Reconstructed: true}
 			out[id] = tl
-			docs[id] = &strings.Builder{}
+			docs[id] = utf16.Encode([]rune(initial[id]))
 			open[id] = -1
 		}
 		at := ev.At()
@@ -110,10 +130,9 @@ func Build(events []Event) map[uuid.UUID]*Timeline {
 				tl.Reconstructed = false
 				continue
 			}
-			ins, del, next, applied := cs.apply(docs[id].String())
+			ins, del, next, applied := cs.apply(docs[id])
 			if applied {
-				docs[id].Reset()
-				docs[id].WriteString(next)
+				docs[id] = next
 			} else {
 				tl.Reconstructed = false
 			}
@@ -124,6 +143,7 @@ func Build(events []Event) map[uuid.UUID]*Timeline {
 				Internal bool `json:"internal"`
 			}
 			_ = json.Unmarshal(ev.Payload, &p)
+			p.Len = max(p.Len, 0)
 			tl.Pastes = append(tl.Pastes, Paste{Seq: ev.Seq, At: at, Len: p.Len, Internal: p.Internal})
 		case "blur":
 			if open[id] < 0 {
@@ -141,28 +161,32 @@ func Build(events []Event) map[uuid.UUID]*Timeline {
 		if i := open[id]; i >= 0 {
 			tl.Blurs[i].To = tl.Last
 		}
-		tl.Source = docs[id].String()
+		tl.Source = string(utf16.Decode(docs[id]))
 		markPastes(tl)
 	}
 	return out
 }
 
-// markPastes attributes to the paste the edit that carried its text, so the
-// typing signals do not read a paste as a burst of keystrokes.
+// markPastes attributes to each paste the nearest edit that carried its
+// text, so the typing signals do not read a paste as a burst of keystrokes.
 func markPastes(tl *Timeline) {
 	for _, p := range tl.Pastes {
 		if p.Len == 0 {
 			continue
 		}
+		best := -1
 		for i := range tl.Edits {
 			e := &tl.Edits[i]
 			if e.FromPaste || e.Inserted != p.Len {
 				continue
 			}
-			if d := e.At.Sub(p.At); d >= -PasteMatchWindow && d <= PasteMatchWindow {
-				e.FromPaste = true
-				break
+			d := e.At.Sub(p.At).Abs()
+			if d <= PasteMatchWindow && (best < 0 || d < tl.Edits[best].At.Sub(p.At).Abs()) {
+				best = i
 			}
+		}
+		if best >= 0 {
+			tl.Edits[best].FromPaste = true
 		}
 	}
 }
@@ -172,12 +196,14 @@ func markPastes(tl *Timeline) {
 // many characters) or an array whose first element is how many characters
 // are replaced and whose remaining elements are the inserted lines, joined
 // with newlines. The payload is accepted bare or under a "changes" key.
+// Lengths are UTF-16 units, so an astral character counts two. A negative
+// length, or a section that is neither form, rejects the whole changeset.
 type changeset []section
 
 type section struct {
 	keep     int
 	replaced int
-	inserted string
+	inserted []uint16
 	isKeep   bool
 }
 
@@ -190,13 +216,16 @@ func parseChangeset(raw json.RawMessage) (changeset, bool) {
 		body = wrapped.Changes
 	}
 	var parts []json.RawMessage
-	if err := json.Unmarshal(body, &parts); err != nil {
+	if err := json.Unmarshal(body, &parts); err != nil || parts == nil {
 		return nil, false
 	}
 	cs := make(changeset, 0, len(parts))
 	for _, part := range parts {
 		var n int
 		if err := json.Unmarshal(part, &n); err == nil {
+			if n < 0 {
+				return nil, false
+			}
 			cs = append(cs, section{keep: n, isKeep: true})
 			continue
 		}
@@ -205,7 +234,7 @@ func parseChangeset(raw json.RawMessage) (changeset, bool) {
 			return nil, false
 		}
 		var s section
-		if err := json.Unmarshal(arr[0], &s.replaced); err != nil {
+		if err := json.Unmarshal(arr[0], &s.replaced); err != nil || s.replaced < 0 {
 			return nil, false
 		}
 		lines := make([]string, 0, len(arr)-1)
@@ -216,25 +245,23 @@ func parseChangeset(raw json.RawMessage) (changeset, bool) {
 			}
 			lines = append(lines, line)
 		}
-		s.inserted = strings.Join(lines, "\n")
+		s.inserted = utf16.Encode([]rune(strings.Join(lines, "\n")))
 		cs = append(cs, s)
 	}
 	return cs, true
 }
 
-// apply replays the changeset over doc, in UTF-16 units as CodeMirror
-// counts them, which the stored source approximates with runes. It reports
-// the inserted and deleted counts, and the new document when the sections
-// covered exactly the old one.
-func (cs changeset) apply(doc string) (inserted, deleted int, next string, applied bool) {
-	runes := []rune(doc)
-	var b strings.Builder
+// apply replays the changeset over doc. It reports the inserted and
+// deleted units, and the new document when the sections covered exactly the
+// old one; a section reaching past the document fails the whole edit.
+func (cs changeset) apply(doc []uint16) (inserted, deleted int, next []uint16, applied bool) {
+	next = make([]uint16, 0, len(doc))
 	pos := 0
 	applied = true
 	for _, s := range cs {
 		if s.isKeep {
-			if end := pos + s.keep; end <= len(runes) {
-				b.WriteString(string(runes[pos:end]))
+			if end := pos + s.keep; end >= pos && end <= len(doc) {
+				next = append(next, doc[pos:end]...)
 			} else {
 				applied = false
 			}
@@ -242,15 +269,15 @@ func (cs changeset) apply(doc string) (inserted, deleted int, next string, appli
 			continue
 		}
 		deleted += s.replaced
-		inserted += len([]rune(s.inserted))
-		b.WriteString(s.inserted)
+		inserted += len(s.inserted)
+		next = append(next, s.inserted...)
 		pos += s.replaced
 	}
-	if pos != len(runes) {
+	if pos != len(doc) {
 		applied = false
 	}
 	if !applied {
-		return inserted, deleted, "", false
+		return inserted, deleted, nil, false
 	}
-	return inserted, deleted, b.String(), true
+	return inserted, deleted, next, true
 }

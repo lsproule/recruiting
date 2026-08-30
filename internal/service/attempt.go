@@ -355,7 +355,7 @@ func (s *AttemptService) submit(ctx context.Context, tx *store.Tx, att db.Attemp
 		return Submission{}, err
 	}
 	if s.q != nil {
-		if err := s.q.Enqueue(ctx, tx, queue.KindRunnerExecute, RunnerExecutePayload{SubmissionID: row.ID, OrgID: att.OrgID}); err != nil {
+		if _, err := s.q.Enqueue(ctx, tx, queue.KindRunnerExecute, RunnerExecutePayload{SubmissionID: row.ID, OrgID: att.OrgID}); err != nil {
 			return Submission{}, err
 		}
 	}
@@ -455,6 +455,11 @@ func (s *AttemptService) RecordEvents(ctx context.Context, p Principal, attemptI
 		case AttemptInvited:
 			return ErrAttemptNotStarted
 		default:
+			if att.RecordingBlobKey != nil {
+				// Finalization has compacted the stream into object storage;
+				// a batch appended now would be missing from the replay.
+				return fmt.Errorf("%w: the recording has been sealed", ErrAttemptClosed)
+			}
 			if att.FinishedAt.Valid && now.Before(att.FinishedAt.Time.Add(EventGrace)) {
 				break
 			}
@@ -680,12 +685,16 @@ func (s *AttemptService) close(ctx context.Context, tx *store.Tx, att db.Attempt
 			return db.Attempt{}, err
 		}
 	}
-	row, err := tx.Q.CloseAttempt(ctx, db.CloseAttemptParams{ID: att.ID, Status: status, FinishedAt: ts(s.Now())})
+	finishedAt := s.Now()
+	row, err := tx.Q.CloseAttempt(ctx, db.CloseAttemptParams{ID: att.ID, Status: status, FinishedAt: ts(finishedAt)})
 	if err != nil {
 		return db.Attempt{}, err
 	}
 	if s.q != nil {
-		if err := s.q.Enqueue(ctx, tx, queue.KindAttemptFinalize, AttemptFinalizePayload{AttemptID: att.ID, OrgID: att.OrgID}); err != nil {
+		// The island may still land its last batch until EventGrace after the
+		// close; finalizing before then would seal a recording without it.
+		if _, err := s.q.EnqueueAt(ctx, tx, queue.KindAttemptFinalize,
+			AttemptFinalizePayload{AttemptID: att.ID, OrgID: att.OrgID}, finishedAt.Add(EventGrace)); err != nil {
 			return db.Attempt{}, err
 		}
 	}

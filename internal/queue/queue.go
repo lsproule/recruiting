@@ -200,33 +200,45 @@ func EncodePayload(payload any) (json.RawMessage, error) {
 // Enqueue adds a job inside tx, so the work is queued exactly when the
 // transaction that decided on it commits — a rolled-back stage move enqueues
 // nothing. *store.Tx satisfies pgx.Tx.
-func (c *Client) Enqueue(ctx context.Context, tx pgx.Tx, kind string, payload any) error {
+func (c *Client) Enqueue(ctx context.Context, tx pgx.Tx, kind string, payload any) (int64, error) {
 	return c.enqueue(ctx, tx, kind, payload, time.Time{})
 }
 
 // EnqueueAt is Enqueue with a run time in the future: the job is guaranteed
-// not to run before runAt.
-func (c *Client) EnqueueAt(ctx context.Context, tx pgx.Tx, kind string, payload any, runAt time.Time) error {
+// not to run before runAt. Both return the job id, which a caller may keep
+// to cancel the job later with CancelTx.
+func (c *Client) EnqueueAt(ctx context.Context, tx pgx.Tx, kind string, payload any, runAt time.Time) (int64, error) {
 	return c.enqueue(ctx, tx, kind, payload, runAt)
 }
 
-func (c *Client) enqueue(ctx context.Context, tx pgx.Tx, kind string, payload any, runAt time.Time) error {
+// CancelTx cancels a job inside tx. A job that has already finished or does
+// not exist is not an error: the point is that it will not run, and it will
+// not.
+func (c *Client) CancelTx(ctx context.Context, tx pgx.Tx, id int64) error {
+	if _, err := c.river.JobCancelTx(ctx, tx, id); err != nil && !errors.Is(err, rivertype.ErrNotFound) {
+		return fmt.Errorf("queue: cancel job %d: %w", id, err)
+	}
+	return nil
+}
+
+func (c *Client) enqueue(ctx context.Context, tx pgx.Tx, kind string, payload any, runAt time.Time) (int64, error) {
 	def, ok := defByKind[kind]
 	if !ok {
-		return fmt.Errorf("%w: %s", ErrUnknownKind, kind)
+		return 0, fmt.Errorf("%w: %s", ErrUnknownKind, kind)
 	}
 	raw, err := EncodePayload(payload)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	opts := &river.InsertOpts{Queue: queueName, MaxAttempts: MaxAttempts}
 	if !runAt.IsZero() {
 		opts.ScheduledAt = runAt.UTC()
 	}
-	if _, err := c.river.InsertTx(ctx, tx, def.args(raw), opts); err != nil {
-		return fmt.Errorf("queue: enqueue %s: %w", kind, err)
+	res, err := c.river.InsertTx(ctx, tx, def.args(raw), opts)
+	if err != nil {
+		return 0, fmt.Errorf("queue: enqueue %s: %w", kind, err)
 	}
-	return nil
+	return res.Job.ID, nil
 }
 
 // Run works jobs until ctx is cancelled, then stops gracefully: running jobs

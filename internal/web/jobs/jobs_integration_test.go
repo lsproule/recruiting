@@ -4,6 +4,7 @@ package jobs_test
 
 import (
 	"context"
+	"html"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -22,10 +23,13 @@ import (
 
 	"recruiting/internal/service"
 	"recruiting/internal/store"
+	"recruiting/internal/web/assess"
 	"recruiting/internal/web/auth"
 	"recruiting/internal/web/jobs"
 	"recruiting/internal/web/layout"
 	"recruiting/internal/web/middleware"
+	"recruiting/internal/web/pool"
+	"recruiting/internal/web/scorecards"
 )
 
 const testPassword = "hunter2-long-enough"
@@ -320,6 +324,78 @@ func TestRecruiterCreatesAJobAndEditsItsPipeline(t *testing.T) {
 	res, body = b.post(jobPath+"/stages/"+stageID, url.Values{"name": {"Inbox"}, "kind": {"generic"}})
 	if res.StatusCode != 200 || !strings.Contains(body, "Inbox") {
 		t.Fatalf("rename stage: %d %s", res.StatusCode, body)
+	}
+
+	// The saved job page pulls the talent pool's suggestions for the job.
+	jobID := strings.TrimPrefix(jobPath, "/app/jobs/")
+	if _, body := b.get(jobPath); !strings.Contains(body, `hx-get="`+pool.SuggestionsPath(uuid.MustParse(jobID))+`"`) {
+		t.Errorf("job page does not embed the pool suggestions: %s", body)
+	}
+}
+
+func TestStageEditorLinksSetupAndSetsTheDefaultInterviewer(t *testing.T) {
+	f := newFixture(t)
+	b := f.browser(t)
+	b.login(f.recruiterEmail)
+	res, _ := b.post("/app/jobs", f.jobForm())
+	if res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("create job: %d", res.StatusCode)
+	}
+	pipelinePath := res.Header.Get("Location")
+	jobPath := strings.TrimSuffix(pipelinePath, "/pipeline")
+	jobID := uuid.MustParse(strings.TrimPrefix(jobPath, "/app/jobs/"))
+
+	var interview, assessment uuid.UUID
+	if err := f.sys.QueryRow(context.Background(), `select id from stage where job_id = $1 and kind = 'interview' order by position limit 1`, jobID).Scan(&interview); err != nil {
+		t.Fatalf("interview stage: %v", err)
+	}
+	if err := f.sys.QueryRow(context.Background(), `select id from stage where job_id = $1 and kind = 'assessment' order by position limit 1`, jobID).Scan(&assessment); err != nil {
+		t.Fatalf("assessment stage: %v", err)
+	}
+	var vetterID uuid.UUID
+	if err := f.sys.QueryRow(context.Background(), `select id from org_user where email = $1`, f.vetterEmail).Scan(&vetterID); err != nil {
+		t.Fatal(err)
+	}
+
+	_, body := b.get(pipelinePath)
+	for _, want := range []string{
+		`href="` + scorecards.RubricPath(jobID, interview) + `"`,
+		`href="` + html.EscapeString(assess.AttachStagePath(jobID, assessment)) + `"`,
+		`name="default_vetter_id"`, `value="` + vetterID.String() + `"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("stage editor lacks %q", want)
+		}
+	}
+	if strings.Count(body, `name="default_vetter_id"`) != 1 {
+		t.Errorf("the default interviewer select should be on the interview stage only: %s", body)
+	}
+
+	res, body = b.post(jobPath+"/stages/"+interview.String(), url.Values{
+		"name": {"Phone screen"}, "kind": {"interview"}, "default_vetter_id": {vetterID.String()},
+	})
+	if res.StatusCode != 200 {
+		t.Fatalf("set default vetter: %d %s", res.StatusCode, body)
+	}
+	if !strings.Contains(body, `value="`+vetterID.String()+`" selected`) {
+		t.Errorf("editor does not show the saved default: %s", body)
+	}
+	var saved uuid.NullUUID
+	if err := f.sys.QueryRow(context.Background(), `select default_vetter_id from stage where id = $1`, interview).Scan(&saved); err != nil {
+		t.Fatal(err)
+	}
+	if !saved.Valid || saved.UUID != vetterID {
+		t.Errorf("stage default_vetter_id = %v, want %s", saved, vetterID)
+	}
+	// Clearing the select clears the default.
+	if res, _ := b.post(jobPath+"/stages/"+interview.String(), url.Values{"name": {"Phone screen"}, "kind": {"interview"}}); res.StatusCode != 200 {
+		t.Fatalf("clear default vetter: %d", res.StatusCode)
+	}
+	if err := f.sys.QueryRow(context.Background(), `select default_vetter_id from stage where id = $1`, interview).Scan(&saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.Valid {
+		t.Errorf("default_vetter_id still set after clearing: %v", saved)
 	}
 }
 

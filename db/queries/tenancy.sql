@@ -79,7 +79,9 @@ update magic_link set used_at = now()
 where id = $1 and used_at is null and revoked_at is null and expires_at > now();
 
 -- name: LookupAPIToken :one
-select * from api_token where token_hash = $1 and revoked_at is null;
+select * from api_token
+where token_hash = $1 and revoked_at is null
+  and (expires_at is null or expires_at > now());
 
 -- name: UpsertOrgSetting :exec
 insert into org_setting (org_id, key, value) values ($1, $2, $3)

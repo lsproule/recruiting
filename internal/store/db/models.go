@@ -10,13 +10,16 @@ import (
 )
 
 type ApiToken struct {
-	ID        uuid.UUID
-	OrgID     uuid.UUID
-	OrgUserID uuid.UUID
-	Name      string
-	TokenHash string
-	CreatedAt pgtype.Timestamptz
-	RevokedAt pgtype.Timestamptz
+	ID           uuid.UUID
+	OrgID        uuid.UUID
+	OrgUserID    uuid.NullUUID
+	Name         string
+	TokenHash    string
+	CreatedAt    pgtype.Timestamptz
+	RevokedAt    pgtype.Timestamptz
+	Prefix       string
+	ExpiresAt    pgtype.Timestamptz
+	ClientUserID uuid.NullUUID
 }
 
 type Application struct {
@@ -212,6 +215,7 @@ type InterviewSlot struct {
 	Status            string
 	CreatedAt         pgtype.Timestamptz
 	UpdatedAt         pgtype.Timestamptz
+	RemindJobIds      []int64
 }
 
 type Job struct {

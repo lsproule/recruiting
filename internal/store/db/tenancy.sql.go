@@ -637,7 +637,9 @@ func (q *Queries) ListPipelineTemplateStages(ctx context.Context, templateID uui
 }
 
 const lookupAPIToken = `-- name: LookupAPIToken :one
-select id, org_id, org_user_id, name, token_hash, created_at, revoked_at from api_token where token_hash = $1 and revoked_at is null
+select id, org_id, org_user_id, name, token_hash, created_at, revoked_at, prefix, expires_at, client_user_id from api_token
+where token_hash = $1 and revoked_at is null
+  and (expires_at is null or expires_at > now())
 `
 
 func (q *Queries) LookupAPIToken(ctx context.Context, tokenHash string) (ApiToken, error) {
@@ -651,6 +653,9 @@ func (q *Queries) LookupAPIToken(ctx context.Context, tokenHash string) (ApiToke
 		&i.TokenHash,
 		&i.CreatedAt,
 		&i.RevokedAt,
+		&i.Prefix,
+		&i.ExpiresAt,
+		&i.ClientUserID,
 	)
 	return i, err
 }

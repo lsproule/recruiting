@@ -74,6 +74,10 @@ func Mount(mux *chi.Mux, d Deps) (*Auth, error) {
 		mux.Post(s.prefix+"/reset/{token}", h.reset(s))
 	}
 	mux.Get("/assess/{token}", h.assessmentEntry)
+	// A bare /login is what someone types; the org surface is where it goes.
+	mux.Get("/login", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/app/login", http.StatusSeeOther)
+	})
 	return &Auth{h: h}, nil
 }
 

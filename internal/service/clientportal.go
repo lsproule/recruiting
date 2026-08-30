@@ -421,7 +421,7 @@ func (s *ClientPortalService) RequestInfo(ctx context.Context, p Principal, id u
 			return err
 		}
 		for _, r := range recruiters {
-			err := s.q.Enqueue(ctx, tx, queue.KindEmailSend, queue.EmailPayload{
+			_, err := s.q.Enqueue(ctx, tx, queue.KindEmailSend, queue.EmailPayload{
 				Template: mail.TemplateClientRequestInfo, To: r.Email, OrgID: p.OrgID,
 				Data: map[string]any{
 					"RecruiterName":     r.Name,

@@ -62,6 +62,22 @@ func CSRF(secure bool) func(http.Handler) http.Handler {
 	}
 }
 
+// CheckCSRF reports whether r carries the double-submit token in the
+// X-CSRF-Token header and it matches the CSRF cookie. It is what a surface
+// outside the CSRF middleware, such as the JSON API answering a session
+// cookie, consults before an unsafe request.
+func CheckCSRF(r *http.Request) bool {
+	token := ""
+	for _, name := range []string{CSRFCookieSecure, CSRFCookie} {
+		if c, err := r.Cookie(name); err == nil && c.Value != "" {
+			token = c.Value
+			break
+		}
+	}
+	sent := r.Header.Get(CSRFHeader)
+	return token != "" && sent != "" && subtle.ConstantTimeCompare([]byte(sent), []byte(token)) == 1
+}
+
 // CSRFToken returns the token a page must embed in its forms.
 func CSRFToken(r *http.Request) string {
 	t, _ := r.Context().Value(csrfKey{}).(string)

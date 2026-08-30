@@ -69,11 +69,20 @@ func TestServeMountsEverySurface(t *testing.T) {
 		// Mounted behind the auth middleware, so an anonymous visitor is sent
 		// to the login page rather than the screen.
 		{"/app/jobs", http.StatusSeeOther},
+		// The board route always carries a job id; an anonymous visitor is
+		// redirected before the id is ever looked up.
+		{"/app/pipeline/00000000-0000-0000-0000-000000000000", http.StatusSeeOther},
 		{"/app/admin/users", http.StatusSeeOther},
 		{"/app/candidates", http.StatusSeeOther},
+		{"/app/reviews", http.StatusSeeOther},
+		{"/app/problems", http.StatusSeeOther},
+		{"/app/admin/api-tokens", http.StatusSeeOther},
+		{"/client/jobs", http.StatusSeeOther},
 		// The public apply page needs no session; an org or job that does
 		// not exist is a 404 rather than a redirect.
 		{"/apply/x/y", http.StatusNotFound},
+		// The metrics endpoint is unauthenticated and always answers.
+		{"/metrics", http.StatusOK},
 	} {
 		res, err := client.Get(base + tc.path)
 		if err != nil {

@@ -6,6 +6,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +18,8 @@ import (
 	"github.com/google/uuid"
 
 	"recruiting/internal/domain"
+	"recruiting/internal/mail"
+	"recruiting/internal/queue"
 	"recruiting/internal/service"
 )
 
@@ -90,7 +93,59 @@ func newCandidateFixture(t *testing.T) *candidateFixture {
 	jf := newJobFixture(t)
 	b := newFakeBlob()
 	resumes := service.NewResumeService(jf.st, b)
-	return &candidateFixture{jobFixture: jf, blob: b, candidates: service.NewCandidateService(jf.st, resumes), resumes: resumes}
+	q, err := queue.New(jf.st.Pool(), queue.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &candidateFixture{jobFixture: jf, blob: b, candidates: service.NewCandidateService(jf.st, resumes, q), resumes: resumes}
+}
+
+// emails counts queued email.send jobs of template addressed to the given
+// recipient in the fixture's org.
+func (f *candidateFixture) emails(t *testing.T, template, to string) int {
+	t.Helper()
+	var n int
+	err := f.sys.QueryRow(f.ctx, `select count(*) from river_job where kind = $1 and args->'payload'->>'template' = $2
+		and args->'payload'->>'to' = $3 and args->'payload'->>'org_id' = $4`,
+		queue.KindEmailSend, template, to, f.orgID.String()).Scan(&n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func TestApplyQueuesOneAcknowledgementEmail(t *testing.T) {
+	f := newCandidateFixture(t)
+	job := f.newJob(t)
+
+	got, err := f.candidates.Apply(f.ctx, f.orgSlug(), job.Slug, applyInput("ada@example.com", docxBytes(t, "Ada Lovelace")))
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if n := f.emails(t, mail.TemplateApplyReceived, got.Email); n != 1 {
+		t.Fatalf("queued %d apply_received emails, want exactly 1", n)
+	}
+	var data map[string]any
+	var raw string
+	err = f.sys.QueryRow(f.ctx, `select args->'payload'->>'data' from river_job where kind = $1 and args->'payload'->>'template' = $2 and args->'payload'->>'to' = $3`,
+		queue.KindEmailSend, mail.TemplateApplyReceived, got.Email).Scan(&raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(raw), &data); err != nil {
+		t.Fatal(err)
+	}
+	if data["CandidateName"] != "Ada Lovelace" || data["JobTitle"] != job.Title || data["OrgName"] == "" || data["OrgName"] == nil {
+		t.Errorf("email data = %v, want CandidateName, JobTitle, and OrgName set", data)
+	}
+
+	// A refused repeat application queues nothing more.
+	if _, err := f.candidates.Apply(f.ctx, f.orgSlug(), job.Slug, applyInput("ada@example.com", docxBytes(t, "Ada"))); !errors.Is(err, service.ErrAlreadyApplied) {
+		t.Fatalf("second apply error = %v, want ErrAlreadyApplied", err)
+	}
+	if n := f.emails(t, mail.TemplateApplyReceived, got.Email); n != 1 {
+		t.Errorf("queued %d apply_received emails after a refused repeat, want still 1", n)
+	}
 }
 
 // docxBytes builds the smallest file Word would open: a zip whose

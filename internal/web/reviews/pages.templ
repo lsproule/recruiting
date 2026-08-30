@@ -1,0 +1,214 @@
+package reviews
+
+import (
+	"recruiting/internal/service"
+	"recruiting/internal/web/layout"
+)
+
+// queuePage is the vetter's own list: the attempts assigned to them and
+// whether their verdict is in.
+templ queuePage(page layout.Page, rows []service.ReviewAssignment) {
+	@layout.Base(page) {
+		<h1>Reviews</h1>
+		<p class="muted">The assessment attempts assigned to you. An application leaves an assessment stage once your verdict is filed.</p>
+		if len(rows) == 0 {
+			<p class="muted">Nothing waiting on you.</p>
+		} else {
+			<table>
+				<thead><tr><th>Candidate</th><th>Job</th><th>Stage</th><th>Score</th><th>Risk</th><th>Verdict</th><th></th></tr></thead>
+				<tbody>
+					for _, a := range rows {
+						<tr>
+							<td>{ a.CandidateName } <span class="muted">{ a.CandidateEmail }</span></td>
+							<td>{ a.JobTitle }</td>
+							<td>{ a.StageName }</td>
+							<td>{ score(a.Score) }</td>
+							<td>{ score(a.RiskScore) }</td>
+							<td>
+								if a.Reviewed {
+									{ verdictLabel(a.Verdict) }
+								} else {
+									<span class="muted">Not reviewed</span>
+								}
+							</td>
+							<td><a href={ templ.SafeURL(ReviewPath(a.AttemptID)) }>Open</a></td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+	}
+}
+
+// reviewPage is the review screen: what the attempt scored, what the
+// integrity signals saw, the replay, and the verdict form.
+templ reviewPage(page layout.Page, d service.AttemptReview, config string, csrf string) {
+	@layout.Base(page) {
+		<script src={ layout.ReplayPath } defer></script>
+		<h1>{ d.CandidateName }</h1>
+		<p class="muted">{ d.JobTitle } — { d.StageName }</p>
+		<section>
+			<h2>Score</h2>
+			<dl class="review-facts">
+				<dt>Attempt score</dt><dd>{ score(d.Score) }</dd>
+				<dt>Risk score</dt><dd>{ score(d.RiskScore) }</dd>
+				<dt>Runner errors</dt><dd>{ itoa(d.ErrorCount) }</dd>
+				<dt>Recording</dt><dd>{ d.RecordingStatus }</dd>
+				<dt>Finished</dt><dd>{ at(d.FinishedAt) }</dd>
+			</dl>
+			if len(d.Problems) > 0 {
+				<table>
+					<thead><tr><th>Problem</th><th>Difficulty</th><th>Passed</th><th>Runner verdict</th></tr></thead>
+					<tbody>
+						for _, p := range d.Problems {
+							<tr>
+								<td>{ p.Title }</td>
+								<td>{ p.Difficulty }</td>
+								<td>{ shareOf(p.Score) }</td>
+								<td>{ p.Score.Status }</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			}
+		</section>
+		<section>
+			<h2>Integrity signals</h2>
+			if len(d.Signals) == 0 {
+				<p class="muted">No signals computed for this attempt.</p>
+			} else {
+				<p class="muted">A signal is for you to read, not a decision. Follow a piece of evidence to jump the replay to it.</p>
+				for _, s := range d.Signals {
+					<article class="review-signal">
+						<h3>{ signalLabel(s.Name) } — { percent(s.Value) }</h3>
+						<p class="muted">
+							weight { num(s.Weight) }
+							if s.Confidence == "low" {
+								, low confidence
+							}
+						</p>
+						if len(s.Evidence) > 0 {
+							<ul>
+								for _, e := range s.Evidence {
+									<li>
+										if e.Seq > 0 {
+											<button type="button" class="link" data-replay-seq={ i64toa(e.Seq) }>{ e.Note }</button>
+										} else {
+											{ e.Note }
+										}
+										if evidenceValues(e.Values) != "" {
+											<span class="muted">{ evidenceValues(e.Values) }</span>
+										}
+									</li>
+								}
+							</ul>
+						}
+					</article>
+				}
+			}
+		</section>
+		<section>
+			<h2>Replay</h2>
+			<div id="replay" class="replay"></div>
+			@configScript("replay-config", config)
+			<noscript><p class="muted">The replay needs JavaScript enabled.</p></noscript>
+		</section>
+		<section>
+			<h2>Submissions</h2>
+			if len(d.Submissions) == 0 {
+				<p class="muted">Nothing was run or submitted.</p>
+			} else {
+				<table>
+					<thead><tr><th>When</th><th>Problem</th><th>Kind</th><th>Language</th><th>Status</th><th>Score</th></tr></thead>
+					<tbody>
+						for _, s := range d.Submissions {
+							<tr>
+								<td>{ at(s.CreatedAt) }</td>
+								<td>{ s.ProblemTitle }</td>
+								<td>{ s.Kind }</td>
+								<td>{ s.Language }</td>
+								<td>{ s.Status }</td>
+								<td>{ score(s.Score) }</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			}
+		</section>
+		<section>
+			<h2>Verdict</h2>
+			if d.Review != nil && d.Review.VetterName != "" {
+				<p class="muted">Filed by { d.Review.VetterName }, { at(d.Review.CreatedAt) }.</p>
+			}
+			if !d.CanReview {
+				<p>{ verdictLabel(verdictOf(d.Review)) }</p>
+				if notesOf(d.Review) != "" {
+					<p>{ notesOf(d.Review) }</p>
+				}
+				<p class="muted">Only the vetter this attempt is assigned to files its verdict.</p>
+			} else {
+				<form class="stack" method="post" action={ templ.SafeURL(ReviewPath(d.AttemptID)) }>
+					@layout.CSRFField(csrf)
+					<label>
+						Verdict
+						<select name="verdict" required>
+							<option value="">–</option>
+							for _, v := range service.Verdicts {
+								<option value={ v } selected?={ verdictOf(d.Review) == v }>{ verdictLabel(v) }</option>
+							}
+						</select>
+					</label>
+					<label>
+						Notes
+						<textarea name="notes" rows="5">{ notesOf(d.Review) }</textarea>
+					</label>
+					<button type="submit">
+						if filed(d.Review) {
+							Update verdict
+						} else {
+							File verdict
+						}
+					</button>
+				</form>
+			}
+		</section>
+	}
+}
+
+// SummaryFragment is the assessment outcome of an application. The
+// application page embeds it; the partial route serves the same markup.
+templ SummaryFragment(rows []service.AttemptSummary) {
+	<section id="reviews">
+		<h2>Assessments</h2>
+		if len(rows) == 0 {
+			<p class="muted">No assessment attempts yet.</p>
+		} else {
+			<table>
+				<thead><tr><th>Stage</th><th>Status</th><th>Score</th><th>Risk</th><th>Verdict</th><th>Reviewer</th></tr></thead>
+				<tbody>
+					for _, r := range rows {
+						<tr>
+							<td>{ r.StageName }</td>
+							<td>{ r.Status }</td>
+							<td>{ score(r.Score) }</td>
+							<td>{ score(r.RiskScore) }</td>
+							<td>
+								if r.Verdict != "" {
+									<a href={ templ.SafeURL(ReviewPath(r.AttemptID)) }>{ verdictLabel(r.Verdict) }</a>
+								} else {
+									<a href={ templ.SafeURL(ReviewPath(r.AttemptID)) }>Review</a>
+								}
+							</td>
+							<td>{ r.VetterName }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+			for _, r := range rows {
+				if r.ReviewNotes != "" {
+					<p><strong>{ r.StageName }:</strong> { r.ReviewNotes }</p>
+				}
+			}
+		}
+	</section>
+}

@@ -9,6 +9,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"recruiting/internal/config"
 )
@@ -30,6 +31,9 @@ func modes() map[string]mode {
 }
 
 func main() {
+	// Every timestamp the binary emits or logs is UTC, whatever the host's
+	// zone; the database stores UTC and the API presents it unchanged.
+	time.Local = time.UTC
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintf(os.Stderr, "recruiting: %v\n", err)
 		os.Exit(1)

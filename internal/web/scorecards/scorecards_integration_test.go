@@ -115,7 +115,7 @@ func newFixture(t *testing.T) *fixture {
 	// Mounted alongside the pipeline surface, which owns the other routes
 	// under /app/applications/{id}.
 	pipeline.Mount(mux, pipeline.Deps{Applications: service.NewApplicationService(st, nil, "https://example.test"), Org: service.NewOrgService(st)})
-	scorecards.Mount(mux, scorecards.Deps{Scorecards: service.NewScorecardService(st), Org: service.NewOrgService(st)})
+	scorecards.Mount(mux, scorecards.Deps{Scorecards: service.NewScorecardService(st, nil), Org: service.NewOrgService(st)})
 	f.srv = httptest.NewServer(mux)
 	t.Cleanup(f.srv.Close)
 	return f

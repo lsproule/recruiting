@@ -250,7 +250,21 @@ func (h *handlers) pipeline(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	render(w, r, http.StatusOK, pipelinePage(h.page(r, job.Title+" pipeline", Prefix), job, stages, middleware.CSRFToken(r), ""))
+	render(w, r, http.StatusOK, pipelinePage(h.page(r, job.Title+" pipeline", Prefix), job, stages, h.vetters(r, p), middleware.CSRFToken(r), ""))
+}
+
+// vetters is who the editor offers as a stage's default interviewer. A
+// reader who may not list them (a vetter looking at the pipeline) gets an
+// empty list rather than a failed page; the editor is not theirs to use.
+func (h *handlers) vetters(r *http.Request, p service.Principal) []service.OrgUser {
+	if h.d.Org == nil {
+		return nil
+	}
+	vetters, err := h.d.Org.Vetters(r.Context(), p)
+	if err != nil {
+		return nil
+	}
+	return vetters
 }
 
 // afterStageChange re-renders the editor. htmx swaps the fragment in place;
@@ -277,11 +291,12 @@ func (h *handlers) afterStageChange(w http.ResponseWriter, r *http.Request, jobI
 		return
 	}
 	csrf := middleware.CSRFToken(r)
+	vetters := h.vetters(r, p)
 	if r.Header.Get("HX-Request") != "" {
-		render(w, r, status, pipelineEditor(job, stages, csrf, message))
+		render(w, r, status, pipelineEditor(job, stages, vetters, csrf, message))
 		return
 	}
-	render(w, r, status, pipelinePage(h.page(r, job.Title+" pipeline", Prefix), job, stages, csrf, message))
+	render(w, r, status, pipelinePage(h.page(r, job.Title+" pipeline", Prefix), job, stages, vetters, csrf, message))
 }
 
 func (h *handlers) addStage(w http.ResponseWriter, r *http.Request) {
@@ -355,12 +370,16 @@ func jobID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 }
 
 func stageFromForm(r *http.Request) service.StageInput {
-	return service.StageInput{
+	in := service.StageInput{
 		Name:     r.PostFormValue("name"),
 		Kind:     domain.StageKind(r.PostFormValue("kind")),
 		Terminal: domain.ApplicationStatus(r.PostFormValue("terminal_status")),
 		Unblind:  r.PostFormValue("unblind") != "",
 	}
+	// An unparseable id is treated as none: the select only ever offers
+	// real ids, and clearing the default is the harmless reading.
+	in.DefaultVetterID, _ = uuid.Parse(strings.TrimSpace(r.PostFormValue("default_vetter_id")))
+	return in
 }
 
 func jobFromForm(r *http.Request) (service.NewJob, error) {

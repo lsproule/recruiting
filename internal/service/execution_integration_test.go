@@ -14,6 +14,7 @@ import (
 
 	"recruiting/internal/domain"
 	"recruiting/internal/queue"
+	runnerclient "recruiting/internal/runner/client"
 	"recruiting/internal/runner/server"
 	"recruiting/internal/service"
 )
@@ -305,7 +306,7 @@ func parseOne(t *testing.T, body string) domain.ImportProblem {
 // sandbox, and finalization scores the attempt out of a hundred.
 func TestAttemptOverPythonAndSQLScoresOnTheRealRunner(t *testing.T) {
 	f := newExecutionFixture(t, doubleImport(t), sumImport(t))
-	exec := service.NewHTTPExecutor(startRunner(t), runnerTestSecret)
+	exec := runnerclient.New(startRunner(t), runnerTestSecret)
 	ctx := context.Background()
 	att := f.start(t)
 	cand := f.candidateOf(att.ID)

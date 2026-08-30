@@ -121,21 +121,23 @@ func (s *SignalsService) load(ctx context.Context, p SignalsComputePayload) (sig
 		if err != nil {
 			return err
 		}
+		in.InitialSources = initialSources(in.Events, sources)
 		a, err := loadAssessment(ctx, tx, att.AssessmentID)
 		if err != nil {
 			return err
 		}
 		for _, problem := range a.Problems {
-			sp := signals.Problem{ID: problem.ID, Difficulty: problem.Difficulty, FinalSource: finalSource(problem.ID, subs, sources)}
+			language, final := finalSource(problem.ID, subs, sources)
+			sp := signals.Problem{ID: problem.ID, Difficulty: problem.Difficulty, Language: language, FinalSource: final}
 			for _, ref := range problem.References {
-				sp.References = append(sp.References, ref.Source)
+				sp.References = append(sp.References, signals.Source{Language: ref.Language, Source: ref.Source})
 			}
-			others, err := tx.Q.ListOtherProblemSubmits(ctx, db.ListOtherProblemSubmitsParams{ProblemID: problem.ID, AttemptID: p.AttemptID})
+			others, err := tx.Q.ListOtherProblemSubmits(ctx, db.ListOtherProblemSubmitsParams{ProblemID: problem.ID, AttemptID: p.AttemptID, Language: language})
 			if err != nil {
 				return err
 			}
 			for _, o := range others {
-				sp.Others = append(sp.Others, o.Source)
+				sp.Others = append(sp.Others, signals.Source{Language: language, Source: o.Source})
 			}
 			in.Problems = append(in.Problems, sp)
 		}
@@ -219,24 +221,43 @@ func signalSubmissions(subs []db.Submission) []signals.Submission {
 	return out
 }
 
-// finalSource is the candidate's last text for the problem: the last
-// submit, else the last synced editor state.
-func finalSource(problemID uuid.UUID, subs []db.Submission, sources []db.AttemptSource) string {
-	var out string
+// finalSource is the candidate's last text for the problem and its
+// language: the last submit, else the last synced editor state.
+func finalSource(problemID uuid.UUID, subs []db.Submission, sources []db.AttemptSource) (language, source string) {
 	for _, sub := range subs {
 		if sub.ProblemID == problemID && sub.Kind == SubmissionSubmit {
-			out = sub.Source // ordered by created_at, so the last wins
+			language, source = sub.Language, sub.Source // ordered by created_at, so the last wins
 		}
 	}
-	if out != "" {
-		return out
+	if source != "" {
+		return language, source
 	}
 	for _, src := range sources {
 		if src.ProblemID == problemID {
-			return src.Source
+			return src.Language, src.Source
 		}
 	}
-	return ""
+	return "", ""
+}
+
+// initialSources is the editor text each problem started from. Nothing
+// records the text before the first event, so the synced source stands in
+// only for a problem whose stream holds no edit at all: the text was there
+// before recording began and nothing has changed it since.
+func initialSources(events []signals.Event, sources []db.AttemptSource) map[uuid.UUID]string {
+	edited := map[uuid.UUID]bool{}
+	for _, ev := range events {
+		if ev.Kind == "edit" && ev.ProblemID != nil {
+			edited[*ev.ProblemID] = true
+		}
+	}
+	out := map[uuid.UUID]string{}
+	for _, src := range sources {
+		if !edited[src.ProblemID] {
+			out[src.ProblemID] = src.Source
+		}
+	}
+	return out
 }
 
 // integrityWeights reads the org's weights, defaults filling in for signals

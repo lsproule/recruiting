@@ -1,0 +1,92 @@
+package api
+
+import (
+	"time"
+
+	"recruiting/internal/service"
+	"recruiting/internal/web/middleware"
+)
+
+// TokensView is what the admin's API token screen draws. IssuePath and
+// RevokePath are where the forms post; the surface that mounts the fragment
+// decides them, so the fragment carries no route of its own.
+//
+// Secret is the raw token of a just-issued credential. It is shown once,
+// because only its hash is kept, and never comes back on a later render.
+type TokensView struct {
+	Tokens     []service.APIToken
+	Users      []service.OrgUser
+	IssuePath  string
+	RevokePath string
+	Secret     string
+	CSRF       string
+}
+
+// tokenExpiry is the expiry as the table shows it; an unexpiring token says
+// so rather than showing a zero time.
+func tokenExpiry(t service.APIToken) string {
+	if t.ExpiresAt.IsZero() {
+		return "never"
+	}
+	return t.ExpiresAt.UTC().Format(time.RFC3339)
+}
+
+// TokensFragment is the admin's API token screen: the live tokens, the form
+// that issues one, and the secret of the token just issued.
+templ TokensFragment(v TokensView) {
+	<section class="api-tokens">
+		<h2>API tokens</h2>
+		if v.Secret != "" {
+			<p class="notice">
+				Copy this token now; it is not shown again.
+				<code>{ v.Secret }</code>
+			</p>
+		}
+		if len(v.Tokens) == 0 {
+			<p class="muted">No API tokens have been issued.</p>
+		} else {
+			<table>
+				<thead>
+					<tr><th>Name</th><th>Prefix</th><th>User</th><th>Expires</th><th></th></tr>
+				</thead>
+				<tbody>
+					for _, t := range v.Tokens {
+						<tr>
+							<td>{ t.Name }</td>
+							<td><code>{ t.Prefix }</code></td>
+							<td>
+								{ t.UserEmail }
+								if t.IsClient {
+									<span class="muted">(client)</span>
+								}
+							</td>
+							<td>{ tokenExpiry(t) }</td>
+							<td>
+								<form method="post" action={ templ.SafeURL(v.RevokePath + "/" + t.ID.String()) }>
+									<input type="hidden" name={ middleware.CSRFField } value={ v.CSRF }/>
+									<button type="submit">Revoke</button>
+								</form>
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+		<h3>Issue a token</h3>
+		<form class="stack" method="post" action={ templ.SafeURL(v.IssuePath) }>
+			<input type="hidden" name={ middleware.CSRFField } value={ v.CSRF }/>
+			<label>Name <input type="text" name="name" required/></label>
+			<label>
+				User
+				<select name="user_id" required>
+					for _, u := range v.Users {
+						<option value={ u.ID.String() }>{ u.Name } &lt;{ u.Email }&gt;</option>
+					}
+				</select>
+			</label>
+			<label>Expires <input type="date" name="expires_on"/></label>
+			<button type="submit">Issue token</button>
+		</form>
+		<p class="muted">A token carries its user&#39;s roles. Revoking one takes effect at once.</p>
+	</section>
+}

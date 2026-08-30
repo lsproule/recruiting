@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	runnerclient "recruiting/internal/runner/client"
 	"recruiting/internal/runner/server"
 	"recruiting/internal/service"
 )
@@ -28,7 +29,7 @@ const seedRunTimeout = 15 * time.Minute
 func TestPlatformSeedRunsOnTheRunner(t *testing.T) {
 	f := newProblemFixture(t)
 	url := startRunner(t)
-	svc := service.NewProblemService(f.st, service.NewHTTPExecutor(url, runnerTestSecret))
+	svc := service.NewProblemService(f.st, runnerclient.New(url, runnerTestSecret))
 	// Match the slots the in-process runner was started with, so the seed is
 	// proven at the concurrency a deployment would use.
 	svc.Concurrency = runnerTestConcurrency

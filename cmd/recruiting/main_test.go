@@ -41,23 +41,20 @@ func TestModesFailOnEmptyConfig(t *testing.T) {
 	}
 }
 
-// Modes that need Postgres fail on the connection rather than on missing
-// configuration; the rest still return cleanly.
+// Every mode reaches past configuration and fails on something downstream of
+// it: the modes that open Postgres fail on the connection, and runner fails
+// on the OCI runtime it needs — a dev host with Docker but no gVisor names
+// exactly the failure production's own startup check exists to catch.
 func TestModesGetPastConfigurationWithCompleteConfig(t *testing.T) {
 	for _, name := range requiredEnv {
 		t.Setenv(name, "value-"+name)
 	}
-	stubs := map[string]bool{"runner": true}
+	t.Setenv("METRICS_ADDR", "127.0.0.1:0")
 	for name := range modes() {
 		err := run([]string{name})
-		if stubs[name] {
-			if err != nil {
-				t.Errorf("%s: %v", name, err)
-			}
-			continue
-		}
 		if err == nil {
-			t.Errorf("%s: reached the database with a nonsense DATABASE_URL", name)
+			t.Errorf("%s: reached the database (or, for runner, the runtime) with nonsense configuration", name)
+			continue
 		}
 		if config.IsMissing(err) {
 			t.Errorf("%s: still reports configuration as missing: %v", name, err)

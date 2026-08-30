@@ -13,6 +13,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"recruiting/internal/mail"
+	"recruiting/internal/queue"
 	"recruiting/internal/store"
 	"recruiting/internal/store/db"
 )
@@ -96,10 +98,13 @@ type NewCandidate struct {
 type CandidateService struct {
 	st      *store.Store
 	resumes *ResumeService
+	q       Enqueuer
 }
 
-func NewCandidateService(st *store.Store, resumes *ResumeService) *CandidateService {
-	return &CandidateService{st: st, resumes: resumes}
+// NewCandidateService wires the store, the resume service, and the queue the
+// apply acknowledgement goes to. A nil queue disables the acknowledgement.
+func NewCandidateService(st *store.Store, resumes *ResumeService, q Enqueuer) *CandidateService {
+	return &CandidateService{st: st, resumes: resumes, q: q}
 }
 
 // PublicJob loads the job behind an apply URL. Only open jobs are visible, so
@@ -141,8 +146,9 @@ func (s *CandidateService) publicJobRow(ctx context.Context, orgSlug, jobSlug st
 // Apply is the unauthenticated intake. The applicant has no session, so the
 // org comes from the job the URL named. The object store is written first
 // because it cannot join the transaction; everything in Postgres — the
-// candidate, the resume row, the application, and its event — commits or
-// rolls back together, and a rollback takes the object with it.
+// candidate, the resume row, the application, its event, and the queued
+// acknowledgement email — commits or rolls back together, and a rollback
+// takes the object with it.
 func (s *CandidateService) Apply(ctx context.Context, orgSlug, jobSlug string, in ApplyInput) (Candidate, error) {
 	job, err := s.publicJobRow(ctx, orgSlug, jobSlug)
 	if err != nil {
@@ -361,6 +367,11 @@ func (s *CandidateService) write(ctx context.Context, p Principal, who person, j
 			if err != nil {
 				return err
 			}
+			if who.public {
+				if err := s.acknowledge(ctx, tx, p.OrgID, cand, job.Title); err != nil {
+					return err
+				}
+			}
 		}
 		out = cand
 		return nil
@@ -369,6 +380,22 @@ func (s *CandidateService) write(ctx context.Context, p Principal, who person, j
 		return Candidate{}, wrapApply("save candidate", err)
 	}
 	return out, nil
+}
+
+// acknowledge queues the apply_received email to the applicant inside the
+// apply transaction, so a rolled-back application sends nothing.
+func (s *CandidateService) acknowledge(ctx context.Context, tx *store.Tx, orgID uuid.UUID, cand Candidate, jobTitle string) error {
+	if s.q == nil {
+		return nil
+	}
+	org, err := tx.Q.GetOrg(ctx, orgID)
+	if err != nil {
+		return fmt.Errorf("apply acknowledgement org: %w", err)
+	}
+	return enqueued(s.q.Enqueue(ctx, tx, queue.KindEmailSend, queue.EmailPayload{
+		Template: mail.TemplateApplyReceived, To: cand.Email, OrgID: orgID,
+		Data: map[string]any{"CandidateName": cand.Name, "JobTitle": jobTitle, "OrgName": org.Name},
+	}))
 }
 
 // upsertCandidate writes the candidate keyed on (org, lowercased email). The

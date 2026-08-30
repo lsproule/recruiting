@@ -3,6 +3,9 @@ package pipeline
 import (
 	"recruiting/internal/service"
 	"recruiting/internal/web/layout"
+	"recruiting/internal/web/pool"
+	"recruiting/internal/web/reviews"
+	"recruiting/internal/web/scorecards"
 )
 
 templ boardPage(page layout.Page, board service.Board, csrf string, problem moveProblem) {
@@ -178,7 +181,9 @@ templ listPage(page layout.Page, board service.Board, rows []service.Application
 	}
 }
 
-templ applicationPage(page layout.Page, d service.ApplicationDetail, csrf string, problem moveProblem) {
+// applicationPage is the application screen. vetters is who a recruiter may
+// assign as the interviewer; empty hides the assign form.
+templ applicationPage(page layout.Page, d service.ApplicationDetail, vetters []service.OrgUser, csrf string, problem moveProblem) {
 	@layout.Base(page) {
 		<h1>{ d.Application.CandidateName }</h1>
 		<p class="muted">
@@ -198,7 +203,34 @@ templ applicationPage(page layout.Page, d service.ApplicationDetail, csrf string
 					no
 				}
 			</dd>
+			<dt>Talent pool</dt>
+			<dd>
+				@pool.FlagButton(d.Application.ID)
+			</dd>
 		</dl>
+		if len(vetters) > 0 && d.Application.Active() {
+			<h2>Interviewer</h2>
+			<form class="stack" method="post" action={ templ.SafeURL(applicationPath(d.Application.ID) + "/assign") }>
+				@layout.CSRFField(csrf)
+				<label>
+					Assign a vetter
+					<select name="vetter_id" required>
+						for _, v := range vetters {
+							<option value={ v.ID.String() }>{ userLabel(v) }</option>
+						}
+					</select>
+				</label>
+				<button type="submit">Assign</button>
+			</form>
+		}
+		<h2>Scorecards</h2>
+		<div hx-get={ scorecards.SummaryPath(d.Application.ID) } hx-trigger="load" hx-swap="outerHTML">
+			<p class="muted">Loading scorecards…</p>
+		</div>
+		<h2>Assessments</h2>
+		<div hx-get={ reviews.SummaryPath(d.Application.ID) } hx-trigger="load" hx-swap="outerHTML">
+			<p class="muted">Loading assessment results…</p>
+		</div>
 		if d.Application.Active() {
 			<h2>Move</h2>
 			if !problem.Empty() {

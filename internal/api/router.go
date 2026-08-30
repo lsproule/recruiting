@@ -40,6 +40,15 @@ func NewRouter() *Router {
 	cfg.OpenAPIPath = "/openapi"
 	cfg.DocsPath = "/docs"
 	cfg.SchemasPath = "/schemas"
+	// The API takes a per-user token as a bearer credential beside the
+	// session cookie the browser islands send; only the token is a scheme a
+	// client presents, so only it is described.
+	if cfg.Components == nil {
+		cfg.Components = &huma.Components{}
+	}
+	cfg.Components.SecuritySchemes = map[string]*huma.SecurityScheme{
+		BearerScheme: {Type: "http", Scheme: "bearer", Description: "A per-user API token issued by an org admin"},
+	}
 
 	return &Router{Mux: mux, API: humachi.New(v1, cfg)}
 }

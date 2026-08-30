@@ -244,6 +244,18 @@ func (s *PoolService) OnReviewPass(ctx context.Context, tx *store.Tx, orgID, app
 	return err
 }
 
+// RetractReviewPass is the hook the review service calls, in its own
+// transaction, when a vetter amends a pass down to a borderline or a fail.
+// It withdraws only an entry that review pass is the latest source of: one
+// the recruiter flagged, or whose application they marked high quality, is
+// theirs and stays.
+func (s *PoolService) RetractReviewPass(ctx context.Context, tx *store.Tx, orgID, applicationID uuid.UUID) error {
+	_, err := tx.Q.RetractTalentPoolEntryFromReview(ctx, db.RetractTalentPoolEntryFromReviewParams{
+		ApplicationID: applicationID, OrgID: orgID,
+	})
+	return err
+}
+
 // UpsertFromApplication files or refreshes the candidate's single pool entry
 // from one application, inside the caller's transaction so the entry commits
 // with whatever earned it. The profile comes from the job — its skills,

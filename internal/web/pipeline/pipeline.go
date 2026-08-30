@@ -26,9 +26,13 @@ const (
 	ApplicationPrefix = "/app/applications"
 )
 
-// Deps is what Mount needs. Org supplies the signed-in user's display name.
+// Deps is what Mount needs. Release is the client visibility switch, which
+// also queues the client's notice; Schedule assigns an interviewer; Org
+// supplies the signed-in user's display name and the vetters to assign.
 type Deps struct {
 	Applications *service.ApplicationService
+	Release      *service.ReleaseService
+	Schedule     *service.ScheduleService
 	Org          *service.OrgService
 	// Logger records the errors behind a 500; the visitor only ever sees a
 	// generic message. Nil disables that logging.
@@ -52,6 +56,7 @@ func Mount(r chi.Router, d Deps) {
 		r.Post("/withdraw", h.withdraw)
 		r.Post("/release", h.release)
 		r.Post("/unrelease", h.unrelease)
+		r.Post("/assign", h.assign)
 	})
 }
 
@@ -110,7 +115,8 @@ func statusFor(err error) int {
 	case errors.Is(err, domain.ErrPrereqMissing),
 		errors.Is(err, domain.ErrReasonRequired),
 		errors.Is(err, domain.ErrTerminal),
-		errors.Is(err, service.ErrNotActive):
+		errors.Is(err, service.ErrNotActive),
+		errors.Is(err, service.ErrNotVetter):
 		return http.StatusUnprocessableEntity
 	}
 	return http.StatusInternalServerError
@@ -200,7 +206,20 @@ func (h *handlers) renderApplication(w http.ResponseWriter, r *http.Request, id 
 		h.fail(w, r, err)
 		return
 	}
-	render(w, r, status, applicationPage(h.page(r, detail.Application.CandidateName, flashes...), detail, middleware.CSRFToken(r), problem))
+	render(w, r, status, applicationPage(h.page(r, detail.Application.CandidateName, flashes...), detail, h.vetters(r, p), middleware.CSRFToken(r), problem))
+}
+
+// vetters is who a recruiter may assign as the interviewer. Anyone who may
+// not list them (a vetter reading the page) gets none, and no assign form.
+func (h *handlers) vetters(r *http.Request, p service.Principal) []service.OrgUser {
+	if h.d.Org == nil || h.d.Schedule == nil {
+		return nil
+	}
+	vetters, err := h.d.Org.Vetters(r.Context(), p)
+	if err != nil {
+		return nil
+	}
+	return vetters
 }
 
 // move handles both the board's drag (an htmx post that gets the board back)
@@ -293,7 +312,7 @@ func (h *handlers) release(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	_, err := h.d.Applications.Release(r.Context(), p, id)
+	_, err := h.d.Release.Release(r.Context(), p, id)
 	h.afterAction(w, r, id, err)
 }
 
@@ -303,8 +322,23 @@ func (h *handlers) unrelease(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	_, err := h.d.Applications.Unrelease(r.Context(), p, id)
+	_, err := h.d.Release.Unrelease(r.Context(), p, id)
 	h.afterAction(w, r, id, err)
+}
+
+// assign names the interviewer for the application.
+func (h *handlers) assign(w http.ResponseWriter, r *http.Request) {
+	p, _ := middleware.PrincipalFrom(r.Context())
+	id, ok := param(w, r, "id")
+	if !ok {
+		return
+	}
+	vetterID, err := uuid.Parse(strings.TrimSpace(r.PostFormValue("vetter_id")))
+	if err != nil {
+		http.Error(w, "bad vetter id", http.StatusBadRequest)
+		return
+	}
+	h.afterAction(w, r, id, h.d.Schedule.Assign(r.Context(), p, id, vetterID))
 }
 
 // afterAction redirects back to the application page, or re-renders it with

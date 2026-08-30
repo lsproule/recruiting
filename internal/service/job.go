@@ -94,6 +94,9 @@ type StageInput struct {
 	Kind     domain.StageKind
 	Terminal domain.ApplicationStatus // required on terminal stages, empty otherwise
 	Unblind  bool
+	// DefaultVetterID names the interview stage's default interviewer; Nil
+	// clears it. It is ignored on stages of any other kind.
+	DefaultVetterID uuid.UUID
 }
 
 // JobService is the recruiter surface: jobs and their pipelines.

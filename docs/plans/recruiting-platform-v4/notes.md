@@ -50,3 +50,13 @@ The sealed assessment cookie is scoped to `/assess/`; the island therefore calls
 
 ## N16: Execution/finalize wiring owed
 worker.go: `queue.KindRunnerExecute` → `service.RunnerExecuteHandler(st, client.New(cfg.RunnerURL, cfg.RunnerSecret), logger)`; `queue.KindAttemptFinalize` → `service.AttemptFinalizeHandler(st, q, blob, logger)`. `service.HTTPExecutor` duplicates `internal/runner/client`; retire it in T19/T20 by making ProblemService take `client.New(...)`.
+
+## N17: Signals wiring owed
+worker.go: `queue.KindSignalsCompute` → `service.SignalsComputeHandler(st, blob, logger)`.
+
+## N18: Review wiring owed + assess config defect
+serve.go: `api.MountReplay(r.API, api.ReplayDeps{Reviews, Resolve})`, `reviews.Mount(web, reviews.Deps{Reviews,Org,Logger})`; pipeline application page embeds `@reviews.SummaryFragment(...)`.
+DEFECT (T14 file, fix in the acceptance-gate phase): `internal/web/assess/pages.templ` uses `@templ.Raw(jsonForScript(cfgJSON))` inside a `<script>`; templ emits script bodies literally, so the candidate island never receives its config. Fix by writing the whole `<script>` element from a Go helper (see `configScript` in `internal/web/reviews`).
+
+## N19: API wiring owed
+serve.go: `api.MountAll(r, api.Deps{...all services, Sessions, Tokens})` replaces the individual MountAttempts/MountReplay calls; admin UI: a handler for the API-token screen embedding `api.TokensFragment`. Signed *upload* URLs for resumes are not implemented (upload is inline on create-candidate) — acceptable v1 deviation.

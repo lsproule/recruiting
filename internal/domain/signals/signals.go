@@ -57,6 +57,9 @@ const (
 	// MinTypedForEditRatio is how many characters must have been typed
 	// before the edit ratio says anything.
 	MinTypedForEditRatio = 50
+	// MinTokensForSimilarity is how many tokens the final source needs
+	// before its similarity to anything is worth reporting.
+	MinTokensForSimilarity = 20
 )
 
 // BandMedian is the reference time to a first pass for each difficulty;
@@ -72,32 +75,47 @@ type Submission struct {
 	ID        uuid.UUID
 	ProblemID uuid.UUID
 	Kind      string // run or submit
-	At        time.Time
+	// At is when the server received it. ClientAt and Seq are filled from
+	// the run or submit event naming it, when the stream has one.
+	At       time.Time
+	ClientAt time.Time
+	Seq      int64
 	// Passed is whether every case passed.
 	Passed bool
 	Source string
+}
+
+// Source is a piece of code in a language.
+type Source struct {
+	Language string
+	Source   string
 }
 
 // Problem is what the signals know about a problem of the attempt.
 type Problem struct {
 	ID         uuid.UUID
 	Difficulty string
+	// Language is the language of the final source; only sources in it are
+	// compared for similarity. Empty compares against everything.
+	Language string
 	// FinalSource is the candidate's last text for the problem: the final
 	// submit, or the last synced editor state. Empty falls back to the
 	// source replayed from the stream.
 	FinalSource string
 	// References are the problem's reference solutions.
-	References []string
+	References []Source
 	// Others are other candidates' submits of the problem within the org.
-	Others []string
+	Others []Source
 }
 
 // Input is everything one attempt's signals are computed from.
 type Input struct {
-	StartedAt   time.Time
-	Events      []Event
-	Submissions []Submission
-	Problems    []Problem
+	StartedAt time.Time
+	Events    []Event
+	// InitialSources is each problem's editor text before its first event.
+	InitialSources map[uuid.UUID]string
+	Submissions    []Submission
+	Problems       []Problem
 	// Incomplete is set when the recording has a gap; every signal is then
 	// reported at low confidence but still computed.
 	Incomplete bool
@@ -106,7 +124,7 @@ type Input struct {
 // Evidence is one observation behind a signal's value, for the reviewer.
 type Evidence struct {
 	ProblemID uuid.UUID          `json:"problem_id"`
-	At        time.Time          `json:"at,omitempty"`
+	At        *time.Time         `json:"at,omitempty"`
 	Seq       int64              `json:"seq,omitempty"`
 	Note      string             `json:"note"`
 	Values    map[string]float64 `json:"values,omitempty"`
@@ -123,7 +141,7 @@ type Signal struct {
 // Compute runs every signal over the input and returns them in a fixed
 // order, one per name, values clamped to 0–1.
 func Compute(in Input) []Signal {
-	timelines := Build(in.Events)
+	timelines := Build(in.Events, in.InitialSources)
 	problems := make([]Problem, 0, len(in.Problems))
 	for _, p := range in.Problems {
 		if p.FinalSource == "" {
@@ -159,12 +177,11 @@ func Compute(in Input) []Signal {
 	return sigs
 }
 
-// clockSubmissions moves each submission to the client time of the run or
-// submit event that names it, so it sits on the same clock as the pastes
-// and blurs it is measured against. One the stream never named keeps the
-// server's time.
+// clockSubmissions gives each submission the client time and seq of the run
+// or submit event that names it, so paste and blur comparisons sit on one
+// clock. One the stream never named is measured on the server's time.
 func clockSubmissions(events []Event, subs []Submission) []Submission {
-	at := map[uuid.UUID]time.Time{}
+	named := map[uuid.UUID]Event{}
 	for _, ev := range events {
 		if ev.Kind != "run" && ev.Kind != "submit" {
 			continue
@@ -173,17 +190,27 @@ func clockSubmissions(events []Event, subs []Submission) []Submission {
 			SubmissionID uuid.UUID `json:"submission_id"`
 		}
 		if err := json.Unmarshal(ev.Payload, &data); err == nil && data.SubmissionID != uuid.Nil {
-			at[data.SubmissionID] = ev.At()
+			named[data.SubmissionID] = ev
 		}
 	}
 	out := make([]Submission, len(subs))
 	for i, sub := range subs {
-		if t, ok := at[sub.ID]; ok {
-			sub.At = t
+		if ev, ok := named[sub.ID]; ok {
+			sub.ClientAt, sub.Seq = ev.At(), ev.Seq
+		}
+		if sub.ClientAt.IsZero() {
+			sub.ClientAt = sub.At
 		}
 		out[i] = sub
 	}
 	return out
+}
+
+func at(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
 }
 
 // Risk is the weighted sum of the signals, clamped to 0–100. Weights are
@@ -241,7 +268,7 @@ func (c computation) pasteRatio() Signal {
 			}
 			pasted += p.Len
 			s.Evidence = append(s.Evidence, Evidence{
-				ProblemID: tl.ProblemID, At: p.At, Seq: p.Seq,
+				ProblemID: tl.ProblemID, At: at(p.At), Seq: p.Seq,
 				Note:   fmt.Sprintf("%d characters pasted from outside the page", p.Len),
 				Values: map[string]float64{"len": float64(p.Len)},
 			})
@@ -271,13 +298,13 @@ func (c computation) pasteThenPass() Signal {
 				if sub.ProblemID != tl.ProblemID || sub.Kind != "submit" || !sub.Passed {
 					continue
 				}
-				gap := sub.At.Sub(p.At)
+				gap := sub.ClientAt.Sub(p.At)
 				if gap < 0 || gap > PasteThenPassWindow {
 					continue
 				}
 				s.Value = 1
 				s.Evidence = append(s.Evidence, Evidence{
-					ProblemID: tl.ProblemID, At: p.At, Seq: p.Seq,
+					ProblemID: tl.ProblemID, At: at(p.At), Seq: p.Seq,
 					Note:   fmt.Sprintf("%d characters pasted, passing submit %s later", p.Len, gap.Round(time.Second)),
 					Values: map[string]float64{"len": float64(p.Len), "seconds_to_pass": gap.Seconds()},
 				})
@@ -308,7 +335,7 @@ func (c computation) burstTyping() Signal {
 			if dur > BurstMinDuration && float64(chars)/dur.Seconds() > BurstRate {
 				burst += chars
 				s.Evidence = append(s.Evidence, Evidence{
-					ProblemID: tl.ProblemID, At: run[0].At, Seq: run[0].Seq,
+					ProblemID: tl.ProblemID, At: at(run[0].At), Seq: run[0].Seq,
 					Note:   fmt.Sprintf("%d characters in %s (%.1f chars/s)", chars, dur.Round(time.Second), float64(chars)/dur.Seconds()),
 					Values: map[string]float64{"chars": float64(chars), "seconds": dur.Seconds()},
 				})
@@ -342,26 +369,33 @@ func (c computation) editRatio() Signal {
 	s := Signal{Name: EditRatio}
 	var ins, del int
 	for _, tl := range c.orderedTimelines() {
+		var pins, pdel int
 		for _, e := range tl.Edits {
 			if e.FromPaste {
 				continue
 			}
-			ins += e.Inserted
-			del += e.Deleted
+			pins += e.Inserted
+			pdel += e.Deleted
+		}
+		ins += pins
+		del += pdel
+		if pins < MinTypedForEditRatio {
+			continue
+		}
+		ratio := float64(pdel) / float64(pins)
+		if ratio < LowEditRatio {
+			s.Evidence = append(s.Evidence, Evidence{
+				ProblemID: tl.ProblemID,
+				Note:      fmt.Sprintf("%d characters deleted against %d typed (ratio %.3f)", pdel, pins, ratio),
+				Values:    map[string]float64{"deleted": float64(pdel), "inserted": float64(pins), "ratio": ratio},
+			})
 		}
 	}
 	if ins < MinTypedForEditRatio {
 		s.Confidence = ConfidenceLow
 		return s
 	}
-	ratio := float64(del) / float64(ins)
-	s.Value = (LowEditRatio - ratio) / LowEditRatio
-	if s.Value > 0 {
-		s.Evidence = append(s.Evidence, Evidence{
-			Note:   fmt.Sprintf("%d characters deleted against %d typed (ratio %.3f)", del, ins, ratio),
-			Values: map[string]float64{"deleted": float64(del), "inserted": float64(ins), "ratio": ratio},
-		})
-	}
+	s.Value = (LowEditRatio - float64(del)/float64(ins)) / LowEditRatio
 	return s
 }
 
@@ -392,7 +426,7 @@ func (c computation) blurThenSolution() Signal {
 			}
 			s.Value = 1
 			s.Evidence = append(s.Evidence, Evidence{
-				ProblemID: tl.ProblemID, At: b.From, Seq: b.Seq,
+				ProblemID: tl.ProblemID, At: at(b.From), Seq: b.Seq,
 				Note: fmt.Sprintf("away %s, then %d%% of the final source within %s of returning",
 					away.Round(time.Second), int(share*100), BlurSolutionWindow),
 				Values: map[string]float64{"away_seconds": away.Seconds(), "share": share},
@@ -404,7 +438,8 @@ func (c computation) blurThenSolution() Signal {
 
 // speedVsDifficulty is how much faster than the band median the first
 // passing submit came, taking the fastest problem: 0 at or past the median,
-// approaching 1 for an instant pass.
+// approaching 1 for an instant pass. Durations are measured on the server
+// clock only, which the candidate cannot set.
 func (c computation) speedVsDifficulty() Signal {
 	s := Signal{Name: SpeedVsDifficulty}
 	for _, p := range c.problems {
@@ -419,8 +454,8 @@ func (c computation) speedVsDifficulty() Signal {
 			continue
 		}
 		start := c.in.StartedAt
-		if tl := c.timelines[p.ID]; tl != nil && (start.IsZero() || tl.First.Before(start)) {
-			start = tl.First
+		if tl := c.timelines[p.ID]; tl != nil && (start.IsZero() || tl.FirstServer.Before(start)) {
+			start = tl.FirstServer
 		}
 		if start.IsZero() {
 			s.Confidence = ConfidenceLow
@@ -439,7 +474,7 @@ func (c computation) speedVsDifficulty() Signal {
 			s.Value = value
 		}
 		s.Evidence = append(s.Evidence, Evidence{
-			ProblemID: p.ID, At: first.At,
+			ProblemID: p.ID, At: at(first.At), Seq: first.Seq,
 			Note:   fmt.Sprintf("first pass after %s on a %s problem (band median %s)", took.Round(time.Second), p.Difficulty, median),
 			Values: map[string]float64{"seconds": took.Seconds(), "median_seconds": median.Seconds()},
 		})
@@ -456,22 +491,31 @@ func (c computation) referenceSimilarity() Signal {
 		if p.FinalSource == "" {
 			continue
 		}
-		own := shingles(p.FinalSource)
-		if len(own) == 0 {
+		own, tokens := shingles(p.FinalSource)
+		if tokens < MinTokensForSimilarity {
 			continue
 		}
 		var best float64
 		var against string
+		sameLanguage := func(src Source) bool {
+			return p.Language == "" || strings.EqualFold(src.Language, p.Language)
+		}
 		for _, ref := range p.References {
+			if !sameLanguage(ref) {
+				continue
+			}
 			compared = true
-			if sim := dice(own, shingles(ref)); sim > best {
-				best, against = sim, "reference solution"
+			if sh, _ := shingles(ref.Source); dice(own, sh) > best {
+				best, against = dice(own, sh), "reference solution"
 			}
 		}
 		for _, other := range p.Others {
+			if !sameLanguage(other) {
+				continue
+			}
 			compared = true
-			if sim := dice(own, shingles(other)); sim > best {
-				best, against = sim, "another candidate's submission"
+			if sh, _ := shingles(other.Source); dice(own, sh) > best {
+				best, against = dice(own, sh), "another candidate's submission"
 			}
 		}
 		if against == "" {
@@ -481,9 +525,9 @@ func (c computation) referenceSimilarity() Signal {
 			s.Value = best
 		}
 		s.Evidence = append(s.Evidence, Evidence{
-			ProblemID: p.ID,
-			Note:      fmt.Sprintf("%.0f%% similar to %s", best*100, against),
-			Values:    map[string]float64{"similarity": best},
+			ProblemID: p.ID, Seq: c.lastSubmitSeq(p.ID),
+			Note:   fmt.Sprintf("%.0f%% similar to %s", best*100, against),
+			Values: map[string]float64{"similarity": best},
 		})
 	}
 	if !compared {
@@ -492,16 +536,29 @@ func (c computation) referenceSimilarity() Signal {
 	return s
 }
 
+// lastSubmitSeq is the seq of the problem's last submit event, which is
+// where the compared source was sent from; zero when the stream has none.
+func (c computation) lastSubmitSeq(problemID uuid.UUID) int64 {
+	var seq int64
+	for _, sub := range c.in.Submissions {
+		if sub.ProblemID == problemID && sub.Kind == "submit" && sub.Seq > seq {
+			seq = sub.Seq
+		}
+	}
+	return seq
+}
+
 var tokenRe = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*|\d+(?:\.\d+)?|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\sA-Za-z0-9_]`)
 
 // shingleSize is the token n-gram the similarity is measured over; three
 // tokens is long enough that shared idioms do not match on their own.
 const shingleSize = 3
 
-// shingles tokenizes source and returns its token trigram multiset with
-// identifiers normalized to one placeholder, so renaming variables does not
-// hide a copy, while keywords, literals, and structure still have to match.
-func shingles(src string) map[string]int {
+// shingles tokenizes source and returns its token trigram multiset, and the
+// token count, with identifiers normalized to one placeholder, so renaming
+// variables does not hide a copy, while keywords, literals, and structure
+// still have to match.
+func shingles(src string) (map[string]int, int) {
 	raw := tokenRe.FindAllString(src, -1)
 	tokens := make([]string, 0, len(raw))
 	for _, t := range raw {
@@ -519,12 +576,12 @@ func shingles(src string) map[string]int {
 		if len(tokens) > 0 {
 			out[strings.Join(tokens, " ")]++
 		}
-		return out
+		return out, len(tokens)
 	}
 	for i := 0; i+shingleSize <= len(tokens); i++ {
 		out[strings.Join(tokens[i:i+shingleSize], " ")]++
 	}
-	return out
+	return out, len(tokens)
 }
 
 // keywords is the union of the supported languages' reserved words, kept as

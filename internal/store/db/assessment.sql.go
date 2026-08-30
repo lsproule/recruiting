@@ -803,6 +803,40 @@ func (q *Queries) GetProblemByTitle(ctx context.Context, arg GetProblemByTitlePa
 	return i, err
 }
 
+const getReviewForAttempt = `-- name: GetReviewForAttempt :one
+select r.id, r.org_id, r.attempt_id, r.vetter_id, r.verdict, r.notes, r.created_at,
+    u.name as vetter_name
+from review r join org_user u on u.id = r.vetter_id
+where r.attempt_id = $1
+`
+
+type GetReviewForAttemptRow struct {
+	ID         uuid.UUID
+	OrgID      uuid.UUID
+	AttemptID  uuid.UUID
+	VetterID   uuid.UUID
+	Verdict    string
+	Notes      *string
+	CreatedAt  pgtype.Timestamptz
+	VetterName string
+}
+
+func (q *Queries) GetReviewForAttempt(ctx context.Context, attemptID uuid.UUID) (GetReviewForAttemptRow, error) {
+	row := q.db.QueryRow(ctx, getReviewForAttempt, attemptID)
+	var i GetReviewForAttemptRow
+	err := row.Scan(
+		&i.ID,
+		&i.OrgID,
+		&i.AttemptID,
+		&i.VetterID,
+		&i.Verdict,
+		&i.Notes,
+		&i.CreatedAt,
+		&i.VetterName,
+	)
+	return i, err
+}
+
 const getSubmission = `-- name: GetSubmission :one
 select id, org_id, attempt_id, problem_id, kind, language, source, status, result, score, created_at, updated_at from submission where id = $1 and attempt_id = $2
 `
@@ -963,6 +997,48 @@ func (q *Queries) ListAttemptEvents(ctx context.Context, attemptID uuid.UUID) ([
 	return items, nil
 }
 
+const listAttemptEventsAfter = `-- name: ListAttemptEventsAfter :many
+select id, org_id, attempt_id, seq, kind, payload, client_ts, server_ts, problem_id from attempt_event where attempt_id = $1 and seq > $2 order by seq limit $3::int
+`
+
+type ListAttemptEventsAfterParams struct {
+	AttemptID uuid.UUID
+	Seq       int64
+	RowLimit  int32
+}
+
+// One page of the recording, in seq order: the replay viewer pages through
+// the stream rather than loading a whole sitting at once.
+func (q *Queries) ListAttemptEventsAfter(ctx context.Context, arg ListAttemptEventsAfterParams) ([]AttemptEvent, error) {
+	rows, err := q.db.Query(ctx, listAttemptEventsAfter, arg.AttemptID, arg.Seq, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AttemptEvent{}
+	for rows.Next() {
+		var i AttemptEvent
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrgID,
+			&i.AttemptID,
+			&i.Seq,
+			&i.Kind,
+			&i.Payload,
+			&i.ClientTs,
+			&i.ServerTs,
+			&i.ProblemID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAttemptSources = `-- name: ListAttemptSources :many
 select attempt_id, org_id, problem_id, language, source, updated_at from attempt_source where attempt_id = $1 order by problem_id
 `
@@ -983,6 +1059,68 @@ func (q *Queries) ListAttemptSources(ctx context.Context, attemptID uuid.UUID) (
 			&i.Language,
 			&i.Source,
 			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAttemptSummariesForApplication = `-- name: ListAttemptSummariesForApplication :many
+select t.id as attempt_id, t.stage_id, t.status, t.score, t.risk_score, t.error_count, t.finished_at,
+    st.name as stage_name, r.verdict as verdict, r.notes as review_notes,
+    r.created_at as reviewed_at, u.name as vetter_name
+from attempt t
+join stage st on st.id = t.stage_id
+left join review r on r.attempt_id = t.id
+left join org_user u on u.id = r.vetter_id
+where t.application_id = $1
+order by t.created_at
+`
+
+type ListAttemptSummariesForApplicationRow struct {
+	AttemptID   uuid.UUID
+	StageID     uuid.UUID
+	Status      string
+	Score       pgtype.Numeric
+	RiskScore   pgtype.Numeric
+	ErrorCount  int32
+	FinishedAt  pgtype.Timestamptz
+	StageName   string
+	Verdict     *string
+	ReviewNotes *string
+	ReviewedAt  pgtype.Timestamptz
+	VetterName  *string
+}
+
+// The score and verdict of every attempt on an application, for the
+// recruiter's summary of it.
+func (q *Queries) ListAttemptSummariesForApplication(ctx context.Context, applicationID uuid.UUID) ([]ListAttemptSummariesForApplicationRow, error) {
+	rows, err := q.db.Query(ctx, listAttemptSummariesForApplication, applicationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAttemptSummariesForApplicationRow{}
+	for rows.Next() {
+		var i ListAttemptSummariesForApplicationRow
+		if err := rows.Scan(
+			&i.AttemptID,
+			&i.StageID,
+			&i.Status,
+			&i.Score,
+			&i.RiskScore,
+			&i.ErrorCount,
+			&i.FinishedAt,
+			&i.StageName,
+			&i.Verdict,
+			&i.ReviewNotes,
+			&i.ReviewedAt,
+			&i.VetterName,
 		); err != nil {
 			return nil, err
 		}
@@ -1063,6 +1201,32 @@ func (q *Queries) ListDueAttempts(ctx context.Context, expiresAt pgtype.Timestam
 	return items, nil
 }
 
+const listEditedProblems = `-- name: ListEditedProblems :many
+select distinct problem_id from attempt_event where attempt_id = $1 and kind = 'edit' and problem_id is not null
+`
+
+// The problems the recording holds an edit for. The rest never changed, so
+// the text still synced for them is the text they started from.
+func (q *Queries) ListEditedProblems(ctx context.Context, attemptID uuid.UUID) ([]uuid.NullUUID, error) {
+	rows, err := q.db.Query(ctx, listEditedProblems, attemptID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.NullUUID{}
+	for rows.Next() {
+		var problem_id uuid.NullUUID
+		if err := rows.Scan(&problem_id); err != nil {
+			return nil, err
+		}
+		items = append(items, problem_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listIntegritySignals = `-- name: ListIntegritySignals :many
 select id, org_id, attempt_id, name, value, weight, confidence, evidence, created_at from integrity_signal where attempt_id = $1 order by name
 `
@@ -1098,14 +1262,17 @@ func (q *Queries) ListIntegritySignals(ctx context.Context, attemptID uuid.UUID)
 }
 
 const listOtherProblemSubmits = `-- name: ListOtherProblemSubmits :many
-select distinct on (attempt_id) attempt_id, source from submission
-where problem_id = $1 and attempt_id <> $2 and kind = 'submit'
-order by attempt_id, created_at desc
+select attempt_id, source from (
+    select distinct on (attempt_id) attempt_id, source, created_at from submission
+    where problem_id = $1 and attempt_id <> $2 and kind = 'submit' and language = $3
+    order by attempt_id, created_at desc
+) latest order by created_at desc limit 200
 `
 
 type ListOtherProblemSubmitsParams struct {
 	ProblemID uuid.UUID
 	AttemptID uuid.UUID
+	Language  string
 }
 
 type ListOtherProblemSubmitsRow struct {
@@ -1113,10 +1280,11 @@ type ListOtherProblemSubmitsRow struct {
 	Source    string
 }
 
-// The latest submit of the problem by every other attempt RLS lets the
-// caller see, which is every attempt of the org.
+// The latest submit of the problem, in the language, by each of the 200
+// most recent other attempts RLS lets the caller see (every attempt of
+// the org).
 func (q *Queries) ListOtherProblemSubmits(ctx context.Context, arg ListOtherProblemSubmitsParams) ([]ListOtherProblemSubmitsRow, error) {
-	rows, err := q.db.Query(ctx, listOtherProblemSubmits, arg.ProblemID, arg.AttemptID)
+	rows, err := q.db.Query(ctx, listOtherProblemSubmits, arg.ProblemID, arg.AttemptID, arg.Language)
 	if err != nil {
 		return nil, err
 	}
@@ -1236,6 +1404,77 @@ func (q *Queries) ListTestCases(ctx context.Context, problemID uuid.UUID) ([]Tes
 	return items, nil
 }
 
+const listVetterAttemptReviews = `-- name: ListVetterAttemptReviews :many
+select t.id as attempt_id, t.application_id, t.stage_id, t.status, t.score, t.risk_score,
+    t.error_count, t.recording_status, t.finished_at,
+    c.name as candidate_name, c.email as candidate_email,
+    j.title as job_title, st.name as stage_name, r.verdict as verdict
+from attempt t
+join application a on a.id = t.application_id
+join candidate c on c.id = a.candidate_id
+join job j on j.id = a.job_id
+join stage st on st.id = t.stage_id
+left join review r on r.attempt_id = t.id
+where t.status in ('scored', 'reviewed')
+  and coalesce(a.vetter_id, st.default_vetter_id) = $1
+order by t.finished_at desc nulls last, t.id
+`
+
+type ListVetterAttemptReviewsRow struct {
+	AttemptID       uuid.UUID
+	ApplicationID   uuid.UUID
+	StageID         uuid.UUID
+	Status          string
+	Score           pgtype.Numeric
+	RiskScore       pgtype.Numeric
+	ErrorCount      int32
+	RecordingStatus string
+	FinishedAt      pgtype.Timestamptz
+	CandidateName   string
+	CandidateEmail  string
+	JobTitle        string
+	StageName       string
+	Verdict         *string
+}
+
+// The closed attempts waiting on the signed-in vetter, with their verdict if
+// one is filed. The application's own vetter decides; until one is set the
+// stage's default stands in, the same rule the scorecard queue uses.
+func (q *Queries) ListVetterAttemptReviews(ctx context.Context, vetterID uuid.NullUUID) ([]ListVetterAttemptReviewsRow, error) {
+	rows, err := q.db.Query(ctx, listVetterAttemptReviews, vetterID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListVetterAttemptReviewsRow{}
+	for rows.Next() {
+		var i ListVetterAttemptReviewsRow
+		if err := rows.Scan(
+			&i.AttemptID,
+			&i.ApplicationID,
+			&i.StageID,
+			&i.Status,
+			&i.Score,
+			&i.RiskScore,
+			&i.ErrorCount,
+			&i.RecordingStatus,
+			&i.FinishedAt,
+			&i.CandidateName,
+			&i.CandidateEmail,
+			&i.JobTitle,
+			&i.StageName,
+			&i.Verdict,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const scoreAttempt = `-- name: ScoreAttempt :one
 update attempt set status = 'scored', score = $2, problem_scores = $3, error_count = $4,
     recording_status = $5, recording_blob_key = $6, updated_at = now()
@@ -1299,6 +1538,15 @@ type SetAttemptLastEventSeqParams struct {
 
 func (q *Queries) SetAttemptLastEventSeq(ctx context.Context, arg SetAttemptLastEventSeqParams) error {
 	_, err := q.db.Exec(ctx, setAttemptLastEventSeq, arg.ID, arg.LastEventSeq)
+	return err
+}
+
+const setAttemptReviewed = `-- name: SetAttemptReviewed :exec
+update attempt set status = 'reviewed', updated_at = now() where id = $1 and status in ('scored', 'reviewed')
+`
+
+func (q *Queries) SetAttemptReviewed(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, setAttemptReviewed, id)
 	return err
 }
 
@@ -1501,4 +1749,43 @@ func (q *Queries) UpsertAttemptSource(ctx context.Context, arg UpsertAttemptSour
 		arg.UpdatedAt,
 	)
 	return err
+}
+
+const upsertReviewByAuthor = `-- name: UpsertReviewByAuthor :one
+insert into review (org_id, attempt_id, vetter_id, verdict, notes)
+values ($1, $2, $3, $4, $5)
+on conflict (attempt_id) do update set verdict = excluded.verdict, notes = excluded.notes
+where review.vetter_id = excluded.vetter_id
+returning id, org_id, attempt_id, vetter_id, verdict, notes, created_at
+`
+
+type UpsertReviewByAuthorParams struct {
+	OrgID     uuid.UUID
+	AttemptID uuid.UUID
+	VetterID  uuid.UUID
+	Verdict   string
+	Notes     *string
+}
+
+// One review per attempt. A second reviewer matches no row rather than
+// overwriting the verdict the first one filed.
+func (q *Queries) UpsertReviewByAuthor(ctx context.Context, arg UpsertReviewByAuthorParams) (Review, error) {
+	row := q.db.QueryRow(ctx, upsertReviewByAuthor,
+		arg.OrgID,
+		arg.AttemptID,
+		arg.VetterID,
+		arg.Verdict,
+		arg.Notes,
+	)
+	var i Review
+	err := row.Scan(
+		&i.ID,
+		&i.OrgID,
+		&i.AttemptID,
+		&i.VetterID,
+		&i.Verdict,
+		&i.Notes,
+		&i.CreatedAt,
+	)
+	return i, err
 }

@@ -36,7 +36,7 @@ func newScorecardFixture(t *testing.T) *scorecardFixture {
 		pf.stages[domain.StageInterview], pf.userID, pf.appID); err != nil {
 		t.Fatal(err)
 	}
-	f.cards = service.NewScorecardService(pf.st)
+	f.cards = service.NewScorecardService(pf.st, service.NewPoolService(pf.st))
 	f.criteria = []service.Criterion{
 		{Name: "Communication", Description: "Explains their work clearly"},
 		{Name: "Depth", Description: "Knows the tools they name"},
@@ -121,6 +121,34 @@ func TestAStrongYesIsAnnouncedOnceOnly(t *testing.T) {
 	}
 	if events != 1 {
 		t.Fatalf("strong-yes events after re-saving = %d, want 1", events)
+	}
+}
+
+// poolEntries counts the talent-pool entries the fixture's candidate holds.
+func (f *scorecardFixture) poolEntries(t *testing.T) int {
+	t.Helper()
+	var n int
+	if err := f.sys.QueryRow(context.Background(), `select count(*) from talent_pool_entry e
+		join application a on a.candidate_id = e.candidate_id where a.id = $1`, f.appID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func TestAStrongYesFilesTheCandidateInThePool(t *testing.T) {
+	f := newScorecardFixture(t)
+	ctx := context.Background()
+	if _, err := f.cards.Save(ctx, f.vetter(), f.input(service.OverallYes, 4, 4)); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.poolEntries(t); n != 0 {
+		t.Fatalf("pool entries after a plain yes = %d, want 0", n)
+	}
+	if _, err := f.cards.Save(ctx, f.vetter(), f.input(service.OverallStrongYes, 5, 5)); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.poolEntries(t); n != 1 {
+		t.Fatalf("pool entries after a strong yes = %d, want 1", n)
 	}
 }
 
@@ -220,5 +248,16 @@ func TestVetterAssignmentsShowScorecardStatus(t *testing.T) {
 	}
 	if len(rows) != 1 || !rows[0].Submitted || rows[0].Overall != service.OverallYes {
 		t.Fatalf("assignments after submit = %+v", rows)
+	}
+}
+
+func TestAnotherOrgsScorecardsAreNotFound(t *testing.T) {
+	f := newScorecardFixture(t)
+	stranger := service.Principal{Kind: service.PrincipalOrgUser, OrgID: uuid.New(), UserID: uuid.New(), Roles: []string{service.RoleRecruiter}}
+	if _, err := f.cards.List(context.Background(), stranger, f.appID); !errors.Is(err, service.ErrNotFound) {
+		t.Errorf("list across orgs = %v, want ErrNotFound", err)
+	}
+	if _, err := f.cards.List(context.Background(), stranger, uuid.New()); !errors.Is(err, service.ErrNotFound) {
+		t.Errorf("list of an unknown application = %v, want ErrNotFound", err)
 	}
 }

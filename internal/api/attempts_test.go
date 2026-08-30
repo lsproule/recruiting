@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"recruiting/internal/api"
 	"recruiting/internal/service"
 )
@@ -38,5 +40,32 @@ func TestAttemptRoutesRefuseARequestWithoutTheAssessmentCookie(t *testing.T) {
 		if resp.StatusCode != http.StatusUnauthorized {
 			t.Errorf("%s %s = %d, want 401", tc.method, tc.path, resp.StatusCode)
 		}
+	}
+}
+
+// TestGetAttemptRefusesAPathThatIsNotTheCookiesAttempt keeps one candidate's
+// cookie from reading another sitting's timer.
+func TestGetAttemptRefusesAPathThatIsNotTheCookiesAttempt(t *testing.T) {
+	mine, theirs := uuid.New(), uuid.New()
+	r := api.NewRouter()
+	api.MountAttempts(r.API, api.AttemptsDeps{
+		Attempts: service.NewAttemptService(nil, nil, ""),
+		Resolve: func(*http.Request) (service.Principal, bool) {
+			return service.Principal{
+				Kind: service.PrincipalMagicLink, OrgID: uuid.New(),
+				MagicPurpose: service.LinkAssessment, SubjectID: mine,
+			}, true
+		},
+	})
+	srv := httptest.NewServer(r.Mux)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/v1/attempts/" + theirs.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
 	}
 }

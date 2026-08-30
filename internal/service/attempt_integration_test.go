@@ -124,6 +124,55 @@ func TestInviteHandlerCreatesOneAttemptAndQueuesTheEmail(t *testing.T) {
 	}
 }
 
+func TestInviteQueuesAReminderThatOnlyFiresForAnUnstartedAttempt(t *testing.T) {
+	f := newAttemptFixture(t)
+	ctx := context.Background()
+	att := f.invite(t)
+
+	var scheduled time.Time
+	var payload string
+	if err := f.sys.QueryRow(ctx, `select scheduled_at, args->>'payload' from river_job where kind = $1 and args->>'payload' like '%' || $2 || '%'`,
+		queue.KindAssessmentRemind, att.ID.String()).Scan(&scheduled, &payload); err != nil {
+		t.Fatalf("reminder job: %v", err)
+	}
+	wantAt := att.InviteExpiresAt.Add(-service.AssessmentReminderLead)
+	if d := scheduled.Sub(wantAt); d < -time.Minute || d > time.Minute {
+		t.Errorf("reminder scheduled at %v, want %v (24h before the window closes)", scheduled, wantAt)
+	}
+	var p service.AssessmentRemindPayload
+	_ = json.Unmarshal([]byte(payload), &p)
+	if p.AttemptID != att.ID || p.OrgID != f.orgID || !strings.Contains(p.AssessmentURL, "https://example.test/") {
+		t.Fatalf("reminder payload = %+v", p)
+	}
+
+	h := service.AssessmentRemindHandler(f.st, f.q, "https://example.test/")
+	if err := h(ctx, queue.Job{Kind: queue.KindAssessmentRemind, Payload: []byte(payload)}); err != nil {
+		t.Fatalf("remind handler: %v", err)
+	}
+	if n := f.jobs(t, queue.KindEmailSend); n != 2 {
+		t.Fatalf("%d email jobs after the reminder, want the invite and the reminder", n)
+	}
+	var reminders int
+	if err := f.sys.QueryRow(ctx, `select count(*) from river_job where kind = $1 and args->'payload'->>'template' = $2 and args->>'payload' like '%' || $3 || '%'`,
+		queue.KindEmailSend, "assessment_reminder", f.orgID.String()).Scan(&reminders); err != nil {
+		t.Fatal(err)
+	}
+	if reminders != 1 {
+		t.Fatalf("%d assessment_reminder emails, want 1", reminders)
+	}
+
+	// Once the candidate has started, the reminder has nothing to say.
+	if _, err := f.attempts.Start(ctx, f.candidate(att.ID)); err != nil {
+		t.Fatal(err)
+	}
+	if err := h(ctx, queue.Job{Kind: queue.KindAssessmentRemind, Payload: []byte(payload)}); err != nil {
+		t.Fatalf("remind handler after start: %v", err)
+	}
+	if n := f.jobs(t, queue.KindEmailSend); n != 2 {
+		t.Errorf("%d email jobs after reminding a started attempt, want still 2", n)
+	}
+}
+
 func TestStartRefusesAnExpiredInvite(t *testing.T) {
 	f := newAttemptFixture(t)
 	att := f.invite(t)
@@ -395,5 +444,56 @@ func TestEventValidation(t *testing.T) {
 	late.Seq = 6
 	if _, err := f.attempts.RecordEvents(ctx, cand, att.ID, []service.AttemptEvent{late}); !errors.Is(err, service.ErrAttemptClosed) {
 		t.Errorf("batch two minutes after finish = %v, want ErrAttemptClosed", err)
+	}
+}
+
+// The island's last batch may land up to EventGrace after the close, so
+// finalization must not run before that window has passed.
+func TestFinishSchedulesFinalizeAfterTheEventGrace(t *testing.T) {
+	f := newAttemptFixture(t)
+	ctx := context.Background()
+	att := f.invite(t)
+	cand := f.candidate(att.ID)
+	if _, err := f.attempts.Start(ctx, cand); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.attempts.Finish(ctx, cand, att.ID); err != nil {
+		t.Fatal(err)
+	}
+	var scheduled time.Time
+	if err := f.sys.QueryRow(ctx, `select scheduled_at from river_job where kind = $1 and args->>'payload' like '%' || $2 || '%'`,
+		queue.KindAttemptFinalize, att.ID.String()).Scan(&scheduled); err != nil {
+		t.Fatalf("finalize job: %v", err)
+	}
+	if want := f.now.Add(service.EventGrace); !scheduled.Equal(want) {
+		t.Errorf("finalize scheduled at %v, want finished_at + grace = %v", scheduled, want)
+	}
+}
+
+// Once finalization has compacted the recording into object storage the
+// stream in Postgres is no longer the record; a late batch is refused even
+// inside the grace window rather than silently missing from the replay.
+func TestEventIngestRefusesOnceTheRecordingIsSealed(t *testing.T) {
+	f := newAttemptFixture(t)
+	ctx := context.Background()
+	att := f.invite(t)
+	cand := f.candidate(att.ID)
+	if _, err := f.attempts.Start(ctx, cand); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.attempts.Finish(ctx, cand, att.ID); err != nil {
+		t.Fatal(err)
+	}
+	ev := func(seq int64) service.AttemptEvent {
+		return service.AttemptEvent{Seq: seq, T: f.now.UnixMilli(), ProblemID: f.problem.ID, Type: "blur", Data: json.RawMessage(`{}`)}
+	}
+	if _, err := f.attempts.RecordEvents(ctx, cand, att.ID, []service.AttemptEvent{ev(1)}); err != nil {
+		t.Fatalf("event inside the grace window = %v, want accepted", err)
+	}
+	if _, err := f.sys.Exec(ctx, `update attempt set recording_blob_key = 'attempts/x/events.jsonl.gz' where id = $1`, att.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.attempts.RecordEvents(ctx, cand, att.ID, []service.AttemptEvent{ev(2)}); !errors.Is(err, service.ErrAttemptClosed) {
+		t.Fatalf("event after sealing = %v, want ErrAttemptClosed", err)
 	}
 }

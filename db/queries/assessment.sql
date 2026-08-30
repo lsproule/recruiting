@@ -183,8 +183,70 @@ select * from integrity_signal where attempt_id = $1 order by name;
 update attempt set risk_score = $2, updated_at = now() where id = $1;
 
 -- name: ListOtherProblemSubmits :many
--- The latest submit of the problem by every other attempt RLS lets the
--- caller see, which is every attempt of the org.
-select distinct on (attempt_id) attempt_id, source from submission
-where problem_id = $1 and attempt_id <> $2 and kind = 'submit'
-order by attempt_id, created_at desc;
+-- The latest submit of the problem, in the language, by each of the 200
+-- most recent other attempts RLS lets the caller see (every attempt of
+-- the org).
+select attempt_id, source from (
+    select distinct on (attempt_id) attempt_id, source, created_at from submission
+    where problem_id = $1 and attempt_id <> $2 and kind = 'submit' and language = $3
+    order by attempt_id, created_at desc
+) latest order by created_at desc limit 200;
+
+-- name: ListVetterAttemptReviews :many
+-- The closed attempts waiting on the signed-in vetter, with their verdict if
+-- one is filed. The application's own vetter decides; until one is set the
+-- stage's default stands in, the same rule the scorecard queue uses.
+select t.id as attempt_id, t.application_id, t.stage_id, t.status, t.score, t.risk_score,
+    t.error_count, t.recording_status, t.finished_at,
+    c.name as candidate_name, c.email as candidate_email,
+    j.title as job_title, st.name as stage_name, r.verdict as verdict
+from attempt t
+join application a on a.id = t.application_id
+join candidate c on c.id = a.candidate_id
+join job j on j.id = a.job_id
+join stage st on st.id = t.stage_id
+left join review r on r.attempt_id = t.id
+where t.status in ('scored', 'reviewed')
+  and coalesce(a.vetter_id, st.default_vetter_id) = $1
+order by t.finished_at desc nulls last, t.id;
+
+-- name: GetReviewForAttempt :one
+select r.id, r.org_id, r.attempt_id, r.vetter_id, r.verdict, r.notes, r.created_at,
+    u.name as vetter_name
+from review r join org_user u on u.id = r.vetter_id
+where r.attempt_id = $1;
+
+-- name: UpsertReviewByAuthor :one
+-- One review per attempt. A second reviewer matches no row rather than
+-- overwriting the verdict the first one filed.
+insert into review (org_id, attempt_id, vetter_id, verdict, notes)
+values ($1, $2, $3, $4, $5)
+on conflict (attempt_id) do update set verdict = excluded.verdict, notes = excluded.notes
+where review.vetter_id = excluded.vetter_id
+returning *;
+
+-- name: SetAttemptReviewed :exec
+update attempt set status = 'reviewed', updated_at = now() where id = $1 and status in ('scored', 'reviewed');
+
+-- name: ListAttemptSummariesForApplication :many
+-- The score and verdict of every attempt on an application, for the
+-- recruiter's summary of it.
+select t.id as attempt_id, t.stage_id, t.status, t.score, t.risk_score, t.error_count, t.finished_at,
+    st.name as stage_name, r.verdict as verdict, r.notes as review_notes,
+    r.created_at as reviewed_at, u.name as vetter_name
+from attempt t
+join stage st on st.id = t.stage_id
+left join review r on r.attempt_id = t.id
+left join org_user u on u.id = r.vetter_id
+where t.application_id = $1
+order by t.created_at;
+
+-- name: ListAttemptEventsAfter :many
+-- One page of the recording, in seq order: the replay viewer pages through
+-- the stream rather than loading a whole sitting at once.
+select * from attempt_event where attempt_id = $1 and seq > $2 order by seq limit sqlc.arg(row_limit)::int;
+
+-- name: ListEditedProblems :many
+-- The problems the recording holds an edit for. The rest never changed, so
+-- the text still synced for them is the text they started from.
+select distinct problem_id from attempt_event where attempt_id = $1 and kind = 'edit' and problem_id is not null;

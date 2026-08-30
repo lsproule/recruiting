@@ -8,11 +8,9 @@ import (
 	"syscall"
 
 	"recruiting/internal/config"
+	"recruiting/internal/runner/server"
 	"recruiting/internal/store"
 )
-
-// The runner mode is still a stub: it proves configuration loads and reports
-// itself until its subsystem lands.
 
 func runServe(logger *slog.Logger, cfg *config.Config, _ []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -26,9 +24,29 @@ func runWorker(logger *slog.Logger, cfg *config.Config, _ []string) error {
 	return worker(ctx, logger, cfg)
 }
 
+// runRunner starts the sandboxed execution service and, alongside it, its
+// own /metrics listener: runRunner's own package (internal/runner/server) is
+// out of this task's scope, so the metrics endpoint the observability
+// contract asks for is served from a second, dedicated listener rather than
+// from the runner's own mux.
 func runRunner(logger *slog.Logger, cfg *config.Config, _ []string) error {
-	logger.Info("configuration loaded", "runner_url", cfg.RunnerURL)
-	return nil
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	metricsErrc := make(chan error, 1)
+	go func() { metricsErrc <- serveMetrics(ctx, logger, metricsAddr()) }()
+
+	runErr := server.Run(ctx, logger, server.ConfigFromEnv(cfg.RunnerSecret))
+	// server.Run can return before ctx is ever cancelled — a startup
+	// failure such as the configured OCI runtime being unavailable returns
+	// at once. stop() here (safe to call more than once) is what tells the
+	// metrics listener to shut down in that case, so waiting on it below
+	// cannot deadlock against a signal that will never arrive.
+	stop()
+	if err := <-metricsErrc; err != nil && runErr == nil {
+		return fmt.Errorf("runner: %w", err)
+	}
+	return runErr
 }
 
 // runMigrate applies or rolls back migrations. It connects as the schema

@@ -19,22 +19,29 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"recruiting/internal/queue"
 	"recruiting/internal/service"
 	"recruiting/internal/store"
 	"recruiting/internal/web/auth"
 	"recruiting/internal/web/layout"
 	"recruiting/internal/web/middleware"
 	"recruiting/internal/web/pipeline"
+	"recruiting/internal/web/pool"
+	"recruiting/internal/web/reviews"
+	"recruiting/internal/web/scorecards"
 )
 
 const testPassword = "hunter2-long-enough"
 
 type fixture struct {
 	srv                         *httptest.Server
+	sys                         *pgxpool.Pool
 	orgID, jobID, appID         uuid.UUID
 	generic, interview, assess  uuid.UUID
 	rejected                    uuid.UUID
+	vetterID                    uuid.UUID
 	recruiterEmail, vetterEmail string
+	clientEmail                 string
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -62,9 +69,10 @@ func newFixture(t *testing.T) *fixture {
 	}
 	t.Cleanup(st.Close)
 
-	f := &fixture{orgID: uuid.New(), jobID: uuid.New(), appID: uuid.New(), generic: uuid.New(), interview: uuid.New(), assess: uuid.New(), rejected: uuid.New()}
+	f := &fixture{sys: sys, orgID: uuid.New(), jobID: uuid.New(), appID: uuid.New(), generic: uuid.New(), interview: uuid.New(), assess: uuid.New(), rejected: uuid.New()}
 	f.recruiterEmail = "rec-" + f.orgID.String() + "@example.com"
 	f.vetterEmail = "vet-" + f.orgID.String() + "@example.com"
+	f.clientEmail = "client-" + f.orgID.String() + "@example.com"
 	exec := func(sql string, args ...any) {
 		t.Helper()
 		if _, err := sys.Exec(ctx, sql, args...); err != nil {
@@ -76,12 +84,16 @@ func newFixture(t *testing.T) *fixture {
 	hash, _ := service.HashPassword(testPassword)
 	for _, seed := range []struct{ email, role string }{{f.recruiterEmail, service.RoleRecruiter}, {f.vetterEmail, service.RoleVetter}} {
 		id := uuid.New()
+		if seed.role == service.RoleVetter {
+			f.vetterID = id
+		}
 		exec(`insert into org_user (id, org_id, email, name) values ($1, $2, $3, $3)`, id, f.orgID, seed.email)
 		exec(`insert into org_user_role (org_user_id, org_id, role) values ($1, $2, $3)`, id, f.orgID, seed.role)
 		exec(`insert into org_user_credential (org_user_id, org_id, password_hash) values ($1, $2, $3)`, id, f.orgID, hash)
 	}
 	companyID := uuid.New()
 	exec(`insert into client_company (id, org_id, name) values ($1, $2, 'Globex')`, companyID, f.orgID)
+	exec(`insert into client_user (id, org_id, client_company_id, email, name) values ($1, $2, $3, $4, 'Carl Client')`, uuid.New(), f.orgID, companyID, f.clientEmail)
 	exec(`insert into job (id, org_id, client_company_id, title, slug, status) values ($1, $2, $3, 'Senior Go Engineer', $4, 'open')`, f.jobID, f.orgID, companyID, "go-"+f.orgID.String())
 	exec(`insert into stage (id, org_id, job_id, position, name, kind) values ($1, $2, $3, 1, 'Applied', 'generic')`, f.generic, f.orgID, f.jobID)
 	exec(`insert into stage (id, org_id, job_id, position, name, kind) values ($1, $2, $3, 2, 'Phone screen', 'interview')`, f.interview, f.orgID, f.jobID)
@@ -97,8 +109,19 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatal(err)
 	}
 	layout.MountStatic(mux)
-	// No queue: the screens are under test, not the side effects.
-	pipeline.Mount(mux, pipeline.Deps{Applications: service.NewApplicationService(st, nil, "https://example.test"), Org: service.NewOrgService(st)})
+	// The application service gets no queue: the screens are under test,
+	// not the move side effects. The release service gets one, since the
+	// client's notice is the point of the release handler.
+	q, err := queue.New(st.Pool(), queue.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pipeline.Mount(mux, pipeline.Deps{
+		Applications: service.NewApplicationService(st, nil, "https://example.test"),
+		Release:      service.NewReleaseService(st, q, "https://example.test"),
+		Schedule:     service.NewScheduleService(st, nil, "https://example.test"),
+		Org:          service.NewOrgService(st),
+	})
 	f.srv = httptest.NewServer(mux)
 	t.Cleanup(f.srv.Close)
 	return f
@@ -277,12 +300,64 @@ func TestListFiltersAndReleaseEvents(t *testing.T) {
 	if !strings.Contains(body, "Released to the client") || !strings.Contains(body, "Hide from client") {
 		t.Errorf("released page: %q", body)
 	}
+	var notices int
+	if err := f.sys.QueryRow(context.Background(),
+		`select count(*) from river_job where kind = $1 and args->'payload'->>'template' = $2 and args->'payload'->>'to' = $3`,
+		queue.KindEmailSend, "client_release_notice", f.clientEmail).Scan(&notices); err != nil {
+		t.Fatal(err)
+	}
+	if notices != 1 {
+		t.Errorf("%d client_release_notice emails queued for the client, want 1", notices)
+	}
 	if res, _ := s.post("/app/applications/"+f.appID.String()+"/unrelease", url.Values{}, false); res.StatusCode != http.StatusSeeOther {
 		t.Fatalf("unrelease = %d", res.StatusCode)
 	}
 	_, body = s.get("/app/applications/" + f.appID.String())
 	if !strings.Contains(body, "Hidden from the client") {
 		t.Errorf("unreleased page lacks the event: %q", body)
+	}
+}
+
+func TestApplicationPageEmbedsSummariesAndAssignsAVetter(t *testing.T) {
+	f := newFixture(t)
+	s := f.browser(t)
+	s.login(f.recruiterEmail)
+
+	res, body := s.get("/app/applications/" + f.appID.String())
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("application page = %d", res.StatusCode)
+	}
+	for _, want := range []string{
+		`hx-get="` + scorecards.SummaryPath(f.appID) + `"`,
+		`hx-get="` + reviews.SummaryPath(f.appID) + `"`,
+		`hx-post="` + pool.FlagPath(f.appID) + `"`,
+		`name="vetter_id"`, f.vetterEmail,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("application page lacks %q", want)
+		}
+	}
+	if strings.Contains(body, f.recruiterEmail+"</option>") {
+		t.Errorf("the assign select offers a recruiter as an interviewer")
+	}
+
+	res, body = s.post("/app/applications/"+f.appID.String()+"/assign", url.Values{"vetter_id": {f.vetterID.String()}}, false)
+	if res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("assign = %d %s", res.StatusCode, body)
+	}
+	var assigned uuid.NullUUID
+	if err := f.sys.QueryRow(context.Background(), `select vetter_id from application where id = $1`, f.appID).Scan(&assigned); err != nil {
+		t.Fatal(err)
+	}
+	if !assigned.Valid || assigned.UUID != f.vetterID {
+		t.Errorf("application vetter_id = %v, want %s", assigned, f.vetterID)
+	}
+
+	// A vetter reads the page without the recruiter's assign form.
+	v := f.browser(t)
+	v.login(f.vetterEmail)
+	if res, body := v.get("/app/applications/" + f.appID.String()); res.StatusCode != http.StatusOK || strings.Contains(body, `name="vetter_id"`) {
+		t.Errorf("vetter's view = %d, assign form shown: %v", res.StatusCode, strings.Contains(body, `name="vetter_id"`))
 	}
 }
 

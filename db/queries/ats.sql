@@ -35,7 +35,7 @@ insert into stage (org_id, job_id, position, name, kind, terminal_status, unblin
 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning *;
 
 -- name: UpdateStage :one
-update stage set name = $2, kind = $3, terminal_status = $4, unblind = $5 where id = $1 returning *;
+update stage set name = $2, kind = $3, terminal_status = $4, unblind = $5, default_vetter_id = $6 where id = $1 returning *;
 
 -- name: SetStagePosition :exec
 update stage set position = $2 where id = $1;

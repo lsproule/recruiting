@@ -126,7 +126,7 @@ func newFixture(t *testing.T) *fixture {
 	}
 
 	resumes := service.NewResumeService(st, &memBlob{objects: map[string][]byte{}})
-	f.candidates = service.NewCandidateService(st, resumes)
+	f.candidates = service.NewCandidateService(st, resumes, nil)
 	mux := chi.NewMux()
 	// The body cap goes on before CSRF, which is where an unbounded upload
 	// would otherwise be parsed.

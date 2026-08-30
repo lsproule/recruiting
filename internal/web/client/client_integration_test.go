@@ -478,9 +478,15 @@ func TestConcurrentReleasesRecordAndNotifyOnce(t *testing.T) {
 
 type brokenQueue struct{}
 
-func (brokenQueue) Enqueue(context.Context, pgx.Tx, string, any) error {
-	return errors.New("queue down")
+func (brokenQueue) Enqueue(context.Context, pgx.Tx, string, any) (int64, error) {
+	return 0, errors.New("queue down")
 }
+
+func (brokenQueue) EnqueueAt(context.Context, pgx.Tx, string, any, time.Time) (int64, error) {
+	return 0, errors.New("queue down")
+}
+
+func (brokenQueue) CancelTx(context.Context, pgx.Tx, int64) error { return nil }
 
 func TestReleaseRollsBackWhenTheNoticeCannotBeQueued(t *testing.T) {
 	f := newFixture(t)

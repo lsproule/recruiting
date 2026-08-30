@@ -298,6 +298,30 @@ func (q *Queries) RestoreTalentPoolEntry(ctx context.Context, id uuid.UUID) erro
 	return err
 }
 
+const retractTalentPoolEntryFromReview = `-- name: RetractTalentPoolEntryFromReview :execrows
+update talent_pool_entry e set removed_at = now(), updated_at = now()
+from application app
+where app.id = $1 and e.org_id = $2
+  and e.candidate_id = app.candidate_id and e.removed_at is null
+  and e.source = 'assessment_review' and not app.high_quality
+`
+
+type RetractTalentPoolEntryFromReviewParams struct {
+	ApplicationID uuid.UUID
+	OrgID         uuid.UUID
+}
+
+// Withdraws the entry a passing assessment review filed once that verdict is
+// amended down. Only an entry the review is the latest source of goes; one a
+// recruiter flagged, or whose application they marked high quality, stays.
+func (q *Queries) RetractTalentPoolEntryFromReview(ctx context.Context, arg RetractTalentPoolEntryFromReviewParams) (int64, error) {
+	result, err := q.db.Exec(ctx, retractTalentPoolEntryFromReview, arg.ApplicationID, arg.OrgID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const searchTalentPoolEntriesWithCandidate = `-- name: SearchTalentPoolEntriesWithCandidate :many
 select e.id, e.org_id, e.candidate_id, e.skills, e.seniority, e.location, e.remote_ok, e.best_scores, e.scorecard_summary, e.notes, e.source_job_ids, e.created_at, e.updated_at, e.removed_at, e.source, c.name as candidate_name, c.email as candidate_email
 from talent_pool_entry e

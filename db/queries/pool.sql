@@ -98,3 +98,13 @@ join application_event e on e.application_id = a.id
 join stage s on s.id = e.to_stage_id
 where a.client_company_id = $1 and a.status = 'rejected' and s.terminal_status = 'rejected'
 group by a.candidate_id;
+
+-- name: RetractTalentPoolEntryFromReview :execrows
+-- Withdraws the entry a passing assessment review filed once that verdict is
+-- amended down. Only an entry the review is the latest source of goes; one a
+-- recruiter flagged, or whose application they marked high quality, stays.
+update talent_pool_entry e set removed_at = now(), updated_at = now()
+from application app
+where app.id = sqlc.arg(application_id) and e.org_id = sqlc.arg(org_id)
+  and e.candidate_id = app.candidate_id and e.removed_at is null
+  and e.source = 'assessment_review' and not app.high_quality;

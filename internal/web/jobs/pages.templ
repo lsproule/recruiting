@@ -1,9 +1,14 @@
 package jobs
 
 import (
+	"github.com/google/uuid"
+
 	"recruiting/internal/domain"
 	"recruiting/internal/service"
+	"recruiting/internal/web/assess"
 	"recruiting/internal/web/layout"
+	"recruiting/internal/web/pool"
+	"recruiting/internal/web/scorecards"
 )
 
 templ jobsPage(page layout.Page, list []service.Job) {
@@ -109,19 +114,23 @@ templ jobFormPage(page layout.Page, f jobForm) {
 			</label>
 			<button type="submit">{ f.Submit }</button>
 		</form>
+		if f.Job.ID != uuid.Nil {
+			@pool.SuggestionsFragment(f.Job.ID)
+		}
 	}
 }
 
-templ pipelinePage(page layout.Page, job service.Job, stages []domain.Stage, csrf string, errMessage string) {
+templ pipelinePage(page layout.Page, job service.Job, stages []domain.Stage, vetters []service.OrgUser, csrf string, errMessage string) {
 	@layout.Base(page) {
 		<h1>{ job.Title } pipeline</h1>
 		<p><a href={ templ.SafeURL(Prefix + "/" + job.ID.String()) }>Back to the job</a></p>
-		@pipelineEditor(job, stages, csrf, errMessage)
+		@pipelineEditor(job, stages, vetters, csrf, errMessage)
 	}
 }
 
 // pipelineEditor is the htmx swap target: every stage change re-renders it.
-templ pipelineEditor(job service.Job, stages []domain.Stage, csrf string, errMessage string) {
+// vetters is who an interview stage may name as its default interviewer.
+templ pipelineEditor(job service.Job, stages []domain.Stage, vetters []service.OrgUser, csrf string, errMessage string) {
 	<section id="pipeline">
 		if errMessage != "" {
 			<p class="flash flash-error" role="alert">{ errMessage }</p>
@@ -151,7 +160,7 @@ templ pipelineEditor(job service.Job, stages []domain.Stage, csrf string, errMes
 		<h2>Stages</h2>
 		<table>
 			<thead>
-				<tr><th>#</th><th>Name</th><th>Kind</th><th>On entry</th><th></th></tr>
+				<tr><th>#</th><th>Name</th><th>Kind</th><th>On entry</th><th>Set up</th><th></th></tr>
 			</thead>
 			<tbody>
 				for _, s := range stages {
@@ -175,11 +184,27 @@ templ pipelineEditor(job service.Job, stages []domain.Stage, csrf string, errMes
 									<input type="checkbox" name="unblind" value="1" checked?={ s.Unblind }/>
 									unblind
 								</label>
+								if s.Kind == domain.StageInterview {
+									<select name="default_vetter_id" aria-label="Default interviewer">
+										<option value="">no default interviewer</option>
+										for _, v := range vetters {
+											<option value={ v.ID.String() } selected?={ v.ID == s.DefaultVetterID }>{ userLabel(v) }</option>
+										}
+									</select>
+								}
 								<button type="submit">Save</button>
 							</form>
 						</td>
 						<td>{ string(s.Kind) }</td>
 						<td>{ terminalLabel(s) }</td>
+						<td>
+							switch s.Kind {
+								case domain.StageInterview:
+									<a href={ templ.SafeURL(scorecards.RubricPath(job.ID, s.ID)) }>Rubric</a>
+								case domain.StageAssessment:
+									<a href={ templ.SafeURL(assess.AttachStagePath(job.ID, s.ID)) }>Assessment</a>
+							}
+						</td>
 						<td>
 							<form method="post" action={ templ.SafeURL(stagePath(job.ID.String(), s.ID.String()) + "/delete") }>
 								@layout.CSRFField(csrf)

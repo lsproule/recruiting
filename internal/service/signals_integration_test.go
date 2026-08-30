@@ -7,16 +7,23 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"recruiting/internal/domain"
 	"recruiting/internal/domain/signals"
 	"recruiting/internal/queue"
 	"recruiting/internal/service"
 )
+
+// pastedSolution is long enough to be compared for similarity and is the
+// fixture problem's reference solution.
+const pastedSolution = "def solve(a, b):\n    if a > b:\n        return a - b\n    return a + b\n\nprint(solve(1, 2))\nprint(3)\n"
 
 // Get serves the object so the signal computation can read the compacted
 // recording back.
@@ -38,11 +45,11 @@ func (f *executionFixture) pasteSession(t *testing.T, att service.Attempt) uuid.
 	cand := f.candidateOf(att.ID)
 	p := f.problems[0]
 	base := f.now.UnixMilli()
-	source := "print(3)"
+	source := pastedSolution
 	events := []service.AttemptEvent{
 		{Seq: 1, T: base, ProblemID: p.ID, Type: "focus", Data: json.RawMessage(`{}`)},
-		{Seq: 2, T: base + 5000, ProblemID: p.ID, Type: "paste", Data: json.RawMessage(`{"len":8,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","internal":false}`)},
-		{Seq: 3, T: base + 5100, ProblemID: p.ID, Type: "edit", Data: json.RawMessage(`{"changes":[[0,"print(3)"]]}`)},
+		{Seq: 2, T: base + 5000, ProblemID: p.ID, Type: "paste", Data: json.RawMessage(`{"len":` + fmt.Sprint(len(pastedSolution)) + `,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","internal":false}`)},
+		{Seq: 3, T: base + 5100, ProblemID: p.ID, Type: "edit", Data: json.RawMessage(`{"changes":[[0,` + string(mustJSON(strings.Split(pastedSolution, "\n"))[1:len(mustJSON(strings.Split(pastedSolution, "\n")))-1]) + `]]}`)},
 	}
 	if _, err := f.attempts.RecordEvents(ctx, cand, att.ID, events); err != nil {
 		t.Fatalf("record: %v", err)
@@ -108,7 +115,7 @@ func (f *executionFixture) signalRows(t *testing.T, attemptID uuid.UUID) (map[st
 }
 
 func TestSignalsComputeStoresEverySignalAndTheRiskScore(t *testing.T) {
-	f := newExecutionFixture(t, adderImport(t, "Signalled Adder"))
+	f := newExecutionFixture(t, pastedImport(t, "Signalled Adder"))
 	att := f.start(t)
 	f.pasteSession(t, att)
 	blob := newFakeBlob()
@@ -129,7 +136,7 @@ func TestSignalsComputeStoresEverySignalAndTheRiskScore(t *testing.T) {
 	if r := rows["paste_then_pass"]; r.value != 1 {
 		t.Errorf("paste_then_pass = %+v, want 1", r)
 	}
-	// The pasted source is the reference solution itself.
+	// The pasted source is the reference solution itself, in its language.
 	if r := rows["reference_similarity"]; r.value < 0.9 {
 		t.Errorf("reference_similarity = %+v, want a copy of the reference", r)
 	}
@@ -186,5 +193,45 @@ func TestSignalsComputeFallsBackToTheEventRowsAndFlagsAGap(t *testing.T) {
 	}
 	if risk == nil || *risk < 25 {
 		t.Errorf("risk = %v; a gap must not suppress the score", risk)
+	}
+}
+
+// pastedImport is the adder with pastedSolution as its reference solution.
+func pastedImport(t *testing.T, title string) domain.ImportProblem {
+	t.Helper()
+	escaped := strings.Trim(string(mustJSON(pastedSolution)), `"`)
+	parsed, err := domain.ParseProblemImport([]byte("[" + codeProblemJSON(title, escaped) + "]"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parsed[0]
+}
+
+func mustJSON(v any) []byte {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+// Only sources in the candidate's language are compared: a reference in
+// another language, however similar, says nothing.
+func TestSignalsComputeComparesWithinTheLanguage(t *testing.T) {
+	f := newExecutionFixture(t, pastedImport(t, "Polyglot Adder"))
+	att := f.start(t)
+	f.pasteSession(t, att)
+	if _, err := f.sys.Exec(context.Background(), `update problem_reference set language = 'go' where problem_id = $1`, f.problems[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.finalize(t, nil, att.ID, 0); err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+	if err := f.computeSignals(t, nil, att.ID); err != nil {
+		t.Fatalf("signals.compute: %v", err)
+	}
+	rows, _ := f.signalRows(t, att.ID)
+	if r := rows["reference_similarity"]; r.value != 0 || r.confidence != "low" {
+		t.Errorf("reference_similarity = %+v, want nothing comparable", r)
 	}
 }

@@ -149,7 +149,8 @@ func waitFor(t *testing.T, what string, timeout time.Duration, cond func() bool)
 func (f *fixture) enqueue(t *testing.T, q *queue.Client, kind string, payload any) {
 	t.Helper()
 	err := f.st.WithTx(context.Background(), principal{orgID: f.orgID}, func(ctx context.Context, tx *store.Tx) error {
-		return q.Enqueue(ctx, tx, kind, payload)
+		_, err := q.Enqueue(ctx, tx, kind, payload)
+		return err
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -181,7 +182,7 @@ func TestEnqueueIsTransactional(t *testing.T) {
 	rollback := uuid.NewString()
 	wantRollback := errors.New("changed my mind")
 	err = f.st.WithTx(context.Background(), principal{orgID: f.orgID}, func(ctx context.Context, tx *store.Tx) error {
-		if err := q.Enqueue(ctx, tx, queue.KindAttemptFinalize, map[string]string{"attempt_id": rollback}); err != nil {
+		if _, err := q.Enqueue(ctx, tx, queue.KindAttemptFinalize, map[string]string{"attempt_id": rollback}); err != nil {
 			return err
 		}
 		return wantRollback
@@ -283,8 +284,9 @@ func TestScheduledJobRunsAtItsTime(t *testing.T) {
 
 	runAt := time.Now().Add(3 * time.Second)
 	err = f.st.WithTx(context.Background(), principal{orgID: f.orgID}, func(ctx context.Context, tx *store.Tx) error {
-		return q.EnqueueAt(ctx, tx, queue.KindInterviewRemind,
+		_, err := q.EnqueueAt(ctx, tx, queue.KindInterviewRemind,
 			map[string]string{"slot_id": uuid.NewString(), "offset": "24h"}, runAt)
+		return err
 	})
 	if err != nil {
 		t.Fatal(err)

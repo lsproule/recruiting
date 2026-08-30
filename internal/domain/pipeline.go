@@ -63,6 +63,9 @@ type Stage struct {
 	Kind     StageKind
 	Unblind  bool
 	Terminal ApplicationStatus
+	// DefaultVetterID is the interviewer an interview stage assigns when the
+	// application names none; Nil when the stage has no default.
+	DefaultVetterID uuid.UUID
 }
 
 // Application is the subset of an application the move rules read.
