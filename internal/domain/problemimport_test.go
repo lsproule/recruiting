@@ -2,6 +2,7 @@ package domain_test
 
 import (
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -188,11 +189,60 @@ func TestParseProblemImportCapsBatchSize(t *testing.T) {
 	}
 }
 
-func TestParseProblemImportRequiresAReferencePerAllowedLanguage(t *testing.T) {
+// Fifteen languages make one reference per allowed language unauthorable, so
+// a problem only has to be proven solvable once.
+func TestParseProblemImportAcceptsOneReferenceForManyAllowedLanguages(t *testing.T) {
 	doc := strings.Replace(goodCode, `"allowed_languages": ["python"]`, `"allowed_languages": ["python", "go"]`, 1)
-	_, err := domain.ParseProblemImport([]byte(doc))
-	if err == nil || !strings.Contains(err.Error(), "go is allowed but has no reference solution") {
-		t.Fatalf("err = %v, want the unproven language named", err)
+	if _, err := domain.ParseProblemImport([]byte(doc)); err != nil {
+		t.Fatalf("a problem proven in one of its languages was rejected: %v", err)
+	}
+}
+
+func TestParseProblemImportNormalizesTheNodeLanguageID(t *testing.T) {
+	doc := strings.ReplaceAll(goodCode, `"python"`, `"node"`)
+	doc = strings.Replace(doc, "print(sum(map(int, input().split())))", "x", 1)
+	p := parseOne(t, doc)
+	if len(p.AllowedLanguages) != 1 || p.AllowedLanguages[0] != "javascript" {
+		t.Errorf("allowed_languages = %v, want [javascript]", p.AllowedLanguages)
+	}
+	if p.References[0].Language != "javascript" {
+		t.Errorf("reference language = %q, want javascript", p.References[0].Language)
+	}
+}
+
+func TestParseProblemImportExpandsAnyLanguage(t *testing.T) {
+	doc := strings.Replace(goodCode, `"allowed_languages": ["python"]`, `"allowed_languages": ["any"]`, 1)
+	p := parseOne(t, doc)
+	if len(p.AllowedLanguages) != len(domain.CodeLanguageIDs()) {
+		t.Fatalf("allowed_languages = %v, want the %d code languages", p.AllowedLanguages, len(domain.CodeLanguageIDs()))
+	}
+	for _, id := range domain.CodeLanguageIDs() {
+		if !slices.Contains(p.AllowedLanguages, id) {
+			t.Errorf("allowed_languages %v is missing %q", p.AllowedLanguages, id)
+		}
+	}
+
+	sqlDoc := `[{
+	  "kind": "sql",
+	  "title": "Count rows",
+	  "statement": "Count them.",
+	  "sql_schema": "create table t (id int);",
+	  "allowed_languages": ["any"],
+	  "reference_solutions": [{"language": "sql", "source": "select count(*) from t"}],
+	  "test_cases": [{"expected": "0", "visibility": "public"}]
+	}]`
+	sp := parseOne(t, sqlDoc)
+	if !slices.Equal(sp.AllowedLanguages, []string{"sql"}) {
+		t.Errorf("sql allowed_languages = %v, want [sql]", sp.AllowedLanguages)
+	}
+}
+
+func TestParseProblemImportAcceptsEveryRegisteredLanguage(t *testing.T) {
+	for _, id := range domain.CodeLanguageIDs() {
+		doc := strings.ReplaceAll(goodCode, `"python"`, `"`+id+`"`)
+		if _, err := domain.ParseProblemImport([]byte(doc)); err != nil {
+			t.Errorf("%s rejected: %v", id, err)
+		}
 	}
 }
 

@@ -93,3 +93,127 @@ func stageLabel(s domain.Stage) string {
 	}
 	return s.Name + " (" + string(s.Kind) + ")"
 }
+
+// candidateView is the candidate detail screen: the application, what its
+// assessment recorded, how the candidate fits the job, and the résumés on
+// file. Every part after the application is optional — the screen is drawn
+// for an application that has never been assessed too.
+type candidateView struct {
+	Detail  service.ApplicationDetail
+	Vetters []service.OrgUser
+	// Attempt is the sitting the screen replays, newest first; nil when the
+	// candidate has not sat one.
+	Attempt *service.AttemptReview
+	// ReplayConfig is the island's boot JSON, empty when there is nothing to
+	// replay.
+	ReplayConfig string
+	Fit          service.ApplicationFit
+	HasFit       bool
+	Resumes      []service.Resume
+	// Advance and Reject are the stages the header's two moves lead to; a Nil
+	// ID hides that button.
+	Advance domain.Stage
+	Reject  domain.Stage
+}
+
+// AssessmentSent reports whether an invite is already in flight, which is
+// what turns the "no assessment yet" card into a note about waiting.
+func (v candidateView) AssessmentSent() bool {
+	return v.Attempt != nil && (v.Attempt.Status == service.AttemptInvited || v.Attempt.Status == service.AttemptStarted)
+}
+
+// nextStage is the stage an advance moves to: the next one along the
+// pipeline that is not terminal. A candidate at the end of the pipeline
+// advances nowhere.
+func nextStage(d service.ApplicationDetail) domain.Stage {
+	after := false
+	for _, s := range d.Stages {
+		if s.ID == d.Application.StageID {
+			after = true
+			continue
+		}
+		if after && s.Kind != domain.StageTerminal {
+			return s
+		}
+	}
+	return domain.Stage{}
+}
+
+// rejectStage is the pipeline's terminal rejection, which the header's
+// Reject button moves to.
+func rejectStage(d service.ApplicationDetail) domain.Stage {
+	for _, s := range d.Stages {
+		if s.Kind == domain.StageTerminal && s.Terminal == domain.StatusRejected {
+			return s
+		}
+	}
+	return domain.Stage{}
+}
+
+// pct renders a 0–1 share as whole percent for a bar's width.
+func pct(v float64) string { return strconv.Itoa(int(v*100 + 0.5)) }
+
+// fitScore is a 0–1 fit on the 0–100 scale the screens read scores in.
+func fitScore(v float64) string { return strconv.Itoa(int(v*100 + 0.5)) }
+
+// weightLabel is a term's weight as the panel prints it: "w0.6".
+func weightLabel(w float64) string { return "w" + strconv.FormatFloat(w, 'f', -1, 64) }
+
+// scoreOf renders a stored score, or a dash when there is none.
+func scoreOf(v *float64) string {
+	if v == nil {
+		return "—"
+	}
+	return strconv.FormatFloat(*v, 'f', -1, 64)
+}
+
+// testResultClass marks a case's outcome so the table reads at a glance. A
+// case the runner never reported is unrun, not failed.
+func testResultClass(status string) string {
+	switch status {
+	case "pass":
+		return "result-pass"
+	case "":
+		return "result-unrun"
+	}
+	return "result-fail"
+}
+
+func testResultLabel(status string) string {
+	if status == "" {
+		return "not run"
+	}
+	return status
+}
+
+func ms(v int64) string {
+	if v <= 0 {
+		return "—"
+	}
+	return strconv.FormatInt(v, 10)
+}
+
+// caseLabel names a case: the author's own name, or its position when the
+// case was never named.
+func caseLabel(t service.ReviewTest) string {
+	if t.Name != "" {
+		return t.Name
+	}
+	return "Case " + strconv.Itoa(t.Position)
+}
+
+func resumePath(r service.Resume) string {
+	return "/app/candidates/" + r.CandidateID.String() + "/resumes/" + r.ID.String()
+}
+
+func day(t time.Time) string { return t.UTC().Format("2 Jan 2006") }
+
+func at(t time.Time) string {
+	if t.IsZero() {
+		return "not finished"
+	}
+	return t.UTC().Format("2 Jan 2006 15:04 UTC")
+}
+
+// num renders a plain number without trailing zeroes.
+func num(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }

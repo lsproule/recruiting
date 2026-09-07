@@ -165,7 +165,11 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatal(err)
 	}
 	layout.MountStatic(mux)
-	reviews.Mount(mux, reviews.Deps{Reviews: service.NewReviewService(st, service.NewPoolService(st), nil), Org: service.NewOrgService(st)})
+	reviews.Mount(mux, reviews.Deps{
+		Reviews:  service.NewReviewService(st, service.NewPoolService(st), nil),
+		Org:      service.NewOrgService(st),
+		Attempts: service.NewAttemptService(st, nil, "https://example.test"),
+	})
 	r.Mux.Mount("/", mux)
 	f.srv = httptest.NewServer(r.Mux)
 	t.Cleanup(f.srv.Close)
@@ -408,5 +412,48 @@ func TestTheManifestNeedsASession(t *testing.T) {
 	s := f.browser(t)
 	if res, _ := s.get(reviews.ManifestPath(f.attemptID)); res.StatusCode != http.StatusUnauthorized {
 		t.Errorf("manifest without a session = %d, want 401", res.StatusCode)
+	}
+}
+
+// TestSnapshotFramesAreServedToTheOrgOnly checks the endpoint the integrity
+// timeline's snapshot markers open. Without object storage there is no link
+// to sign, so the frames come back listed but unopenable — which is exactly
+// what the marker then says.
+func TestSnapshotFramesAreServedToTheOrgOnly(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	if _, err := f.sys.Exec(ctx,
+		`insert into attempt_snapshot (id, org_id, attempt_id, seq, taken_at, blob_key, bytes)
+		 values ($1, $2, $3, 4, now(), $4, 900)`,
+		uuid.New(), f.orgID, f.attemptID, "snapshots/"+f.attemptID.String()+"/4.jpg"); err != nil {
+		t.Fatal(err)
+	}
+
+	s := f.browser(t)
+	s.login(f.recruiterEmail)
+	res, body := s.get(reviews.SnapshotsPath(f.attemptID))
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("snapshots = %d: %s", res.StatusCode, body)
+	}
+	var frames []struct {
+		Seq int    `json:"seq"`
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal([]byte(body), &frames); err != nil {
+		t.Fatalf("snapshots body %q: %v", body, err)
+	}
+	if len(frames) != 1 || frames[0].Seq != 4 {
+		t.Fatalf("frames = %+v, want the one beat", frames)
+	}
+	// The blob key is where the bytes live; naming it would outlive the
+	// signature the endpoint exists to hand out.
+	if strings.Contains(body, "blob_key") || strings.Contains(body, "snapshots/") {
+		t.Errorf("the frame list names its storage key: %s", body)
+	}
+
+	// Signed in as nobody at all, the endpoint is the sign-in page.
+	anon := f.browser(t)
+	if res, _ := anon.get(reviews.SnapshotsPath(f.attemptID)); res.StatusCode != http.StatusSeeOther {
+		t.Errorf("anonymous snapshots = %d, want a redirect to sign in", res.StatusCode)
 	}
 }

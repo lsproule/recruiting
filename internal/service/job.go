@@ -218,7 +218,7 @@ func (s *JobService) CreateJob(ctx context.Context, p Principal, in NewJob) (Job
 		if err != nil {
 			return err
 		}
-		if err := copyTemplateStages(ctx, tx, p.OrgID, row.ID); err != nil {
+		if err := copyTemplateStages(ctx, tx, p.OrgID, row.ID, uuid.Nil); err != nil {
 			return err
 		}
 		out = toJob(row, company.Name)

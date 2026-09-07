@@ -78,6 +78,8 @@ var statusErrors = map[int][]error{
 		service.ErrStageOccupied,
 		service.ErrEventSeq,
 		service.ErrLinkUsed,
+		service.ErrIdentityRecorded,
+		service.ErrPacketSent,
 	},
 	http.StatusGone: {
 		service.ErrLinkExpired,
@@ -91,11 +93,13 @@ var statusErrors = map[int][]error{
 	// The upload is well formed but larger than the record takes.
 	http.StatusRequestEntityTooLarge: {
 		domain.ErrResumeTooLarge,
+		service.ErrSnapshotTooLarge,
 	},
 	// The bytes are not one of the resume formats, whatever the filename
 	// claimed; the sniffer decides, so this is the media type, not the body.
 	http.StatusUnsupportedMediaType: {
 		domain.ErrResumeType,
+		service.ErrSnapshotType,
 	},
 	// The deployment is missing a dependency the operation needs; the caller
 	// can do nothing about it, and a retry may succeed.
@@ -104,6 +108,13 @@ var statusErrors = map[int][]error{
 		service.ErrNoExecutor,
 	},
 	http.StatusUnprocessableEntity: {
+		service.ErrTooManyPicks,
+		service.ErrDuplicatePick,
+		service.ErrNoPicks,
+		service.ErrPickRejected,
+		service.ErrProblemQuality,
+		service.ErrNoLanguage,
+		service.ErrProblemInvalid,
 		service.ErrTitleRequired,
 		service.ErrInvalidJob,
 		service.ErrNoStages,
@@ -115,6 +126,8 @@ var statusErrors = map[int][]error{
 		service.ErrInvalidSettings,
 		service.ErrAssessmentInvalid,
 		service.ErrStageNotAssessment,
+		service.ErrIntakeInvalid,
+		service.ErrTemplateNoAssessment,
 		service.ErrBadVerdict,
 		service.ErrNotScored,
 		service.ErrBadScore,
@@ -134,6 +147,7 @@ var statusErrors = map[int][]error{
 		service.ErrTokenExpired,
 		service.ErrJobNotOpen,
 		service.ErrAttemptNotStarted,
+		service.ErrConsentRequired,
 		service.ErrAttemptClosed,
 		service.ErrLanguageNotAllowed,
 		service.ErrEventKind,

@@ -3,7 +3,19 @@
 // the sequence rather than restarting it (the server refuses any seq at or
 // below the last one it stored).
 
-export type EventType = "edit" | "paste" | "focus" | "blur" | "run" | "submit" | "lang_change";
+export type EventType =
+  | "edit"
+  | "paste"
+  | "focus"
+  | "blur"
+  | "run"
+  | "submit"
+  | "lang_change"
+  | "keymap"
+  | "fullscreen_enter"
+  | "fullscreen_exit"
+  | "snapshot"
+  | "consent";
 
 export interface AttemptEvent {
   seq: number;
@@ -75,6 +87,13 @@ export class Recorder {
     this.writeInt("seq", this.seq);
     this.writePending();
     return ev;
+  }
+
+  // resync lifts the counter over events the server appended on its own —
+  // a snapshot upload appends one — so the next batch is not refused for a
+  // seq the server has already used.
+  resync(serverLast: number): void {
+    if (serverLast > this.acked) this.renumber([], serverLast);
   }
 
   start(): void {

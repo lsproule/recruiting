@@ -4,25 +4,30 @@ import (
 	"recruiting/internal/domain"
 	"recruiting/internal/service"
 	"recruiting/internal/web/layout"
+	"recruiting/internal/web/markdown"
 )
 
 templ listPage(page layout.Page, f service.ProblemFilter, found []service.Problem) {
 	@layout.Base(page) {
-		<h1>Problem bank</h1>
-		<p class="muted">Your org's problems and the shared platform seed. Platform problems can be used but not edited.</p>
-		<p>
-			<a href={ templ.SafeURL(Prefix + "/new") }>New problem</a>
-			{ " · " }
-			<a href={ templ.SafeURL(ImportPath) }>Import a JSON batch</a>
-		</p>
+		<div class="page-head">
+			<div>
+				<div class="page-kicker">Library</div>
+				<h1>Problem bank</h1>
+				<p class="muted">Your org's problems plus the shared platform seed. Platform problems can be used and cloned, never edited.</p>
+			</div>
+			<div class="page-actions">
+				<a class="btn btn-secondary" href={ templ.SafeURL(ImportPath) }>Import JSON batch</a>
+				<a class="btn btn-primary" href={ templ.SafeURL(Prefix + "/new") }>New problem</a>
+			</div>
+		</div>
 		<form class="search" method="get" action={ templ.SafeURL(Prefix) }>
 			<label>
 				Title
 				<input type="search" name="q" value={ f.Query } placeholder="meeting rooms"/>
 			</label>
 			<label>
-				Tag
-				<input type="search" name="tag" value={ f.Tag } placeholder="sorting"/>
+				Skill tag
+				<input type="search" name="tag" value={ f.Tag } placeholder="intervals"/>
 			</label>
 			<label>
 				Difficulty
@@ -53,21 +58,34 @@ templ listPage(page layout.Page, f service.ProblemFilter, found []service.Proble
 			<button type="submit">Filter</button>
 		</form>
 		if len(found) == 0 {
-			<p class="muted">No problem matches that filter.</p>
+			<p class="muted">No problem matches that filter. Widen it, or write the problem you were looking for.</p>
 		} else {
 			<table>
 				<thead>
-					<tr><th>Title</th><th>Kind</th><th>Difficulty</th><th>Languages</th><th>Tags</th><th>Owner</th></tr>
+					<tr><th>Problem</th><th>Kind</th><th>Difficulty</th><th>Skills</th><th>Proven in</th><th>Quality</th><th>Owner</th><th></th></tr>
 				</thead>
 				<tbody>
 					for _, p := range found {
 						<tr>
-							<td><a href={ templ.SafeURL(problemPath(p)) }>{ p.Title }</a></td>
-							<td>{ p.Kind }</td>
-							<td>{ p.Difficulty }</td>
-							<td>{ languagesText(p) }</td>
-							<td>{ tagsText(p) }</td>
+							<td>
+								<a href={ templ.SafeURL(problemPath(p)) }>{ p.Title }</a>
+								<div class="row-note">{ caseCount(p) }</div>
+							</td>
+							<td class="muted">{ p.Kind }</td>
+							<td><span class={ "tag", "diff-" + p.Difficulty }>{ p.Difficulty }</span></td>
+							<td class="muted">{ tagsText(p) }</td>
+							<td>
+								@provenBadges(p.ProvenLanguages)
+							</td>
+							<td class="num">{ qualityLabel(p) }</td>
 							<td class="muted">{ ownerLabel(p) }</td>
+							<td class="row-actions">
+								<a href={ templ.SafeURL(tryPath(p)) }>Try it</a>
+								<form method="post" action={ templ.SafeURL(clonePath(p)) }>
+									@layout.CSRFField(page.CSRF)
+									<button type="submit" class="btn-link">Clone</button>
+								</form>
+							</td>
 						</tr>
 					}
 				</tbody>
@@ -76,29 +94,67 @@ templ listPage(page layout.Page, f service.ProblemFilter, found []service.Proble
 	}
 }
 
+// provenBadges marks the languages a reference solution has actually passed
+// in. A problem with none has never been verified.
+templ provenBadges(languages []string) {
+	if len(languages) == 0 {
+		<span class="muted">not verified</span>
+	} else {
+		<span class="badges">
+			for _, id := range languages {
+				<span class="tag tag-accent">{ languageLabel(id) }</span>
+			}
+		</span>
+	}
+}
+
 templ detailPage(page layout.Page, p service.Problem) {
 	@layout.Base(page) {
-		<h1>{ p.Title }</h1>
-		<p class="muted">
-			{ p.Kind } { " · " } { p.Difficulty } { " · " } { languagesText(p) }
-			if tagsText(p) != "" {
-				{ " · " } { tagsText(p) }
-			}
-			{ " · " } { ownerLabel(p) }
-		</p>
+		<div class="page-head">
+			<div>
+				<div class="page-kicker">{ ownerLabel(p) }</div>
+				<h1>{ p.Title }</h1>
+				<p class="muted">
+					{ p.Kind } { " · " } { p.Difficulty } { " · " } { caseCount(p) } { " · " } quality { qualityLabel(p) }
+					if tagsText(p) != "" {
+						{ " · " } { tagsText(p) }
+					}
+				</p>
+			</div>
+			<div class="page-actions">
+				<a class="btn btn-secondary" href={ templ.SafeURL(tryPath(p)) }>Try it</a>
+				<form method="post" action={ templ.SafeURL(clonePath(p)) }>
+					@layout.CSRFField(page.CSRF)
+					<button type="submit">Clone</button>
+				</form>
+				if !p.Platform() {
+					<a class="btn btn-primary" href={ templ.SafeURL(editPath(p)) }>Edit</a>
+				}
+			</div>
+		</div>
 		if p.Platform() {
-			<p class="muted">This problem belongs to the shared platform bank and is read-only.</p>
-		} else {
-			<p>
-				<a href={ templ.SafeURL(editPath(p)) }>Edit</a>
-			</p>
-			<form method="post" action={ templ.SafeURL(deletePath(p)) }>
-				@layout.CSRFField(page.CSRF)
-				<button type="submit">Delete problem</button>
-			</form>
+			<p class="muted">This problem belongs to the shared platform bank. Clone it to make it yours.</p>
 		}
+		if !p.Attachable() {
+			<p class="flash flash-error" role="status">
+				This problem scores { itoa(p.Quality) } of 100. Below { itoa(domain.ProblemQualityFloor) } it cannot be attached to an assessment, because the scores it produces would say little about a candidate.
+			</p>
+		}
+		<h2>Allowed languages</h2>
+		<p>{ languagesText(p) }</p>
+		<h2>Proven in</h2>
+		<p>
+			@provenBadges(p.ProvenLanguages)
+		</p>
 		<h2>Statement</h2>
-		<pre class="statement">{ p.Statement }</pre>
+		<div class="prose">
+			@markdown.Render(p.Statement)
+		</div>
+		if p.Guidelines != "" {
+			<h2>Interviewer guidelines</h2>
+			<p class="muted">Internal. A candidate and a client never see this.</p>
+			<pre class="statement">{ p.Guidelines }</pre>
+		}
 		if p.SQLSchema != "" {
 			<h2>Schema</h2>
 			<pre class="statement">{ p.SQLSchema }</pre>
@@ -109,45 +165,95 @@ templ detailPage(page layout.Page, p service.Problem) {
 		}
 		<h2>Reference solutions</h2>
 		for _, ref := range p.References {
-			<h3>{ ref.Language }</h3>
+			<h3>{ languageLabel(ref.Language) }</h3>
 			<pre class="statement">{ ref.Source }</pre>
 		}
 		<h2>Test cases</h2>
 		<table>
 			<thead>
-				<tr><th>#</th><th>Input</th><th>Expected</th><th>Visibility</th><th>Weight</th><th>Unordered</th></tr>
+				<tr><th>#</th><th>Name</th><th>Class</th><th>Input</th><th>Expected</th><th>Visibility</th><th>Points</th></tr>
 			</thead>
 			<tbody>
 				for _, c := range p.TestCases {
 					<tr>
-						<td>{ itoa(c.Position) }</td>
+						<td class="num">{ itoa(c.Position) }</td>
+						<td>{ c.Name }</td>
+						<td class="muted">{ c.Class }</td>
 						<td><pre class="cell">{ c.Input }</pre></td>
 						<td><pre class="cell">{ c.Expected }</pre></td>
-						<td>{ c.Visibility }</td>
-						<td>{ weightText(c.Weight) }</td>
-						<td>
-							if c.Unordered {
-								yes
-							} else {
-								no
-							}
-						</td>
+						<td class="muted">{ c.Visibility }</td>
+						<td class="num">{ weightText(c.Weight) }</td>
 					</tr>
 				}
 			</tbody>
 		</table>
+		if !p.Platform() {
+			<form method="post" action={ templ.SafeURL(deletePath(p)) } class="danger-form">
+				@layout.CSRFField(page.CSRF)
+				<button type="submit">Delete problem</button>
+			</form>
+		}
 		<p><a href={ templ.SafeURL(Prefix) }>Back to the bank</a></p>
 	}
 }
 
+// formPage is the four-step authoring wizard. Every step's fields are on the
+// page at once so one post always carries the whole problem; only the active
+// step is shown, and Next stores a draft before moving on.
 templ formPage(page layout.Page, f problemForm, problems []string) {
 	@layout.Base(page) {
-		if f.New {
-			<h1>New problem</h1>
-		} else {
-			<h1>Edit problem</h1>
-		}
-		<p class="muted">Every reference solution is run against every test case before the problem is saved.</p>
+		<div class="page-head">
+			<div>
+				<div class="page-kicker">
+					<a href={ templ.SafeURL(Prefix) }>Problem bank</a>
+					if f.New {
+						{ " / New" }
+					} else {
+						{ " / Edit" }
+					}
+				</div>
+				if f.New {
+					<h1>Author a problem</h1>
+				} else {
+					<h1>Edit { f.Title }</h1>
+				}
+			</div>
+			<div class="page-actions">
+				<a class="btn btn-secondary" href={ templ.SafeURL(Prefix) }>Discard</a>
+			</div>
+		</div>
+		<form id="authoring" class="authoring" method="post" action={ templ.SafeURL(f.action()) }>
+			@layout.CSRFField(page.CSRF)
+			@wizard(f, problems)
+		</form>
+	}
+}
+
+// wizard is the swapped region: the step nav, every step's fields, and the
+// quality panel that is re-scored on each step.
+templ wizard(f problemForm, problems []string) {
+	<div id="wizard" class="wizard">
+		<input type="hidden" name="id" value={ f.ID.String() }/>
+		<input type="hidden" name="step" value={ itoa(f.Step) }/>
+		<input type="hidden" name="return" value={ f.Return }/>
+		<input type="hidden" name={ langChoiceField } value="1"/>
+		<nav class="wizard-steps" aria-label="Authoring steps">
+			for _, s := range f.steps() {
+				<button
+					type="button"
+					class={ "wizard-step", templ.KV("active", s.Active), templ.KV("done", s.Done) }
+					aria-current?={ s.Active }
+					hx-post={ StepPath }
+					hx-include="#authoring"
+					hx-vals={ stepVals(s.Number) }
+					hx-target="#wizard"
+					hx-swap="outerHTML"
+				>
+					<span class="wizard-num">{ itoa(s.Number) }</span>
+					<span>{ s.Label }</span>
+				</button>
+			}
+		</nav>
 		if len(problems) > 0 {
 			<div class="flash flash-error" role="alert">
 				<p>The problem was not saved:</p>
@@ -158,24 +264,59 @@ templ formPage(page layout.Page, f problemForm, problems []string) {
 				</ul>
 			</div>
 		}
-		<form class="stack" method="post" action={ templ.SafeURL(f.action()) }>
-			@layout.CSRFField(page.CSRF)
+		<div class="wizard-body">
+			<div class="wizard-panels">
+				@stepDetailsPanel(f)
+				@stepLanguagesPanel(f)
+				@stepCasesPanel(f)
+				@stepReferencesPanel(f)
+				<div class="wizard-nav">
+					if f.prevStep() > 0 {
+						<button
+							type="button"
+							hx-post={ StepPath }
+							hx-include="#authoring"
+							hx-vals={ stepVals(f.prevStep()) }
+							hx-target="#wizard"
+							hx-swap="outerHTML"
+						>Back</button>
+					}
+					if f.nextStep() > 0 {
+						<button
+							type="button"
+							class="btn-primary"
+							hx-post={ StepPath }
+							hx-include="#authoring"
+							hx-vals={ stepVals(f.nextStep()) }
+							hx-target="#wizard"
+							hx-swap="outerHTML"
+						>Save draft and continue</button>
+					}
+					<button type="submit">Verify and save problem</button>
+				</div>
+			</div>
+			@qualityPanel(f)
+		</div>
+	</div>
+}
+
+templ stepDetailsPanel(f problemForm) {
+	<section class="wizard-panel" hidden?={ f.Step != stepDetails }>
+		<div class="grid-2">
 			<label>
-				Title
+				Problem name
 				<input type="text" name="title" value={ f.Title } required/>
 			</label>
 			<label>
-				Kind
-				<select name="kind">
-					for _, k := range []string{domain.ProblemKindCode, domain.ProblemKindSQL} {
-						if selected(f.Kind, k) {
-							<option value={ k } selected>{ k }</option>
-						} else {
-							<option value={ k }>{ k }</option>
-						}
-					}
-				</select>
+				Recommended time (min)
+				<input type="number" name="recommended_minutes" value={ itoa(f.RecommendedMinutes) } min="1" max={ itoa(domain.MaxRecommendedMinutes) }/>
 			</label>
+		</div>
+		<label>
+			Statement (Markdown)
+			<textarea name="statement" rows="12" placeholder="What the candidate has to build, with the constraints that make it interesting.">{ f.Statement }</textarea>
+		</label>
+		<div class="grid-3">
 			<label>
 				Difficulty
 				<select name="difficulty">
@@ -189,13 +330,27 @@ templ formPage(page layout.Page, f problemForm, problems []string) {
 				</select>
 			</label>
 			<label>
-				Tags (comma separated)
-				<input type="text" name="tags" value={ f.Tags }/>
+				Skill tags (comma separated)
+				<input type="text" name="tags" value={ f.Tags } placeholder="intervals, sorting"/>
 			</label>
 			<label>
-				Allowed languages (comma separated: { languageList() })
-				<input type="text" name="allowed_languages" value={ f.AllowedLanguages }/>
+				Kind
+				<select name="kind">
+					for _, k := range []string{domain.ProblemKindCode, domain.ProblemKindSQL} {
+						if selected(f.Kind, k) {
+							<option value={ k } selected>{ k }</option>
+						} else {
+							<option value={ k }>{ k }</option>
+						}
+					}
+				</select>
 			</label>
+		</div>
+		<label>
+			Interviewer guidelines (internal — never shown to a candidate or a client)
+			<textarea name="guidelines" rows="4">{ f.Guidelines }</textarea>
+		</label>
+		<div class="grid-2">
 			<label>
 				Time limit per test (ms)
 				<input type="number" name="time_limit_ms" value={ itoa(f.TimeLimitMs) }/>
@@ -204,41 +359,75 @@ templ formPage(page layout.Page, f problemForm, problems []string) {
 				Memory limit (kB)
 				<input type="number" name="memory_limit_kb" value={ itoa(f.MemoryLimitKB) }/>
 			</label>
-			<label>
-				Statement (Markdown)
-				<textarea name="statement" rows="10">{ f.Statement }</textarea>
-			</label>
-			<label>
-				SQL schema (SQL problems only)
-				<textarea name="sql_schema" rows="5">{ f.SQLSchema }</textarea>
-			</label>
-			<label>
-				SQL seed rows (SQL problems only)
-				<textarea name="sql_seed" rows="5">{ f.SQLSeed }</textarea>
-			</label>
-			<fieldset>
-				<legend>Reference solutions</legend>
-				for i, ref := range f.References {
+		</div>
+	</section>
+}
+
+templ stepLanguagesPanel(f problemForm) {
+	<section class="wizard-panel" hidden?={ f.Step != stepLangs }>
+		<p class="muted">The languages a candidate may answer in. "Any" is every language this kind of problem supports. A language reads as proven once one of its reference solutions has passed every case.</p>
+		<div class="lang-grid">
+			for _, l := range f.languages() {
+				<label class={ "lang-option", templ.KV("chosen", l.Chosen) }>
+					if l.Chosen {
+						<input type="checkbox" name="lang" value={ l.ID } checked/>
+					} else {
+						<input type="checkbox" name="lang" value={ l.ID }/>
+					}
+					<span>{ l.Label }</span>
+					if l.Proven {
+						<span class="lang-note">proven</span>
+					}
+				</label>
+			}
+		</div>
+		if f.Kind == domain.ProblemKindSQL {
+			<div class="grid-2">
+				<label>
+					Schema
+					<textarea name="sql_schema" rows="6">{ f.SQLSchema }</textarea>
+				</label>
+				<label>
+					Seed rows
+					<textarea name="sql_seed" rows="6">{ f.SQLSeed }</textarea>
+				</label>
+			</div>
+		} else {
+			<input type="hidden" name="sql_schema" value={ f.SQLSchema }/>
+			<input type="hidden" name="sql_seed" value={ f.SQLSeed }/>
+		}
+	</section>
+}
+
+templ stepCasesPanel(f problemForm) {
+	<section class="wizard-panel" hidden?={ f.Step != stepCases }>
+		<p class="muted">
+			Every case is scored whole: there is no partial credit inside one.
+			Total possible { f.totalPoints() } points.
+		</p>
+		for i, tc := range f.TestCases {
+			<fieldset class="case-row">
+				<legend>Case { itoa(i + 1) }</legend>
+				<div class="grid-4">
 					<label>
-						Language
-						<input type="text" name={ rowIndex("ref_language", i) } value={ ref.Language }/>
+						Name
+						<input type="text" name={ rowIndex("tc_name", i) } value={ tc.Name } placeholder="overlapping intervals"/>
 					</label>
 					<label>
-						Source
-						<textarea name={ rowIndex("ref_source", i) } rows="8">{ ref.Source }</textarea>
+						Class
+						<select name={ rowIndex("tc_class", i) }>
+							for _, c := range domain.TestCaseClasses {
+								if selected(tc.Class, c) {
+									<option value={ c } selected>{ c }</option>
+								} else {
+									<option value={ c }>{ c }</option>
+								}
+							}
+						</select>
 					</label>
-				}
-			</fieldset>
-			<fieldset>
-				<legend>Test cases</legend>
-				for i, tc := range f.TestCases {
 					<label>
-						Input
-						<textarea name={ rowIndex("tc_input", i) } rows="3">{ tc.Input }</textarea>
-					</label>
-					<label>
-						Expected output
-						<textarea name={ rowIndex("tc_expected", i) } rows="3">{ tc.Expected }</textarea>
+						Points
+						<input type="text" name={ rowIndex("tc_weight", i) } value={ tc.Weight } placeholder="1"/>
 					</label>
 					<label>
 						Visibility
@@ -252,34 +441,166 @@ templ formPage(page layout.Page, f problemForm, problems []string) {
 							}
 						</select>
 					</label>
+				</div>
+				<div class="grid-2">
 					<label>
-						Weight
-						<input type="text" name={ rowIndex("tc_weight", i) } value={ tc.Weight }/>
+						Input
+						<textarea name={ rowIndex("tc_input", i) } rows="3">{ tc.Input }</textarea>
 					</label>
 					<label>
-						if tc.Unordered {
-							<input type="checkbox" name={ rowIndex("tc_unordered", i) } value="1" checked/>
-						} else {
-							<input type="checkbox" name={ rowIndex("tc_unordered", i) } value="1"/>
-						}
-						Compare rows in any order (SQL)
+						Expected output
+						<textarea name={ rowIndex("tc_expected", i) } rows="3">{ tc.Expected }</textarea>
 					</label>
-				}
+				</div>
+				<label class="check">
+					if tc.Unordered {
+						<input type="checkbox" name={ rowIndex("tc_unordered", i) } value="1" checked/>
+					} else {
+						<input type="checkbox" name={ rowIndex("tc_unordered", i) } value="1"/>
+					}
+					Compare rows in any order (SQL)
+				</label>
 			</fieldset>
-			<button type="submit">Save problem</button>
-		</form>
-		<p><a href={ templ.SafeURL(Prefix) }>Back to the bank</a></p>
+		}
+	</section>
+}
+
+templ stepReferencesPanel(f problemForm) {
+	<section class="wizard-panel" hidden?={ f.Step != stepRefs }>
+		<p class="muted">One solution per language you want proven. Verify runs each of them against every case; the problem cannot be saved while one of them fails.</p>
+		for i, ref := range f.References {
+			<fieldset class="ref-row">
+				<legend>Solution { itoa(i + 1) }</legend>
+				<label>
+					Language ({ languageList() })
+					<input type="text" name={ rowIndex("ref_language", i) } value={ ref.Language }/>
+				</label>
+				<label>
+					Source
+					<textarea name={ rowIndex("ref_source", i) } rows="10">{ ref.Source }</textarea>
+				</label>
+			</fieldset>
+		}
+		<button
+			type="button"
+			hx-post={ VerifyPath }
+			hx-include="#authoring"
+			hx-target="#verify"
+			hx-swap="innerHTML"
+			hx-indicator="#verify"
+		>Verify against the runner</button>
+		<div id="verify" class="verify"></div>
+	</section>
+}
+
+// verifyPanel is the per-language, per-case grid step 4 shows after a run.
+templ verifyPanel(verdicts []service.ReferenceVerdict, problems []string) {
+	if len(problems) > 0 {
+		<div class="flash flash-error" role="alert">
+			<ul>
+				for _, msg := range problems {
+					<li>{ msg }</li>
+				}
+			</ul>
+		</div>
+	}
+	for _, v := range verdicts {
+		<section class="verdict">
+			<h3>
+				{ languageLabel(v.Language) }
+				if v.Passed() {
+					<span class="tag tag-accent">{ verdictLabel(v) }</span>
+				} else {
+					<span class="tag tag-outline">{ verdictLabel(v) }</span>
+				}
+			</h3>
+			if v.Err != "" {
+				<p class="muted">{ v.Err }</p>
+			}
+			if v.CompileOutput != "" {
+				<pre class="statement">{ v.CompileOutput }</pre>
+			}
+			<table>
+				<thead>
+					<tr><th>#</th><th>Case</th><th>Class</th><th>Visibility</th><th>Result</th><th>Time</th><th>Detail</th></tr>
+				</thead>
+				<tbody>
+					for _, c := range v.Cases {
+						<tr>
+							<td class="num">{ itoa(c.Position) }</td>
+							<td>{ c.Name }</td>
+							<td class="muted">{ c.Class }</td>
+							<td class="muted">{ c.Visibility }</td>
+							<td>{ c.Status }</td>
+							<td class="num">{ millis(c.TimeMs) }</td>
+							<td class="muted">{ c.Detail }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</section>
+	}
+}
+
+// qualityPanel is the standing verdict on the problem: the same rules an
+// assessment applies before it will take the problem at all.
+templ qualityPanel(f problemForm) {
+	<aside class="quality">
+		<div class="quality-head">
+			<span>Quality review</span>
+			<span class="quality-score">{ itoa(f.qualityScore()) }</span>
+		</div>
+		<ul class="quality-list">
+			for _, c := range f.quality() {
+				<li class={ templ.KV("ok", c.OK) }>
+					<span class="quality-mark" aria-hidden="true">
+						if c.OK {
+							✓
+						} else {
+							○
+						}
+					</span>
+					<span>
+						<span class="quality-label">{ c.Label }</span>
+						<span class="quality-note">{ c.Note }</span>
+					</span>
+				</li>
+			}
+		</ul>
+		<p class="quality-foot">A problem below { itoa(domain.ProblemQualityFloor) } can be saved but not attached to an assessment.</p>
+	</aside>
+}
+
+// tryPage is the candidate's editor pointed at one problem, with nothing
+// recorded and nothing stored.
+templ tryPage(page layout.Page, p service.Problem, cfgJSON string) {
+	@layout.Base(page) {
+		<div class="page-head try-head">
+			<h1 class="page-kicker">
+				<a href={ templ.SafeURL(problemPath(p)) }>{ p.Title }</a>
+				{ " / Try it" }
+			</h1>
+		</div>
+		<script src={ layout.AssessPath } defer></script>
+		@configScript(configID, cfgJSON)
+		<div id="assess" class="try-editor"></div>
+		<noscript><p class="flash flash-error">Try it needs JavaScript enabled.</p></noscript>
 	}
 }
 
 templ importPage(page layout.Page, report domain.ProblemImportErrors, problems []string) {
 	@layout.Base(page) {
-		<h1>Import problems</h1>
-		<p class="muted">
-			A batch is a JSON array of problems. Every reference solution is run
-			against every test case; one failure rejects the whole batch and
-			nothing is stored.
-		</p>
+		<div class="page-head">
+			<div>
+				<div class="page-kicker">Library</div>
+				<h1>Import problems</h1>
+				<p class="muted">
+					A batch is a JSON array of problems. Every reference solution is run
+					against every test case; one failure rejects the whole batch and
+					nothing is stored.
+				</p>
+			</div>
+		</div>
 		if len(problems) > 0 {
 			<div class="flash flash-error" role="alert">
 				<ul>
@@ -300,7 +621,7 @@ templ importPage(page layout.Page, report domain.ProblemImportErrors, problems [
 				<tbody>
 					for _, p := range report {
 						<tr>
-							<td>{ reportPosition(p) }</td>
+							<td class="num">{ reportPosition(p) }</td>
 							<td>{ p.Label() }</td>
 							<td>
 								<ul>

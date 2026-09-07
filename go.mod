@@ -18,6 +18,7 @@ require (
 	github.com/riverqueue/river v0.46.0
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.46.0
 	github.com/riverqueue/river/rivertype v0.46.0
+	github.com/yuin/goldmark v1.8.5
 	golang.org/x/crypto v0.55.0
 	golang.org/x/text v0.41.0
 )

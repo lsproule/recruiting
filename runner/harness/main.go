@@ -47,6 +47,10 @@ type result struct {
 	TestID     string `json:"test_id"`
 	Status     string `json:"status"`
 	StdoutHash string `json:"stdout_hash"`
+	// StdoutTail is the head of what the program printed, kept short. It is
+	// what a run is debugged from; the hash alone says only that two runs
+	// differ, never how.
+	StdoutTail string `json:"stdout_tail,omitempty"`
 	StderrTail string `json:"stderr_tail"`
 	TimeMs     int64  `json:"time_ms"`
 	MemKB      int64  `json:"mem_kb"`
@@ -95,60 +99,123 @@ func run(s spec) response {
 	return out
 }
 
+// langSpec is how one language is built and run. {work} is the work dir,
+// {src} the written source file, {bin} the binary a compile produces.
+type langSpec struct {
+	File    string
+	Compile []string
+	Run     []string
+}
+
+// langs is the harness half of the platform's language registry
+// (internal/domain/languages.go); every code language has one entry.
+var langs = map[string]langSpec{
+	// -I (isolated) ignores env vars, user site-packages, and script dir.
+	"python": {File: "main.py",
+		Compile: []string{"python3", "-I", "-m", "py_compile", "{src}"},
+		Run:     []string{"python3", "-I", "-u", "{src}"}},
+	"javascript": {File: "main.js",
+		Compile: []string{"node", "--check", "{src}"},
+		Run:     []string{"node", "--stack-size=2048", "{src}"}},
+	// No compile step: node's --check parses .ts as JavaScript, so a type
+	// annotation is reported as a syntax error before stripping ever runs.
+	"typescript": {File: "main.ts",
+		Run: []string{"node", "--experimental-strip-types", "--stack-size=2048", "{src}"}},
+	"go": {File: "main.go",
+		Compile: []string{"go", "build", "-o", "{bin}", "."},
+		Run:     []string{"{bin}"}},
+	"java": {File: "Main.java",
+		Compile: []string{"javac", "-d", "{work}", "Main.java"},
+		Run:     []string{"java", "-Xss8m", "-XX:+UseSerialGC", "-XX:TieredStopAtLevel=1", "-cp", "{work}", "Main"}},
+	"c": {File: "main.c",
+		Compile: []string{"gcc", "-O2", "-std=c17", "-o", "{bin}", "{src}", "-lm"},
+		Run:     []string{"{bin}"}},
+	"cpp": {File: "main.cpp",
+		Compile: []string{"g++", "-O2", "-std=c++20", "-o", "{bin}", "{src}"},
+		Run:     []string{"{bin}"}},
+	"rust": {File: "main.rs",
+		Compile: []string{"rustc", "-O", "-o", "{bin}", "{src}"},
+		Run:     []string{"{bin}"}},
+	"php": {File: "main.php",
+		Compile: []string{"php", "-l", "{src}"},
+		Run:     []string{"php", "-d", "error_reporting=E_ALL", "{src}"}},
+	"ruby": {File: "main.rb",
+		Compile: []string{"ruby", "-c", "{src}"},
+		Run:     []string{"ruby", "{src}"}},
+	"haskell": {File: "main.hs",
+		Compile: []string{"ghc", "-O0", "-o", "{bin}", "{src}"},
+		Run:     []string{"{bin}"}},
+	"lua": {File: "main.lua",
+		Run: []string{"lua", "{src}"}},
+	// -jar keeps "java" first in the argv, so the memory flag still applies.
+	"kotlin": {File: "main.kt",
+		Compile: []string{"kotlinc", "{src}", "-include-runtime", "-d", "{work}/candidate.jar"},
+		Run:     []string{"java", "-Xss8m", "-XX:+UseSerialGC", "-XX:TieredStopAtLevel=1", "-jar", "{work}/candidate.jar"}},
+	"csharp": {File: "Program.cs",
+		Compile: []string{"dotnet", "build", "--nologo", "-c", "Release", "-o", "{work}/out"},
+		Run:     []string{"dotnet", "{work}/out/candidate.dll"}},
+}
+
+// extraFiles are written alongside the source because a toolchain refuses to
+// build without them; the language's own argv never names them.
+var extraFiles = map[string]map[string]string{
+	"go": {"go.mod": "module candidate\n\ngo 1.22\n"},
+	"csharp": {"candidate.csproj": `<Project Sdk="Microsoft.NET.Sdk">` +
+		`<PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net9.0</TargetFramework>` +
+		`<AssemblyName>candidate</AssemblyName><Nullable>disable</Nullable>` +
+		`<ImplicitUsings>enable</ImplicitUsings></PropertyGroup></Project>` + "\n"},
+}
+
+// stage writes the work dir and resolves the language's argv. It runs
+// nothing, so the argv a language produces is testable without its toolchain.
+func stage(lang, source, work string) (compile, run []string, err error) {
+	spec, ok := langs[lang]
+	if !ok {
+		return nil, nil, fmt.Errorf("unsupported language %q", lang)
+	}
+	src := filepath.Join(work, spec.File)
+	if err := os.WriteFile(src, []byte(source), 0o644); err != nil {
+		return nil, nil, err
+	}
+	for name, body := range extraFiles[lang] {
+		if err := os.WriteFile(filepath.Join(work, name), []byte(body), 0o644); err != nil {
+			return nil, nil, err
+		}
+	}
+	sub := strings.NewReplacer("{work}", work, "{src}", src, "{bin}", filepath.Join(work, "candidate"))
+	expand := func(argv []string) []string {
+		if len(argv) == 0 {
+			return nil
+		}
+		out := make([]string, len(argv))
+		for i, a := range argv {
+			out[i] = sub.Replace(a)
+		}
+		return out
+	}
+	return expand(spec.Compile), expand(spec.Run), nil
+}
+
 // prepare writes the source and compiles it, returning the command to run a test.
 func prepare(lang, source, work string) (cmdline []string, compileOut string, err error) {
+	compileArgv, runArgv, err := stage(lang, source, work)
+	if err != nil {
+		return nil, "", err
+	}
+	if len(compileArgv) == 0 {
+		return runArgv, "", nil
+	}
 	// GOCACHE comes from the image: a pre-warmed, read-only standard library cache.
 	env := append(os.Environ(), "HOME=/tmp", "GOPATH=/tmp/gopath", "GOFLAGS=-mod=mod", "GOTOOLCHAIN=local", "GOPROXY=off")
-	compile := func(name string, args ...string) (string, error) {
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cancel()
-		c := exec.CommandContext(ctx, name, args...)
-		c.Dir, c.Env = work, env
-		b, err := c.CombinedOutput()
-		return string(b), err
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	c := exec.CommandContext(ctx, compileArgv[0], compileArgv[1:]...)
+	c.Dir, c.Env = work, env
+	out, err := c.CombinedOutput()
+	if err != nil {
+		return nil, string(out), err
 	}
-	switch lang {
-	case "python":
-		p := filepath.Join(work, "main.py")
-		if err := os.WriteFile(p, []byte(source), 0o644); err != nil {
-			return nil, "", err
-		}
-		// -I (isolated) ignores env vars, user site-packages, and script dir.
-		if out, err := compile("python3", "-I", "-m", "py_compile", p); err != nil {
-			return nil, out, err
-		}
-		return []string{"python3", "-I", "-u", p}, "", nil
-	case "node":
-		p := filepath.Join(work, "main.js")
-		if err := os.WriteFile(p, []byte(source), 0o644); err != nil {
-			return nil, "", err
-		}
-		if out, err := compile("node", "--check", p); err != nil {
-			return nil, out, err
-		}
-		return []string{"node", "--stack-size=2048", p}, "", nil
-	case "go":
-		if err := os.WriteFile(filepath.Join(work, "main.go"), []byte(source), 0o644); err != nil {
-			return nil, "", err
-		}
-		if err := os.WriteFile(filepath.Join(work, "go.mod"), []byte("module candidate\n\ngo 1.22\n"), 0o644); err != nil {
-			return nil, "", err
-		}
-		bin := filepath.Join(work, "candidate")
-		if out, err := compile("go", "build", "-o", bin, "."); err != nil {
-			return nil, out, err
-		}
-		return []string{bin}, "", nil
-	case "java":
-		if err := os.WriteFile(filepath.Join(work, "Main.java"), []byte(source), 0o644); err != nil {
-			return nil, "", err
-		}
-		if out, err := compile("javac", "-d", work, "Main.java"); err != nil {
-			return nil, out, err
-		}
-		return []string{"java", "-Xss8m", "-XX:+UseSerialGC", "-XX:TieredStopAtLevel=1", "-cp", work, "Main"}, "", nil
-	}
-	return nil, "", fmt.Errorf("unsupported language %q", lang)
+	return runArgv, "", nil
 }
 
 func runTest(cmdline []string, work string, t test, l limits) result {
@@ -199,6 +266,7 @@ func runTest(cmdline []string, work string, t test, l limits) result {
 	trimmed := strings.TrimSpace(stdout.String())
 	h := sha256.Sum256([]byte(trimmed))
 	res.StdoutHash = hex.EncodeToString(h[:])
+	res.StdoutTail = clip(trimmed, outputTailBytes)
 
 	switch {
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
@@ -214,6 +282,19 @@ func runTest(cmdline []string, work string, t test, l limits) result {
 		res.Status = "fail"
 	}
 	return res
+}
+
+// outputTailBytes bounds what travels back as readable output. A program that
+// prints a megabyte is still hashed in full; only what a person would read is
+// carried.
+const outputTailBytes = 4096
+
+// clip cuts s to at most n bytes and says so when it had to.
+func clip(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "\n… truncated"
 }
 
 // cappedWriter keeps the first limit bytes (or last, with keepTail) and

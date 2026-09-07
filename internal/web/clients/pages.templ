@@ -1,0 +1,199 @@
+package clients
+
+import (
+	"recruiting/internal/service"
+	"recruiting/internal/web/intake"
+	"recruiting/internal/web/layout"
+	"recruiting/internal/web/shortlist"
+)
+
+// listPage is the book of accounts: one row per client with what is open on
+// it and how fast the desk has been answering.
+templ listPage(page layout.Page, accounts []service.ClientAccount) {
+	@layout.Base(page) {
+		<div class="page-head">
+			<div>
+				<p class="page-kicker">Book of accounts</p>
+				<h1>Clients</h1>
+			</div>
+			<div class="page-actions">
+				<a class="btn btn-primary" href={ templ.SafeURL(intake.StartPath) }>Onboard client</a>
+			</div>
+		</div>
+		if len(accounts) == 0 {
+			<div class="panel empty-card">
+				<h2>No clients yet</h2>
+				<p class="muted">An intake creates the company, its first job, and the assessment that screens for it.</p>
+				<a class="btn btn-primary" href={ templ.SafeURL(intake.StartPath) }>Start a client intake</a>
+			</div>
+		} else {
+			<table>
+				<thead>
+					<tr>
+						<th>Client</th><th>Owner</th><th>Open jobs</th><th>In pipeline</th>
+						<th>Awaiting client</th><th>Placed 90d</th><th>Median days to shortlist</th><th></th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, a := range accounts {
+						<tr>
+							<td>
+								<div class="client-name">
+									<span class="client-mark" aria-hidden="true">{ mark(a.Name) }</span>
+									<span>
+										<a href={ templ.SafeURL(Path(a.ID)) }>{ a.Name }</a>
+										<span class="row-note">{ text(a.Industry) }</span>
+									</span>
+								</div>
+							</td>
+							<td class="muted">{ text(a.OwnerName) }</td>
+							<td class="num">{ itoa(a.OpenJobs) }</td>
+							<td class="num">{ itoa(a.InPipeline) }</td>
+							<td class="num">{ itoa(a.AwaitingClient) }</td>
+							<td class="num">{ itoa(a.Placed90d) }</td>
+							<td class="num">{ days(a.MedianDaysToShortlist) }</td>
+							<td class="row-actions"><a href={ templ.SafeURL(TabPath(a.ID, TabBoard)) }>Open board</a></td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+	}
+}
+
+// detailPage is one account behind its three tabs.
+templ detailPage(page layout.Page, v detailView) {
+	@layout.Base(page) {
+		<div class="detail-head">
+			<div>
+				<p class="page-kicker"><a href={ templ.SafeURL(Prefix) }>Clients</a> / { v.Account.Name }</p>
+				<div class="detail-title">
+					<span class="client-mark" aria-hidden="true">{ mark(v.Account.Name) }</span>
+					<h1>{ v.Account.Name }</h1>
+					if v.Account.Industry != "" {
+						<span class="tag tag-outline">{ v.Account.Industry }</span>
+					}
+				</div>
+				<p class="muted">
+					{ itoa(v.Account.OpenJobs) } open jobs &middot; { itoa(v.Account.InPipeline) } in pipeline
+					&middot; shortlist SLA { sla(v.Account.ShortlistSLADays) }
+					&middot; median to shortlist { days(v.Account.MedianDaysToShortlist) } days
+				</p>
+			</div>
+		</div>
+		<nav class="tabs" aria-label="Client">
+			for _, t := range v.Tabs() {
+				if t.Active {
+					<a class="tab on" href={ templ.SafeURL(t.Href) } aria-current="page">{ t.Label }</a>
+				} else {
+					<a class="tab" href={ templ.SafeURL(t.Href) }>{ t.Label }</a>
+				}
+			}
+		</nav>
+		switch v.Tab {
+			case TabBoard:
+				@boardTab(v)
+			case TabShortlists:
+				@shortlistsTab(v)
+			default:
+				@jobsTab(v)
+		}
+	}
+}
+
+templ jobsTab(v detailView) {
+	if len(v.Jobs) == 0 {
+		<p class="muted">No jobs on this account yet.</p>
+	} else {
+		<table>
+			<thead>
+				<tr><th>Job</th><th>Seniority</th><th>Assessment</th><th>Applicants</th><th>Scored</th><th>Shortlisted</th><th></th></tr>
+			</thead>
+			<tbody>
+				for _, job := range v.Jobs {
+					<tr>
+						<td>
+							{ job.Title }
+							<span class="row-note">opened { day(job.OpenedAt) } &middot; { text(job.Location) } &middot; { job.Status }</span>
+						</td>
+						<td class="muted">{ text(job.Seniority) }</td>
+						<td>
+							if job.Assessments != "" {
+								<span class="tag">{ job.Assessments }</span>
+							} else {
+								<span class="muted">—</span>
+							}
+						</td>
+						<td class="num">{ itoa(job.Applicants) }</td>
+						<td class="num">{ itoa(job.Scored) }</td>
+						<td class="num">{ itoa(job.Shortlisted) }</td>
+						<td class="row-actions">
+							<a href={ templ.SafeURL(BoardPath(v.Account.ID, job.ID)) }>Board</a>
+							<a href={ templ.SafeURL(shortlist.Path(job.ID)) }>Shortlist</a>
+						</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	}
+}
+
+// boardTab is the client's pipeline: the jobs merged by stage, or one job on
+// its own. The board reads; every move stays on the application itself.
+templ boardTab(v detailView) {
+	<div class="board-scope">
+		<span class="muted">Scope</span>
+		if v.AllJobs() {
+			<span class="tag">All jobs</span>
+		} else {
+			<a class="btn btn-quiet" href={ templ.SafeURL(v.ScopeAllHref()) }>All jobs</a>
+			<span class="tag">{ v.ScopeLabel() }</span>
+		}
+		for _, job := range v.Jobs {
+			if job.ID != v.Board.JobID {
+				<a class="btn btn-quiet" href={ templ.SafeURL(BoardPath(v.Account.ID, job.ID)) }>{ job.Title }</a>
+			}
+		}
+	</div>
+	if len(v.Board.Columns) == 0 {
+		<p class="muted">This client has no pipeline yet.</p>
+	} else {
+		<div class="columns">
+			for _, col := range v.Board.Columns {
+				<div class="column">
+					<h3>{ col.Stage.Name } <span class="muted num">{ itoa(len(col.Cards)) }</span></h3>
+					for _, card := range col.Cards {
+						<article class={ "board-card", templ.KV("closed", !card.Active()) }>
+							<a href={ templ.SafeURL(applicationPath(card.ID)) }>{ card.CandidateName }</a>
+							<div class="row-note">{ card.JobTitle }</div>
+							if !card.Active() {
+								<div class="row-note">{ string(card.Status) }</div>
+							}
+						</article>
+					}
+				</div>
+			}
+		</div>
+	}
+}
+
+templ shortlistsTab(v detailView) {
+	if len(v.Packets) == 0 {
+		<p class="muted">No shortlist has been built for this client yet.</p>
+	} else {
+		<table>
+			<thead><tr><th>Job</th><th>Picks</th><th>Status</th><th>Sent</th><th></th></tr></thead>
+			<tbody>
+				for _, packet := range v.Packets {
+					<tr>
+						<td>{ packet.JobTitle }</td>
+						<td class="num">{ itoa(packet.Picks) }</td>
+						<td><span class={ "tag", templ.KV("tag-accent", packet.Status == service.ShortlistSent) }>{ packet.Status }</span></td>
+						<td class="num">{ sentAt(packet.SentAt) }</td>
+						<td class="row-actions"><a href={ templ.SafeURL(shortlist.Path(packet.JobID)) }>Open builder</a></td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	}
+}

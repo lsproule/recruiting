@@ -45,8 +45,10 @@ func TestRenderEveryTemplate(t *testing.T) {
 		mail.TemplateRescheduleCancel,
 		mail.TemplateAssessmentInvite,
 		mail.TemplateAssessmentReminder,
+		mail.TemplateAssessmentDeclined,
 		mail.TemplateClientReleaseNotice,
 		mail.TemplateClientRequestInfo,
+		mail.TemplateClientShortlist,
 		mail.TemplatePasswordReset,
 	}
 	if got := r.Names(); len(got) != len(want) {

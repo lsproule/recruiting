@@ -54,8 +54,10 @@ func render(w http.ResponseWriter, r *http.Request, status int, c templ.Componen
 	_ = c.Render(r.Context(), w)
 }
 
+// The booking link is candidate-facing, so the page takes the slim public
+// chrome rather than the recruiter shell.
 func page(r *http.Request, title string, flashes ...layout.Flash) layout.Page {
-	return layout.Page{Title: title, Surface: layout.SurfaceApp, Flashes: flashes, CSRF: middleware.CSRFToken(r)}
+	return layout.Page{Title: title, Flashes: flashes, CSRF: middleware.CSRFToken(r)}
 }
 
 func (h *handlers) show(w http.ResponseWriter, r *http.Request) {

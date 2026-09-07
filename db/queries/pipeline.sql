@@ -57,5 +57,5 @@ select exists (select 1 from scorecard where application_id = $1 and stage_id = 
 -- name: HasVerdictForStage :one
 select exists (
     select 1 from review r join attempt t on t.id = r.attempt_id
-    where t.application_id = $1 and t.stage_id = $2
+    where t.application_id = sqlc.arg(application_id)::uuid and t.stage_id = sqlc.arg(stage_id)::uuid
 );

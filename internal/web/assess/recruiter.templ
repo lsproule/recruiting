@@ -8,11 +8,84 @@ import (
 	"recruiting/internal/web/layout"
 )
 
+// invitesPage is the Assessments screen: every sitting the org has sent, how
+// far each candidate has got, and the one action each row is waiting on.
+templ invitesPage(page layout.Page, rows []service.AttemptInvite, status string) {
+	@layout.Base(page) {
+		<header class="page-head">
+			<div>
+				<div class="page-kicker">Invites in flight</div>
+				<h1>Assessments</h1>
+				<p class="muted">{ inviteSummary(rows) }</p>
+			</div>
+			<div class="page-actions">
+				<a class="btn-quiet" href={ templ.SafeURL(SetsPath) }>Problem sets</a>
+			</div>
+		</header>
+		<nav class="filters" aria-label="Filter by status">
+			<a class={ "filter", templ.KV("on", status == "") } href={ templ.SafeURL(Prefix) }>All</a>
+			for _, st := range service.InviteStatuses {
+				<a class={ "filter", templ.KV("on", status == st) } href={ templ.SafeURL(Prefix + "?status=" + st) }>{ st }</a>
+			}
+		</nav>
+		if len(rows) == 0 {
+			<p class="muted">No sittings match. An invite goes out when a candidate enters an assessment stage, or from their own screen.</p>
+		} else {
+			<table>
+				<thead>
+					<tr><th>Candidate</th><th>Job / client</th><th>Problem set</th><th>Status</th><th>Progress</th><th>Integrity</th><th>Expires</th><th></th></tr>
+				</thead>
+				<tbody>
+					for _, i := range rows {
+						<tr>
+							<td>
+								{ i.CandidateName }
+								<div class="row-note">invited { day(i.InvitedAt) }</div>
+							</td>
+							<td>
+								{ i.JobTitle }
+								<div class="row-note">{ i.ClientCompanyName }</div>
+							</td>
+							<td class="muted">{ i.AssessmentName }</td>
+							<td><span class={ "tag", inviteStatusClass(i.Status) }>{ i.Status }</span></td>
+							<td>
+								<div class="progress">
+									<div class="meter"><div class="meter-fill" style={ "width:" + share(i.Progress()) + "%" }></div></div>
+									<span class="muted num">{ i.ProgressLabel() }</span>
+								</div>
+							</td>
+							<td class={ flagClass(i.IntegrityFlags) }>{ flagLabel(i.IntegrityFlags) }</td>
+							<td class="num muted">{ expiryLabel(i) }</td>
+							<td>
+								<div class="row-actions">
+									<a class="btn-link" href={ templ.SafeURL("/app/applications/" + i.ApplicationID.String()) }>Review</a>
+									if i.Status == service.AttemptInvited {
+										<form method="post" action={ templ.SafeURL(Prefix + "/" + i.AttemptID.String() + "/remind") }>
+											@layout.CSRFField(page.CSRF)
+											<button type="button" class="btn-link" onclick="this.form.submit()">Remind</button>
+										</form>
+									}
+									if i.Open() {
+										<form method="post" action={ templ.SafeURL(Prefix + "/" + i.AttemptID.String() + "/revoke") }>
+											@layout.CSRFField(page.CSRF)
+											<button type="button" class="btn-link" onclick="this.form.submit()">Revoke</button>
+										</form>
+									}
+								</div>
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+	}
+}
+
 templ listPage(page layout.Page, found []service.Assessment) {
 	@layout.Base(page) {
-		<h1>Assessments</h1>
+		<h1>Problem sets</h1>
 		<p class="muted">An assessment is an ordered set of problems with a time limit. Attach one to a job's assessment stage and every candidate entering the stage is invited.</p>
-		<p><a href={ templ.SafeURL(Prefix + "/new") }>New assessment</a></p>
+		<p><a href={ templ.SafeURL(Prefix + "/new") }>New assessment</a> &middot; <a href={ templ.SafeURL(Prefix) }>Invites in flight</a></p>
 		if len(found) == 0 {
 			<p class="muted">No assessments yet.</p>
 		} else {
@@ -45,9 +118,16 @@ templ detailPage(page layout.Page, a service.Assessment) {
 	@layout.Base(page) {
 		<h1>{ a.Name }</h1>
 		<p class="muted">{ fmt.Sprintf("%d minutes · language %s · invite valid %d days", a.DurationMinutes, orAny(a.LanguageOverride), a.InviteWindowDays) }</p>
-		<p>
+		<p class="muted">{ "Answered in: " + languageSummary(a.AllowedLanguages) }</p>
+		<p class="muted">{ "Integrity: " + integritySummary(a.Integrity) }</p>
+		<div class="row-actions">
 			<a href={ templ.SafeURL(Prefix + "/" + a.ID.String() + "/edit") }>Edit</a>
-		</p>
+			<form method="post" action={ templ.SafeURL(Prefix + "/" + a.ID.String() + "/preview") }>
+				@layout.CSRFField(page.CSRF)
+				<button type="submit">Sit it as a candidate</button>
+			</form>
+		</div>
+		<p class="muted">A preview runs the real session under your own name. It scores nothing, moves no card, and is deleted a day later.</p>
 		<h2>Problems</h2>
 		<ol>
 			for _, p := range a.Problems {
@@ -92,6 +172,46 @@ templ formPage(page layout.Page, f assessmentForm, problems []string) {
 				</select>
 			</label>
 			<label>Invite valid for (days) <input type="number" name="invite_window_days" min="1" value={ fmt.Sprint(f.InviteWindowDays) } required/></label>
+			<fieldset>
+				<legend>Languages a candidate may answer in</legend>
+				<p class="muted">Leave it on any language and each problem offers its own. Ticking a set narrows every problem to it; a problem left with nothing to answer in cannot be saved.</p>
+				<div class="options">
+					<label class="option">
+						if f.anyLanguage() {
+							<input type="checkbox" name="allowed_languages" value="any" checked/>
+						} else {
+							<input type="checkbox" name="allowed_languages" value="any"/>
+						}
+						Any language
+						<span class="option-note">default</span>
+					</label>
+					for _, l := range domain.Languages {
+						<label class="option">
+							if f.languagePicked(l.ID) {
+								<input type="checkbox" name="allowed_languages" value={ l.ID } checked/>
+							} else {
+								<input type="checkbox" name="allowed_languages" value={ l.ID }/>
+							}
+							{ l.Label }
+							<span class="option-note">{ l.Kind }</span>
+						</label>
+					}
+				</div>
+			</fieldset>
+			<fieldset>
+				<legend>Integrity</legend>
+				<p class="muted">The candidate is told what the session watches before they start.</p>
+				<div class="options options-rows">
+					@toggle("integrity_fullscreen", "Keep the session fullscreen", "leaving is recorded", f.Integrity.Fullscreen)
+					@toggle("integrity_block_paste", "Block pasting into the editor", "typed-in code only", f.Integrity.BlockPaste)
+					@toggle("integrity_webcam", "Take webcam snapshots", "with the candidate's consent", f.Integrity.Webcam)
+					@toggle("integrity_photo_id", "Ask for a photo ID", "needs the webcam", f.Integrity.PhotoID)
+				</div>
+				<label class="interval">
+					Snapshot every (seconds)
+					<input type="number" name="webcam_interval_s" min={ fmt.Sprint(service.MinWebcamInterval) } max={ fmt.Sprint(service.MaxWebcamInterval) } value={ fmt.Sprint(f.webcamInterval()) }/>
+				</label>
+			</fieldset>
 			<fieldset>
 				<legend>Picked problems, in order</legend>
 				if len(f.Picked) == 0 {
@@ -148,6 +268,22 @@ templ formPage(page layout.Page, f assessmentForm, problems []string) {
 			<input type="hidden" name="duration_minutes" value={ fmt.Sprint(f.DurationMinutes) }/>
 			<input type="hidden" name="language_override" value={ f.LanguageOverride }/>
 			<input type="hidden" name="invite_window_days" value={ fmt.Sprint(f.InviteWindowDays) }/>
+			for _, l := range f.AllowedLanguages {
+				<input type="hidden" name="allowed_languages" value={ l }/>
+			}
+			if f.Integrity.Fullscreen {
+				<input type="hidden" name="integrity_fullscreen" value="1"/>
+			}
+			if f.Integrity.BlockPaste {
+				<input type="hidden" name="integrity_block_paste" value="1"/>
+			}
+			if f.Integrity.Webcam {
+				<input type="hidden" name="integrity_webcam" value="1"/>
+			}
+			if f.Integrity.PhotoID {
+				<input type="hidden" name="integrity_photo_id" value="1"/>
+			}
+			<input type="hidden" name="webcam_interval_s" value={ fmt.Sprint(f.webcamInterval()) }/>
 			for i, p := range f.Picked {
 				<input type="hidden" name="problem_id" value={ p.ID.String() }/>
 				<input type="hidden" name="order" value={ fmt.Sprint(i + 1) }/>
@@ -158,6 +294,20 @@ templ formPage(page layout.Page, f assessmentForm, problems []string) {
 			.pick input[type="number"].order { width: 4rem; }
 		</style>
 	}
+}
+
+// toggle is one integrity measure: a tick with what it costs the candidate
+// spelled out beside it.
+templ toggle(name, label, note string, on bool) {
+	<label class="option">
+		if on {
+			<input type="checkbox" name={ name } value="1" checked/>
+		} else {
+			<input type="checkbox" name={ name } value="1"/>
+		}
+		{ label }
+		<span class="option-note">{ note }</span>
+	</label>
 }
 
 func (f assessmentForm) filterAction() string {
@@ -209,4 +359,39 @@ templ attachPage(page layout.Page, v attachView) {
 			}
 		}
 	}
+}
+
+// languageSummary names the assessment's language set for the detail screen.
+func languageSummary(allowed []string) string {
+	if len(allowed) == 0 {
+		return "any language each problem offers"
+	}
+	var labels []string
+	for _, id := range allowed {
+		if l, ok := domain.LanguageByID(id); ok {
+			labels = append(labels, l.Label)
+		}
+	}
+	return strings.Join(labels, ", ")
+}
+
+// integritySummary lists the measures the session runs under.
+func integritySummary(s service.IntegritySettings) string {
+	var on []string
+	if s.Fullscreen {
+		on = append(on, "fullscreen")
+	}
+	if s.BlockPaste {
+		on = append(on, "paste blocked")
+	}
+	if s.Webcam {
+		on = append(on, fmt.Sprintf("webcam every %ds", s.WebcamEvery))
+	}
+	if s.PhotoID {
+		on = append(on, "photo ID")
+	}
+	if len(on) == 0 {
+		return "nothing watched"
+	}
+	return strings.Join(on, " · ")
 }

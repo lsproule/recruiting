@@ -17,8 +17,13 @@ import (
 	"recruiting/internal/web/middleware"
 )
 
-// Prefix is where the recruiter's assessment screens live.
+// Prefix is where the recruiter's assessment screens live. The screen itself
+// is the invites in flight; the problem sets they are drawn from sit one
+// level in.
 const Prefix = "/app/assessments"
+
+// SetsPath is the list of problem sets an invite can be built from.
+const SetsPath = Prefix + "/sets"
 
 // AttachPath is the screen that attaches an assessment to a job's stage;
 // the jobs stage editor links to it with ?job=&stage=.
@@ -34,6 +39,7 @@ type RecruiterDeps struct {
 	Assessments *service.AssessmentService
 	Problems    *service.ProblemService
 	Jobs        *service.JobService
+	Attempts    *service.AttemptService
 	Org         *service.OrgService
 	Logger      *slog.Logger
 }
@@ -45,7 +51,8 @@ func MountRecruiter(r chi.Router, d RecruiterDeps) {
 	r.Route(Prefix, func(r chi.Router) {
 		r.Use(middleware.RequireAuth("/app/login"))
 		r.Use(requireRecruiter)
-		r.Get("/", h.list)
+		r.Get("/", h.invites)
+		r.Get("/sets", h.list)
 		r.Get("/new", h.form)
 		r.Post("/", h.create)
 		r.Get("/attach", h.attachForm)
@@ -54,6 +61,9 @@ func MountRecruiter(r chi.Router, d RecruiterDeps) {
 		r.Get("/{id}/edit", h.form)
 		r.Post("/{id}", h.update)
 		r.Post("/{id}/delete", h.remove)
+		r.Post("/{id}/preview", h.preview)
+		r.Post("/{id}/remind", h.remind)
+		r.Post("/{id}/revoke", h.revoke)
 	})
 }
 
@@ -72,7 +82,7 @@ type recruiter struct{ d RecruiterDeps }
 
 func (h *recruiter) page(r *http.Request, title string) layout.Page {
 	p, _ := middleware.PrincipalFrom(r.Context())
-	return layout.Page{Title: title, Surface: layout.SurfaceApp, Nav: layout.AppNav(p, Prefix), CSRF: middleware.CSRFToken(r), UserName: h.displayName(r, p)}
+	return layout.Page{Title: title, Surface: layout.SurfaceApp, Nav: layout.AppNav(p, Prefix), UserRole: layout.RoleLabel(p), Menu: layout.AppMenu(p, Prefix), CSRF: middleware.CSRFToken(r), UserName: h.displayName(r, p)}
 }
 
 func (h *recruiter) displayName(r *http.Request, p service.Principal) string {
@@ -95,7 +105,10 @@ func statusFor(err error) int {
 		return http.StatusForbidden
 	case errors.Is(err, service.ErrNotFound):
 		return http.StatusNotFound
-	case errors.Is(err, service.ErrAssessmentInvalid), errors.Is(err, service.ErrAssessmentInUse), errors.Is(err, service.ErrStageNotAssessment):
+	case errors.Is(err, service.ErrAssessmentInvalid), errors.Is(err, service.ErrAssessmentInUse),
+		errors.Is(err, service.ErrStageNotAssessment), errors.Is(err, service.ErrNoLanguage),
+		errors.Is(err, service.ErrProblemQuality), errors.Is(err, service.ErrAttemptClosed),
+		errors.Is(err, service.ErrInviteExpired), errors.Is(err, service.ErrNotActive):
 		return http.StatusUnprocessableEntity
 	}
 	return http.StatusInternalServerError
@@ -124,6 +137,9 @@ type assessmentForm struct {
 	DurationMinutes  int
 	LanguageOverride string
 	InviteWindowDays int
+	// AllowedLanguages is the ticked language set; empty means any.
+	AllowedLanguages []string
+	Integrity        service.IntegritySettings
 	// Picked is the chosen problems in order.
 	Picked []service.Problem
 	// Filter narrows the bank listing below the picked set.
@@ -147,12 +163,75 @@ func (f assessmentForm) picked(id uuid.UUID) bool {
 	return false
 }
 
+// languagePicked reports whether the form ticks the language; no tick at all
+// is the "any language" default.
+func (f assessmentForm) languagePicked(id string) bool {
+	for _, l := range f.AllowedLanguages {
+		if l == id {
+			return true
+		}
+	}
+	return false
+}
+
+func (f assessmentForm) anyLanguage() bool { return len(f.AllowedLanguages) == 0 }
+
+func (f assessmentForm) webcamInterval() int {
+	if f.Integrity.WebcamEvery == 0 {
+		return service.DefaultWebcamInterval
+	}
+	return f.Integrity.WebcamEvery
+}
+
 func (f assessmentForm) input() service.AssessmentInput {
-	in := service.AssessmentInput{Name: f.Name, DurationMinutes: f.DurationMinutes, LanguageOverride: f.LanguageOverride, InviteWindowDays: f.InviteWindowDays}
+	in := service.AssessmentInput{Name: f.Name, DurationMinutes: f.DurationMinutes, LanguageOverride: f.LanguageOverride,
+		InviteWindowDays: f.InviteWindowDays, AllowedLanguages: f.AllowedLanguages, Integrity: f.Integrity}
 	for _, p := range f.Picked {
 		in.ProblemIDs = append(in.ProblemIDs, p.ID)
 	}
 	return in
+}
+
+// invites is the Assessments screen: every sitting in flight, filterable by
+// status, with the action each one is waiting on.
+func (h *recruiter) invites(w http.ResponseWriter, r *http.Request) {
+	p, _ := middleware.PrincipalFrom(r.Context())
+	status := strings.TrimSpace(r.URL.Query().Get("status"))
+	rows, err := h.d.Attempts.Invites(r.Context(), p, status)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	render(w, r, http.StatusOK, invitesPage(h.page(r, "Assessments"), rows, status))
+}
+
+// remind nudges a candidate who has not started; revoke closes the sitting
+// and takes its links with it. Both come back to the screen they were fired
+// from, so the row redraws with what changed.
+func (h *recruiter) remind(w http.ResponseWriter, r *http.Request) {
+	p, _ := middleware.PrincipalFrom(r.Context())
+	id, ok := idParam(w, r, "id")
+	if !ok {
+		return
+	}
+	if err := h.d.Attempts.SendReminder(r.Context(), p, id); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	http.Redirect(w, r, Prefix, http.StatusSeeOther)
+}
+
+func (h *recruiter) revoke(w http.ResponseWriter, r *http.Request) {
+	p, _ := middleware.PrincipalFrom(r.Context())
+	id, ok := idParam(w, r, "id")
+	if !ok {
+		return
+	}
+	if err := h.d.Attempts.Revoke(r.Context(), p, id); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	http.Redirect(w, r, Prefix, http.StatusSeeOther)
 }
 
 func (h *recruiter) list(w http.ResponseWriter, r *http.Request) {
@@ -162,7 +241,7 @@ func (h *recruiter) list(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	render(w, r, http.StatusOK, listPage(h.page(r, "Assessments"), found))
+	render(w, r, http.StatusOK, listPage(h.page(r, "Problem sets"), found))
 }
 
 func (h *recruiter) detail(w http.ResponseWriter, r *http.Request) {
@@ -194,7 +273,8 @@ func (h *recruiter) form(w http.ResponseWriter, r *http.Request) {
 			h.fail(w, r, err)
 			return
 		}
-		f = assessmentForm{ID: a.ID, Name: a.Name, DurationMinutes: a.DurationMinutes, LanguageOverride: a.LanguageOverride, InviteWindowDays: a.InviteWindowDays, Picked: a.Problems}
+		f = assessmentForm{ID: a.ID, Name: a.Name, DurationMinutes: a.DurationMinutes, LanguageOverride: a.LanguageOverride,
+			InviteWindowDays: a.InviteWindowDays, AllowedLanguages: a.AllowedLanguages, Integrity: a.Integrity, Picked: a.Problems}
 	}
 	if r.URL.Query().Has("name") {
 		// A filter change re-posts the form as a query so nothing typed is lost.
@@ -235,6 +315,23 @@ func (h *recruiter) readForm(r *http.Request, id uuid.UUID, isNew bool) assessme
 	f := assessmentForm{ID: id, New: isNew, Name: values.Get("name"), LanguageOverride: values.Get("language_override")}
 	f.DurationMinutes, _ = strconv.Atoi(values.Get("duration_minutes"))
 	f.InviteWindowDays, _ = strconv.Atoi(values.Get("invite_window_days"))
+	for _, l := range values["allowed_languages"] {
+		// The "any" tick stands for the whole set, so it is stored as none.
+		if l == domain.LanguageAny {
+			f.AllowedLanguages = nil
+			break
+		}
+		f.AllowedLanguages = append(f.AllowedLanguages, l)
+	}
+	f.Integrity = service.IntegritySettings{
+		Fullscreen: values.Get("integrity_fullscreen") != "",
+		BlockPaste: values.Get("integrity_block_paste") != "",
+		Webcam:     values.Get("integrity_webcam") != "",
+		PhotoID:    values.Get("integrity_photo_id") != "",
+	}
+	if f.Integrity.Webcam {
+		f.Integrity.WebcamEvery, _ = strconv.Atoi(values.Get("webcam_interval_s"))
+	}
 	type pick struct {
 		id    uuid.UUID
 		order int
@@ -311,6 +408,22 @@ func (h *recruiter) remove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, Prefix, http.StatusSeeOther)
+}
+
+// preview opens the assessment as a candidate sees it and sends the
+// recruiter straight into that session.
+func (h *recruiter) preview(w http.ResponseWriter, r *http.Request) {
+	p, _ := middleware.PrincipalFrom(r.Context())
+	id, ok := idParam(w, r, "id")
+	if !ok {
+		return
+	}
+	pv, err := h.d.Attempts.Preview(r.Context(), p, id)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	http.Redirect(w, r, pv.URL, http.StatusSeeOther)
 }
 
 // attachView is the stage attachment screen: the job, its assessment

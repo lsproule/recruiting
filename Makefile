@@ -19,9 +19,16 @@ GOLANGCI_LINT := $(GO) run github.com/golangci/golangci-lint/v2/cmd/golangci-lin
 COMPOSE ?= docker compose
 
 # Matches the Postgres service in docker-compose.yml.
-TEST_DATABASE_URL ?= postgres://recruiting:recruiting@localhost:5433/recruiting?sslmode=disable
+# The development database, and the throwaway one the integration suite gets.
+# They are separate on purpose: the suite migrates, seeds and truncates freely,
+# and TestMigrationsRoundTrip drops the app_rw role, which cannot happen while
+# another database still carries grants for it.
+DEV_DATABASE_URL ?= postgres://recruiting:recruiting@localhost:5433/recruiting?sslmode=disable
+TEST_DATABASE_NAME ?= recruiting_test
+TEST_DATABASE_URL ?= postgres://recruiting:recruiting@localhost:5433/$(TEST_DATABASE_NAME)?sslmode=disable
+PSQL_ADMIN = docker exec -i recruiting-postgres-1 psql -q -U recruiting -d postgres -v ON_ERROR_STOP=1
 
-.PHONY: check test test-integration openapi-lint generate migrate migration dev-up dev-down dev-logs fmt tidy build help
+.PHONY: check test test-integration test-e2e openapi-lint generate migrate migration dev-up dev-down dev-logs runner-images create-org seed-problems dev-serve dev-worker dev-runner fmt tidy build help
 
 ## check: formatting, vet, lint, and build
 check: fmt
@@ -42,7 +49,15 @@ test:
 
 ## test-integration: tests tagged `integration` against the Compose Postgres
 test-integration:
-	DATABASE_URL="$(TEST_DATABASE_URL)" $(GO) test -tags integration -count=1 ./...
+	@$(PSQL_ADMIN) -c "drop database if exists $(TEST_DATABASE_NAME) with (force)" >/dev/null
+	@$(PSQL_ADMIN) -c "create database $(TEST_DATABASE_NAME) owner recruiting" >/dev/null
+	@status=0; DATABASE_URL="$(TEST_DATABASE_URL)" $(GO) test -tags integration -count=1 ./... || status=$$?; \
+	$(PSQL_ADMIN) -c "drop database if exists $(TEST_DATABASE_NAME) with (force)" >/dev/null; \
+	exit $$status
+
+## test-e2e: browser end-to-end checks; boots serve/worker/runner and runs Playwright
+test-e2e:
+	web/e2e/run.sh $(args)
 
 ## openapi-lint: validate the served OpenAPI document
 openapi-lint:
@@ -78,11 +93,37 @@ dev-down:
 dev-logs:
 	$(COMPOSE) logs -f
 
+## runner-images: build the sandbox images; RUNNER_LANGUAGES="python rust" restricts the set
+runner-images:
+	runner/images/build.sh
+
 ## migrate: apply migrations to the Compose Postgres
 migrate:
 	@if compgen -G "db/migrations/*.sql" > /dev/null; then \
-		$(GOOSE) -dir db/migrations postgres "$(TEST_DATABASE_URL)" up; \
+		set -a && . ./.env && set +a && DATABASE_URL="$(DEV_DATABASE_URL)" $(GO) run ./cmd/recruiting migrate; \
 	else echo "no migrations yet; nothing to apply"; fi
+
+## create-org: bootstrap an org and its first admin, e.g. `make create-org name="Acme" admin_email=a@acme.example`
+create-org:
+	set -a && . ./.env && set +a && $(GO) run ./cmd/recruiting admin create-org --name "$(name)" --admin-email "$(admin_email)"
+
+## seed-problems: import the platform's built-in problem bank; needs `make dev-runner` running
+seed-problems:
+	set -a && . ./.env && set +a && $(GO) run ./cmd/recruiting admin seed-problems
+
+## dev-serve: run `serve` with .env loaded
+dev-serve:
+	set -a && . ./.env && set +a && $(GO) run ./cmd/recruiting serve
+
+## dev-worker: run `worker` with .env loaded
+dev-worker:
+	set -a && . ./.env && set +a && $(GO) run ./cmd/recruiting worker
+
+## dev-runner: run `runner` with .env loaded against the Compose Postgres, no gVisor required
+dev-runner:
+	set -a && . ./.env && set +a && \
+	RUNNER_ALLOW_INSECURE_RUNTIME=1 RUNNER_SQL_URL="$(DEV_DATABASE_URL)" \
+	$(GO) run ./cmd/recruiting runner
 
 ## migration: scaffold a migration, e.g. `make migration name=create_org`
 migration:

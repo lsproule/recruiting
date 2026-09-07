@@ -44,3 +44,36 @@ func TestLoadReturnsConfigWhenComplete(t *testing.T) {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
 }
+
+func TestLoadDerivesDatabaseURLAppFromDatabaseURL(t *testing.T) {
+	for _, name := range required {
+		t.Setenv(name, "value-"+name)
+	}
+	t.Setenv("DATABASE_URL", "postgres://recruiting:recruiting@localhost:5433/recruiting?sslmode=disable")
+	t.Setenv("DATABASE_URL_APP", "")
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := "postgres://app_rw:app_rw@localhost:5433/recruiting?sslmode=disable"
+	if cfg.DatabaseURLApp != want {
+		t.Fatalf("DatabaseURLApp = %q, want %q", cfg.DatabaseURLApp, want)
+	}
+}
+
+func TestLoadHonorsExplicitDatabaseURLApp(t *testing.T) {
+	for _, name := range required {
+		t.Setenv(name, "value-"+name)
+	}
+	t.Setenv("DATABASE_URL", "postgres://recruiting:recruiting@localhost:5433/recruiting?sslmode=disable")
+	t.Setenv("DATABASE_URL_APP", "postgres://app_rw:app_rw@otherhost:5433/recruiting?sslmode=disable")
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.DatabaseURLApp != "postgres://app_rw:app_rw@otherhost:5433/recruiting?sslmode=disable" {
+		t.Fatalf("explicit DATABASE_URL_APP not honored: %q", cfg.DatabaseURLApp)
+	}
+}

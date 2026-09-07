@@ -2,8 +2,8 @@ package layout
 
 import "recruiting/internal/web/middleware"
 
-// Base is the chrome every signed-in page renders inside. htmx and Alpine are
-// loaded from the binary's own assets, never a CDN.
+// Base is the chrome every signed-in page renders inside. The stylesheets,
+// htmx and Alpine all come from the binary's own assets, never a CDN.
 templ Base(p Page) {
 	<!DOCTYPE html>
 	<html lang="en">
@@ -12,77 +12,187 @@ templ Base(p Page) {
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
 			<meta name="csrf-token" content={ p.CSRF }/>
 			<title>{ p.Title }</title>
+			<link rel="stylesheet" href={ NocturnePath }/>
+			<link rel="stylesheet" href={ AppCSSPath }/>
+			if p.Surface == SurfaceApp {
+				@navBoot()
+			}
 			<script src={ HTMXPath } defer></script>
 			<script src={ AlpinePath } defer></script>
-			@styles()
 		</head>
 		<body hx-headers={ csrfHeader(p.CSRF) }>
-			<header class="topbar">
-				<a class="brand" href={ templ.SafeURL(string(p.Surface) + "/") }>Recruiting</a>
-				<nav>
-					for _, item := range p.Nav {
-						if item.Active {
-							<a href={ templ.SafeURL(item.Href) } aria-current="page">{ item.Label }</a>
-						} else {
-							<a href={ templ.SafeURL(item.Href) }>{ item.Label }</a>
+			if p.Surface == SurfaceApp {
+				<div class="shell">
+					@sidebar(p)
+					<div class="content">
+						@pageMain(p) {
+							{ children... }
 						}
-					}
-				</nav>
-				if p.UserName != "" {
-					<form class="signout" method="post" action={ templ.SafeURL(p.LogoutPath()) }>
-						@CSRFField(p.CSRF)
-						<span class="who">{ p.UserName }</span>
-						<button type="submit">Sign out</button>
-					</form>
+					</div>
+				</div>
+				@navToggleScript()
+			} else {
+				@topbar(p)
+				@pageMain(p) {
+					{ children... }
 				}
-			</header>
-			<main>
-				for _, f := range p.Flashes {
-					<p class={ p.flashClass(f) } role="status">{ f.Message }</p>
-				}
-				{ children... }
-			</main>
+			}
 		</body>
 	</html>
+}
+
+templ pageMain(p Page) {
+	<main>
+		for _, f := range p.Flashes {
+			<p class={ p.flashClass(f) } role="status">{ f.Message }</p>
+		}
+		{ children... }
+	</main>
+}
+
+// sidebar is the recruiter console shell: the five primary destinations with
+// their live counts, the intake entry point, and the signed-in user.
+templ sidebar(p Page) {
+	<aside class="sidebar" id="app-sidebar">
+		<div class="sidebar-head">
+			<a class="sidebar-brand" href="/app/queue">
+				<b>Cadre</b>
+				<span>recruiter</span>
+			</a>
+			<button
+				type="button"
+				id="nav-toggle"
+				class="sidebar-toggle"
+				aria-controls="app-sidebar"
+				aria-expanded="true"
+				aria-label="Collapse navigation"
+				title="Collapse navigation"
+			>
+				@sidebarIcon()
+			</button>
+		</div>
+		{{ counts := p.counts(ctx) }}
+		<nav class="sidebar-nav" aria-label="Primary">
+			for _, item := range p.Nav {
+				if item.Active {
+					<a class="nav-item" href={ templ.SafeURL(item.Href) } aria-current="page">
+						@NavIcon(item.Key)
+						<span>{ item.Label }</span>
+						@navCount(counts[item.Key])
+					</a>
+				} else {
+					<a class="nav-item" href={ templ.SafeURL(item.Href) }>
+						@NavIcon(item.Key)
+						<span>{ item.Label }</span>
+						@navCount(counts[item.Key])
+					</a>
+				}
+			}
+		</nav>
+		<div class="sidebar-foot">
+			if p.UserName != "" {
+				<a class="btn btn-primary btn-block" href="/app/clients/new">New client intake</a>
+				<details class="menu">
+					<summary class="sidebar-user">
+						<span class="avatar" aria-hidden="true">{ p.initials() }</span>
+						<span>
+							<span class="who">{ p.UserName }</span>
+							if p.UserRole != "" {
+								<span class="sidebar-user-role">{ p.UserRole }</span>
+							}
+						</span>
+					</summary>
+					<div class="menu-list">
+						for _, item := range p.Menu {
+							<a href={ templ.SafeURL(item.Href) }>{ item.Label }</a>
+						}
+						<form method="post" action={ templ.SafeURL(p.LogoutPath()) }>
+							@CSRFField(p.CSRF)
+							<button type="submit">Sign out</button>
+						</form>
+					</div>
+				</details>
+			}
+		</div>
+	</aside>
+}
+
+// navBoot restores the navigation's collapsed state before the first paint,
+// so a console that was left collapsed does not open and shut on every load.
+// It is the one script that cannot wait for the deferred bundles.
+templ navBoot() {
+	<script>
+		try {
+			if (localStorage.getItem('cadre:nav') === 'collapsed') {
+				document.documentElement.dataset.nav = 'collapsed';
+			}
+		} catch (e) {
+			/* Storage is walled off in this browser; the console just opens wide. */
+		}
+	</script>
+}
+
+// navToggleScript wires the collapse control. The state lives on the root
+// element so the CSS can act on it, and in localStorage so the choice is this
+// browser's rather than this page's.
+templ navToggleScript() {
+	<script>
+		(function () {
+			const button = document.getElementById('nav-toggle');
+			if (!button) return;
+			const apply = function (collapsed, remember) {
+				if (collapsed) document.documentElement.dataset.nav = 'collapsed';
+				else delete document.documentElement.dataset.nav;
+				button.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+				const label = collapsed ? 'Expand navigation' : 'Collapse navigation';
+				button.setAttribute('aria-label', label);
+				button.setAttribute('title', label);
+				if (!remember) return;
+				try {
+					localStorage.setItem('cadre:nav', collapsed ? 'collapsed' : 'open');
+				} catch (e) {
+					/* Nothing to remember it with; the choice lasts this page. */
+				}
+			};
+			apply(document.documentElement.dataset.nav === 'collapsed', false);
+			button.addEventListener('click', function () {
+				apply(document.documentElement.dataset.nav !== 'collapsed', true);
+			});
+		})();
+	</script>
+}
+
+templ navCount(n int) {
+	if n > 0 {
+		<span class="nav-count">{ n }</span>
+	}
+}
+
+// topbar is the client portal's and public pages' slim chrome: same tokens,
+// no recruiter navigation.
+templ topbar(p Page) {
+	<header class="topbar">
+		<a class="brand" href={ templ.SafeURL(string(p.Surface) + "/") }>Cadre</a>
+		<nav>
+			for _, item := range p.Nav {
+				if item.Active {
+					<a href={ templ.SafeURL(item.Href) } aria-current="page">{ item.Label }</a>
+				} else {
+					<a href={ templ.SafeURL(item.Href) }>{ item.Label }</a>
+				}
+			}
+		</nav>
+		if p.UserName != "" {
+			<form class="signout" method="post" action={ templ.SafeURL(p.LogoutPath()) }>
+				@CSRFField(p.CSRF)
+				<span class="who">{ p.UserName }</span>
+				<button type="submit">Sign out</button>
+			</form>
+		}
+	</header>
 }
 
 // CSRFField is the hidden input every non-htmx form must carry.
 templ CSRFField(token string) {
 	<input type="hidden" name={ middleware.CSRFField } value={ token }/>
-}
-
-templ styles() {
-	<style>
-		:root { color-scheme: light dark; --line: #d7d7d7; --muted: #5b5b5b; }
-		* { box-sizing: border-box; }
-		body { font-family: system-ui, sans-serif; margin: 0; color: #1a1a1a; background: #fff; }
-		.topbar { display: flex; align-items: center; gap: 1.5rem; padding: .75rem 1.5rem; border-bottom: 1px solid var(--line); }
-		.brand { font-weight: 600; text-decoration: none; color: inherit; }
-		.topbar nav { display: flex; gap: 1rem; }
-		.topbar nav a { color: var(--muted); text-decoration: none; }
-		.topbar nav a[aria-current="page"] { color: #1a1a1a; font-weight: 600; }
-		.signout { margin-left: auto; display: flex; align-items: center; gap: .75rem; }
-		.who { color: var(--muted); }
-		main { max-width: 60rem; margin: 2rem auto; padding: 0 1.5rem; }
-		h1 { font-size: 1.4rem; }
-		h2 { font-size: 1.1rem; margin-top: 2.5rem; }
-		table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
-		th, td { text-align: left; padding: .5rem .75rem; border-bottom: 1px solid var(--line); }
-		form.stack { display: grid; gap: .75rem; max-width: 32rem; margin-top: 1rem; }
-		form.search { display: flex; align-items: end; gap: .75rem; margin-top: 1rem; max-width: 32rem; }
-		form.search label { flex: 1; }
-		input[type="search"], input[type="file"] { width: 100%; padding: .45rem; }
-		label { display: block; }
-		input[type="text"], input[type="email"], input[type="number"], select { width: 100%; padding: .45rem; }
-		fieldset { border: 1px solid var(--line); }
-		.flash { padding: .75rem 1rem; border-left: 4px solid; }
-		.flash-success { background: #eef7ee; border-color: #2e7d32; }
-		.flash-error { background: #fdeded; border-color: #b00020; }
-		.link { font-family: ui-monospace, monospace; word-break: break-all; }
-		pre.statement { white-space: pre-wrap; background: #f6f6f6; padding: .75rem; overflow-x: auto; }
-		pre.cell { white-space: pre-wrap; margin: 0; font-size: .85rem; max-width: 18rem; overflow-x: auto; }
-		textarea { width: 100%; padding: .45rem; font-family: ui-monospace, monospace; }
-		.pool-entry { border: 1px solid var(--line); padding: 1rem 1.25rem; margin-top: 1.5rem; }
-		.muted { color: var(--muted); }
-	</style>
 }

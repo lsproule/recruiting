@@ -2,6 +2,7 @@ package layout
 
 import (
 	"encoding/json"
+	"strings"
 
 	"recruiting/internal/service"
 	"recruiting/internal/web/middleware"
@@ -16,8 +17,19 @@ const (
 	SurfaceClient Surface = "/client"
 )
 
+// Nav keys. They name the sidebar entry, key Page.NavCounts, and select the
+// entry's mark in NavIcon.
+const (
+	NavQueue       = "queue"
+	NavClients     = "clients"
+	NavCandidates  = "candidates"
+	NavProblems    = "problems"
+	NavAssessments = "assessments"
+)
+
 // NavItem is one entry in the primary navigation.
 type NavItem struct {
+	Key    string
 	Label  string
 	Href   string
 	Active bool
@@ -31,12 +43,19 @@ type Flash struct {
 
 // Page is the chrome around every rendered view.
 type Page struct {
-	Title    string
-	Surface  Surface
-	Nav      []NavItem
-	Flashes  []Flash
-	CSRF     string
-	UserName string
+	Title   string
+	Surface Surface
+	Nav     []NavItem
+	// Menu holds the entries behind the sidebar footer disclosure: the
+	// role-gated screens that are not one of the five primary destinations.
+	Menu    []NavItem
+	Flashes []Flash
+	CSRF    string
+	// NavCounts is keyed by NavItem.Key. A key that is absent or zero renders
+	// no count, so a screen supplies only the numbers it actually knows.
+	NavCounts map[string]int
+	UserName  string
+	UserRole  string
 }
 
 // LogoutPath is the surface's logout endpoint.
@@ -58,35 +77,75 @@ func (p Page) flashClass(f Flash) string {
 // active. Admin-only entries are omitted for principals without the role.
 func AppNav(p service.Principal, current string) []NavItem {
 	items := []NavItem{
-		{Label: "Jobs", Href: "/app/jobs"},
-		{Label: "Candidates", Href: "/app/candidates"},
+		{Key: NavQueue, Label: "Work queue", Href: "/app/queue"},
+		{Key: NavClients, Label: "Clients", Href: "/app/clients"},
+		{Key: NavCandidates, Label: "Candidates", Href: "/app/candidates"},
 	}
-	// The pool is a hiring tool; the screens behind it refuse anyone else.
+	// The problem bank and assessments are hiring tools; the screens behind
+	// them refuse anyone else.
 	if p.HasRole(service.RoleRecruiter) || p.HasRole(service.RoleAdmin) {
 		items = append(items,
-			NavItem{Label: "Talent pool", Href: "/app/pool"},
-			NavItem{Label: "Problems", Href: "/app/problems"},
-			NavItem{Label: "Assessments", Href: "/app/assessments"},
+			NavItem{Key: NavProblems, Label: "Problem bank", Href: "/app/problems"},
+			NavItem{Key: NavAssessments, Label: "Assessments", Href: "/app/assessments"},
 		)
+	}
+	return markActive(items, current)
+}
+
+// AppMenu is the sidebar footer menu: the role-gated screens that sit outside
+// the five primary destinations.
+func AppMenu(p service.Principal, current string) []NavItem {
+	items := []NavItem{{Key: "jobs", Label: "Jobs", Href: "/app/jobs"}}
+	if p.HasRole(service.RoleRecruiter) || p.HasRole(service.RoleAdmin) {
+		items = append(items, NavItem{Key: "pool", Label: "Talent pool", Href: "/app/pool"})
 	}
 	if p.HasRole(service.RoleVetter) {
 		items = append(items,
-			NavItem{Label: "Availability", Href: "/app/availability"},
-			NavItem{Label: "Scorecards", Href: "/app/scorecards"},
-			NavItem{Label: "Reviews", Href: "/app/reviews"},
+			NavItem{Key: "availability", Label: "Availability", Href: "/app/availability"},
+			NavItem{Key: "scorecards", Label: "Scorecards", Href: "/app/scorecards"},
+			NavItem{Key: "reviews", Label: "Reviews", Href: "/app/reviews"},
 		)
 	}
 	if p.HasRole(service.RoleAdmin) {
 		items = append(items,
-			NavItem{Label: "Users", Href: "/app/admin/users"},
-			NavItem{Label: "Clients", Href: "/app/admin/clients"},
-			NavItem{Label: "Settings", Href: "/app/admin/settings"},
+			NavItem{Key: "users", Label: "Users", Href: "/app/admin/users"},
+			NavItem{Key: "admin-clients", Label: "Client accounts", Href: "/app/admin/clients"},
+			NavItem{Key: "settings", Label: "Settings", Href: "/app/admin/settings"},
 		)
 	}
+	return markActive(items, current)
+}
+
+// RoleLabel is the second line of the sidebar user footer: the principal's
+// roles, title-cased and joined. Empty for a principal with no role.
+func RoleLabel(p service.Principal) string {
+	labels := make([]string, 0, len(p.Roles))
+	for _, role := range p.Roles {
+		if role == "" {
+			continue
+		}
+		labels = append(labels, strings.ToUpper(role[:1])+role[1:])
+	}
+	return strings.Join(labels, " · ")
+}
+
+func markActive(items []NavItem, current string) []NavItem {
 	for i := range items {
 		items[i].Active = items[i].Href == current
 	}
 	return items
+}
+
+// initials seeds the user footer mark; empty when there is no signed-in user.
+func (p Page) initials() string {
+	out := ""
+	for _, field := range strings.Fields(p.UserName) {
+		out += strings.ToUpper(field[:1])
+		if len(out) == 2 {
+			break
+		}
+	}
+	return out
 }
 
 // csrfHeader is the hx-headers value that puts the CSRF token on every htmx
@@ -99,9 +158,5 @@ func csrfHeader(token string) string {
 // ClientNav is the client-portal navigation, with the entry matching current
 // marked active.
 func ClientNav(current string) []NavItem {
-	items := []NavItem{{Label: "Jobs", Href: "/client/jobs"}}
-	for i := range items {
-		items[i].Active = items[i].Href == current
-	}
-	return items
+	return markActive([]NavItem{{Key: "jobs", Label: "Jobs", Href: "/client/jobs"}}, current)
 }

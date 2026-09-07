@@ -39,7 +39,8 @@ insert into org_user_role (org_user_id, org_id, role) values ($1, $2, $3) on con
 select role from org_user_role where org_user_id = $1 order by role;
 
 -- name: CreateClientCompany :one
-insert into client_company (org_id, name) values ($1, $2) returning *;
+insert into client_company (org_id, name, industry, shortlist_sla_days, brief)
+values ($1, $2, $3, $4, $5) returning *;
 
 -- name: ListClientCompanies :many
 select * from client_company where org_id = $1 order by name;
@@ -98,6 +99,13 @@ insert into pipeline_template (org_id, name, is_default) values ($1, $2, $3) ret
 
 -- name: GetDefaultPipelineTemplate :one
 select * from pipeline_template where org_id = $1 and is_default;
+
+-- name: ListPipelineTemplates :many
+-- The default first, so a picker that takes the head takes the org's default.
+select * from pipeline_template where org_id = $1 order by is_default desc, name;
+
+-- name: GetPipelineTemplate :one
+select * from pipeline_template where id = $1 and org_id = $2;
 
 -- name: CreatePipelineTemplateStage :one
 insert into pipeline_template_stage (org_id, template_id, position, name, kind, unblind)

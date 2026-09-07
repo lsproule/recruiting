@@ -300,7 +300,11 @@ func TestAdminSettingsRoundTripAndValidation(t *testing.T) {
 		}
 	}
 
-	form := url.Values{service.SettingPoolScoreThreshold: {"70"}, service.SettingAssessmentInviteDays: {"14"}}
+	form := url.Values{
+		service.SettingPoolScoreThreshold:    {"70"},
+		service.SettingAssessmentInviteDays:  {"14"},
+		service.SettingSnapshotRetentionDays: {"30"},
+	}
 	for _, name := range service.IntegritySignalNames {
 		form.Set("weight."+name, "1")
 	}
@@ -320,7 +324,8 @@ func TestAdminSettingsRoundTripAndValidation(t *testing.T) {
 		t.Fatalf("save settings: %d %s", res.StatusCode, body)
 	}
 	_, body = b.get("/app/admin/settings")
-	if !strings.Contains(body, `value="70"`) || !strings.Contains(body, `value="14"`) || !strings.Contains(body, `value="30"`) {
+	if !strings.Contains(body, `value="70"`) || !strings.Contains(body, `value="14"`) || !strings.Contains(body, `value="30"`) ||
+		!strings.Contains(body, service.SettingSnapshotRetentionDays) {
 		t.Errorf("settings did not round-trip: %s", body)
 	}
 }

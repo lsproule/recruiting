@@ -29,6 +29,8 @@ func TestAttemptRoutesRefuseARequestWithoutTheAssessmentCookie(t *testing.T) {
 		{http.MethodGet, "/attempts/" + id},
 		{http.MethodPost, "/attempts/" + id + "/events"},
 		{http.MethodGet, "/attempts/" + id + "/submissions/" + id},
+		{http.MethodPost, "/attempts/" + id + "/snapshots"},
+		{http.MethodPost, "/attempts/" + id + "/identity"},
 	} {
 		req, _ := http.NewRequest(tc.method, srv.URL+"/api/v1"+tc.path, strings.NewReader(`{"attempt_id":"`+id+`","events":[]}`))
 		req.Header.Set("Content-Type", "application/json")

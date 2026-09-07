@@ -20,6 +20,7 @@ var problemID = uuid.MustParse("11111111-1111-1111-1111-111111111111")
 var weights = map[string]float64{
 	"paste_ratio": 25, "paste_then_pass": 25, "burst_typing": 10, "edit_ratio": 10,
 	"blur_then_solution": 15, "speed_vs_difficulty": 5, "reference_similarity": 10,
+	"fullscreen_exits": 10, "snapshot_gaps": 5,
 }
 
 func load(t *testing.T, name string) []signals.Event {
@@ -95,11 +96,11 @@ func TestCleanBaselineScoresLow(t *testing.T) {
 	in := input(t, "clean.jsonl", signals.Build(load(t, "clean.jsonl"), nil)[problemID].Source)
 	in.Problems[0].References = []signals.Source{{Language: "python", Source: "def solve(a, b):\n    return a + b\n"}}
 	sigs := signals.Compute(in)
-	if len(sigs) != 7 {
-		t.Fatalf("%d signals, want 7", len(sigs))
+	if len(sigs) != 9 {
+		t.Fatalf("%d signals, want 9", len(sigs))
 	}
 	got := byName(sigs)
-	for _, name := range []string{"paste_ratio", "paste_then_pass", "burst_typing", "edit_ratio", "blur_then_solution"} {
+	for _, name := range []string{"paste_ratio", "paste_then_pass", "burst_typing", "edit_ratio", "blur_then_solution", "fullscreen_exits", "snapshot_gaps"} {
 		if s := got[name]; s.Value != 0 || s.Confidence != signals.ConfidenceNormal {
 			t.Errorf("%s = %+v, want 0 at normal confidence", name, s)
 		}

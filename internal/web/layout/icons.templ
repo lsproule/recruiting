@@ -1,0 +1,68 @@
+package layout
+
+// Phosphor-style line marks for the sidebar, drawn on currentColor so they
+// take the nav item's active and hover colors with no extra rules.
+
+templ iconStroke() {
+	<g fill="none" stroke="currentColor" stroke-width="18" stroke-linecap="round" stroke-linejoin="round">
+		{ children... }
+	</g>
+}
+
+// sidebarIcon marks the collapse control. One glyph serves both states: the
+// button's aria-expanded says which way it goes, and a mark that flips would
+// only say the same thing twice.
+templ sidebarIcon() {
+	<svg width="15" height="15" viewBox="0 0 256 256" aria-hidden="true" focusable="false">
+		@iconStroke() {
+			<rect x="32" y="48" width="192" height="160" rx="16"></rect>
+			<line x1="96" y1="48" x2="96" y2="208"></line>
+		}
+	</svg>
+}
+
+// NavIcon renders the mark for a nav key; an unknown key renders nothing so a
+// new entry degrades to a label rather than a broken glyph.
+templ NavIcon(key string) {
+	<svg width="15" height="15" viewBox="0 0 256 256" aria-hidden="true" focusable="false">
+		switch key {
+			case NavQueue:
+				@iconStroke() {
+					<polyline points="40,68 56,84 88,52"></polyline>
+					<polyline points="40,148 56,164 88,132"></polyline>
+					<line x1="120" y1="68" x2="216" y2="68"></line>
+					<line x1="120" y1="148" x2="216" y2="148"></line>
+					<line x1="40" y1="212" x2="216" y2="212"></line>
+				}
+			case NavClients:
+				@iconStroke() {
+					<path d="M40 216V48a8 8 0 0 1 8-8h88a8 8 0 0 1 8 8v168"></path>
+					<path d="M144 96h64a8 8 0 0 1 8 8v112"></path>
+					<line x1="24" y1="216" x2="232" y2="216"></line>
+					<line x1="72" y1="84" x2="112" y2="84"></line>
+					<line x1="72" y1="136" x2="112" y2="136"></line>
+					<line x1="176" y1="136" x2="184" y2="136"></line>
+				}
+			case NavCandidates:
+				@iconStroke() {
+					<circle cx="100" cy="92" r="36"></circle>
+					<path d="M32 200a76 76 0 0 1 136 0"></path>
+					<path d="M172 68a36 36 0 0 1 24 60"></path>
+					<path d="M196 148a76 76 0 0 1 32 40"></path>
+				}
+			case NavProblems:
+				@iconStroke() {
+					<polyline points="88,88 40,128 88,168"></polyline>
+					<polyline points="168,88 216,128 168,168"></polyline>
+					<line x1="144" y1="56" x2="112" y2="200"></line>
+				}
+			case NavAssessments:
+				@iconStroke() {
+					<path d="M88 40H56a8 8 0 0 0-8 8v160a8 8 0 0 0 8 8h144a8 8 0 0 0 8-8V48a8 8 0 0 0-8-8h-32"></path>
+					<rect x="88" y="24" width="80" height="32" rx="8"></rect>
+					<line x1="88" y1="112" x2="168" y2="112"></line>
+					<line x1="88" y1="152" x2="168" y2="152"></line>
+				}
+		}
+	</svg>
+}

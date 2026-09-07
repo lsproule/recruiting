@@ -57,6 +57,6 @@ order by st.position, s.created_at;
 select t.score, r.verdict
 from attempt t
 left join review r on r.attempt_id = t.id
-where t.application_id = $1
+where t.application_id = sqlc.arg(application_id)::uuid
 order by t.created_at desc
 limit 1;

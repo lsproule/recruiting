@@ -1,59 +1,10 @@
--- name: CreateProblem :one
-insert into problem (org_id, kind, title, statement, difficulty, tags, allowed_languages, time_limit_ms, memory_limit_kb, sql_schema, sql_seed)
-values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) returning *;
-
--- name: UpdateProblem :one
-update problem set kind = $3, title = $4, statement = $5, difficulty = $6, tags = $7,
-    allowed_languages = $8, time_limit_ms = $9, memory_limit_kb = $10, sql_schema = $11,
-    sql_seed = $12, updated_at = now()
-where id = $1 and org_id = $2 returning *;
-
--- name: GetProblem :one
-select * from problem where id = $1;
-
--- name: GetProblemByTitle :one
-select * from problem where org_id = $1 and lower(title) = lower($2);
-
--- name: DeleteProblem :execrows
-delete from problem where id = $1 and org_id = $2;
-
--- name: FilterProblems :many
--- RLS shows the caller's own problems and the platform seed; the filters are
--- all optional, an empty string meaning "any".
-select * from problem
-where (sqlc.arg(kind)::text = '' or kind = sqlc.arg(kind)::text)
-  and (sqlc.arg(difficulty)::text = '' or difficulty = sqlc.arg(difficulty)::text)
-  and (sqlc.arg(tag)::text = '' or sqlc.arg(tag)::text = any(tags))
-  and (sqlc.arg(query)::text = '' or title ilike '%' || sqlc.arg(query)::text || '%')
-order by title
-limit sqlc.arg(row_limit)::int;
-
--- name: CreateProblemReference :one
-insert into problem_reference (org_id, problem_id, language, source)
-values ($1, $2, $3, $4) returning *;
-
--- name: ListProblemReferences :many
-select * from problem_reference where problem_id = $1 order by language;
-
--- name: DeleteProblemReferences :exec
-delete from problem_reference where problem_id = $1;
-
--- name: CreateTestCase :one
-insert into test_case (org_id, problem_id, position, input, expected_output, visibility, weight, unordered)
-values ($1, $2, $3, $4, $5, $6, $7, $8) returning *;
-
--- name: ListTestCases :many
-select * from test_case where problem_id = $1 order by position;
-
--- name: DeleteTestCases :exec
-delete from test_case where problem_id = $1;
-
 -- name: CreateAssessment :one
-insert into assessment (org_id, name, duration_minutes, language_override, invite_window_days)
-values ($1, $2, $3, $4, $5) returning *;
+insert into assessment (org_id, name, duration_minutes, language_override, invite_window_days, allowed_languages, integrity)
+values ($1, $2, $3, $4, $5, $6, $7) returning *;
 
 -- name: UpdateAssessment :one
-update assessment set name = $3, duration_minutes = $4, language_override = $5, invite_window_days = $6, updated_at = now()
+update assessment set name = $3, duration_minutes = $4, language_override = $5, invite_window_days = $6,
+    allowed_languages = $7, integrity = $8, updated_at = now()
 where id = $1 and org_id = $2 returning *;
 
 -- name: GetAssessment :one
@@ -82,11 +33,33 @@ select assessment_id, count(*)::int as n from assessment_problem where org_id = 
 update stage set assessment_id = $3 where id = $1 and job_id = $2;
 
 -- name: CountAttemptsForAssessment :one
-select count(*) from attempt where assessment_id = $1;
+-- A preview is the recruiter's own sitting and never stands in the way of
+-- deleting the assessment it previewed.
+select count(*) from attempt where assessment_id = $1 and not preview;
 
 -- name: CreateAttempt :one
 insert into attempt (org_id, application_id, assessment_id, stage_id, invite_expires_at)
-values ($1, $2, $3, $4, $5) returning *;
+values (sqlc.arg(org_id), sqlc.arg(application_id)::uuid, sqlc.arg(assessment_id), sqlc.arg(stage_id)::uuid,
+        sqlc.arg(invite_expires_at)) returning *;
+
+-- name: CreatePreviewAttempt :one
+-- A recruiter sitting their own assessment: no application, no stage, and
+-- nothing downstream reads it.
+insert into attempt (org_id, assessment_id, preview, preview_user_id, invite_expires_at)
+values ($1, $2, true, $3, $4) returning *;
+
+-- name: ListStalePreviewOrgs :many
+select org_id::uuid from stale_preview_orgs(sqlc.arg(before)::timestamptz) as t(org_id);
+
+-- name: ListStalePreviewAttempts :many
+select * from attempt where preview and created_at < $1 order by created_at for update skip locked;
+
+-- name: DeleteAttempt :exec
+-- Events, sources, and submissions cascade from the attempt row.
+delete from attempt where id = $1 and preview;
+
+-- name: DeleteMagicLinksForSubject :exec
+delete from magic_link where purpose = $1 and subject_id = $2;
 
 -- name: GetAttempt :one
 select * from attempt where id = $1;
@@ -95,7 +68,8 @@ select * from attempt where id = $1;
 select * from attempt where id = $1 for update;
 
 -- name: GetAttemptForApplicationStage :one
-select * from attempt where application_id = $1 and stage_id = $2 order by created_at desc limit 1;
+select * from attempt where application_id = sqlc.arg(application_id)::uuid and stage_id = sqlc.arg(stage_id)::uuid
+order by created_at desc limit 1;
 
 -- name: StartAttempt :one
 update attempt set status = 'started', started_at = $2, expires_at = $3, updated_at = now()
@@ -187,16 +161,18 @@ update attempt set risk_score = $2, updated_at = now() where id = $1;
 -- most recent other attempts RLS lets the caller see (every attempt of
 -- the org).
 select attempt_id, source from (
-    select distinct on (attempt_id) attempt_id, source, created_at from submission
-    where problem_id = $1 and attempt_id <> $2 and kind = 'submit' and language = $3
-    order by attempt_id, created_at desc
+    select distinct on (s.attempt_id) s.attempt_id, s.source, s.created_at from submission s
+    join attempt t on t.id = s.attempt_id and not t.preview
+    where s.problem_id = $1 and s.attempt_id <> $2 and s.kind = 'submit' and s.language = $3
+    order by s.attempt_id, s.created_at desc
 ) latest order by created_at desc limit 200;
 
 -- name: ListVetterAttemptReviews :many
 -- The closed attempts waiting on the signed-in vetter, with their verdict if
 -- one is filed. The application's own vetter decides; until one is set the
 -- stage's default stands in, the same rule the scorecard queue uses.
-select t.id as attempt_id, t.application_id, t.stage_id, t.status, t.score, t.risk_score,
+select t.id as attempt_id, t.application_id::uuid as application_id, t.stage_id::uuid as stage_id,
+    t.status, t.score, t.risk_score,
     t.error_count, t.recording_status, t.finished_at,
     c.name as candidate_name, c.email as candidate_email,
     j.title as job_title, st.name as stage_name, r.verdict as verdict
@@ -206,7 +182,7 @@ join candidate c on c.id = a.candidate_id
 join job j on j.id = a.job_id
 join stage st on st.id = t.stage_id
 left join review r on r.attempt_id = t.id
-where t.status in ('scored', 'reviewed')
+where t.status in ('scored', 'reviewed') and not t.preview
   and coalesce(a.vetter_id, st.default_vetter_id) = $1
 order by t.finished_at desc nulls last, t.id;
 
@@ -231,14 +207,14 @@ update attempt set status = 'reviewed', updated_at = now() where id = $1 and sta
 -- name: ListAttemptSummariesForApplication :many
 -- The score and verdict of every attempt on an application, for the
 -- recruiter's summary of it.
-select t.id as attempt_id, t.stage_id, t.status, t.score, t.risk_score, t.error_count, t.finished_at,
+select t.id as attempt_id, t.stage_id::uuid as stage_id, t.status, t.score, t.risk_score, t.error_count, t.finished_at,
     st.name as stage_name, r.verdict as verdict, r.notes as review_notes,
     r.created_at as reviewed_at, u.name as vetter_name
 from attempt t
 join stage st on st.id = t.stage_id
 left join review r on r.attempt_id = t.id
 left join org_user u on u.id = r.vetter_id
-where t.application_id = $1
+where t.application_id = sqlc.arg(application_id)::uuid
 order by t.created_at;
 
 -- name: ListAttemptEventsAfter :many
@@ -250,3 +226,64 @@ select * from attempt_event where attempt_id = $1 and seq > $2 order by seq limi
 -- The problems the recording holds an edit for. The rest never changed, so
 -- the text still synced for them is the text they started from.
 select distinct problem_id from attempt_event where attempt_id = $1 and kind = 'edit' and problem_id is not null;
+
+-- name: UpsertAttemptSnapshot :one
+-- The beat is the session's own counter, so a frame uploaded twice replaces
+-- the first rather than doubling the row and orphaning its object.
+insert into attempt_snapshot (org_id, attempt_id, seq, taken_at, blob_key, bytes)
+values ($1, $2, $3, $4, $5, $6)
+on conflict (attempt_id, seq) do update
+    set taken_at = excluded.taken_at, blob_key = excluded.blob_key, bytes = excluded.bytes
+returning *;
+
+-- name: ListAttemptSnapshots :many
+select * from attempt_snapshot where attempt_id = $1 order by seq;
+
+-- name: SetAttemptConsentAt :one
+-- Consent is given before the timer starts; a session already under way has
+-- nothing left to agree to.
+update attempt set consent_at = $2, updated_at = now()
+where id = $1 and status = 'invited' returning *;
+
+-- name: SetAttemptIdentityBlobKey :one
+-- The frame is taken once: an attempt that already has one matches no row.
+update attempt set identity_blob_key = $2, updated_at = now()
+where id = $1 and identity_blob_key is null returning *;
+
+-- name: ListSnapshotOrgs :many
+select org_id::uuid from snapshot_orgs(sqlc.arg(before)::timestamptz) as t(org_id);
+
+-- name: ListSnapshotsTakenBefore :many
+select * from attempt_snapshot where taken_at < $1 order by taken_at for update skip locked;
+
+-- name: DeleteAttemptSnapshot :exec
+delete from attempt_snapshot where id = $1;
+
+-- name: ListAttemptInvites :many
+-- The org's assessment sittings for the recruiter's Assessments screen: what
+-- each candidate was sent, how much of the set they have submitted, and how
+-- many events the recording flagged. A null status asks for all of them.
+select t.id as attempt_id, t.application_id::uuid as application_id, t.stage_id::uuid as stage_id,
+    t.status, t.invited_at, t.invite_expires_at, t.expires_at, t.finished_at, t.score, t.risk_score,
+    c.name as candidate_name, c.email as candidate_email,
+    j.title as job_title, cc.name as client_company_name, a.name as assessment_name,
+    (select count(*) from assessment_problem ap where ap.assessment_id = t.assessment_id)::int as problems_total,
+    (select count(distinct s.problem_id) from submission s
+        where s.attempt_id = t.id and s.kind = 'submit')::int as problems_submitted,
+    (select count(*) from attempt_event e
+        where e.attempt_id = t.id and e.kind in ('blur', 'paste', 'fullscreen_exit'))::int as integrity_flags
+from attempt t
+join application app on app.id = t.application_id
+join candidate c on c.id = app.candidate_id
+join job j on j.id = app.job_id
+join client_company cc on cc.id = j.client_company_id
+join assessment a on a.id = t.assessment_id
+where not t.preview
+  and (sqlc.narg(status)::text is null or t.status = sqlc.narg(status)::text)
+order by t.invited_at desc, t.id;
+
+-- name: ExpireInvitedAttempt :one
+-- A revoked invite the candidate never opened: there is no work to close
+-- over, so it is marked expired where it stands.
+update attempt set status = 'expired', finished_at = $2, updated_at = now()
+where id = $1 and status = 'invited' returning *;

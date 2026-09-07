@@ -27,8 +27,10 @@ const (
 	TemplateRescheduleCancel    = "reschedule_cancel"
 	TemplateAssessmentInvite    = "assessment_invite"
 	TemplateAssessmentReminder  = "assessment_reminder"
+	TemplateAssessmentDeclined  = "assessment_declined"
 	TemplateClientReleaseNotice = "client_release_notice"
 	TemplateClientRequestInfo   = "client_request_info"
+	TemplateClientShortlist     = "client_shortlist"
 	TemplatePasswordReset       = "password_reset"
 )
 

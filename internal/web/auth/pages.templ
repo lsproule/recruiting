@@ -1,27 +1,24 @@
 package auth
 
-import "recruiting/internal/web/middleware"
+import (
+	"recruiting/internal/web/layout"
+	"recruiting/internal/web/middleware"
+)
 
-// Minimal self-hosted layout; the full application layout lands with the
-// user-management surface. No external assets.
-templ layout(title string) {
+// Sign-in chrome: the design system's tokens, none of the console's
+// navigation, and no external assets.
+templ authLayout(title string) {
 	<!DOCTYPE html>
 	<html lang="en">
 		<head>
 			<meta charset="utf-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
 			<title>{ title }</title>
-			<style>
-				body { font-family: system-ui, sans-serif; max-width: 28rem; margin: 4rem auto; padding: 0 1rem; color: #1a1a1a; }
-				label { display: block; margin-top: 1rem; }
-				input { width: 100%; padding: .5rem; margin-top: .25rem; box-sizing: border-box; }
-				button { margin-top: 1.5rem; padding: .6rem 1.2rem; }
-				.error { color: #b00020; margin-top: 1rem; }
-				.notice { background: #f3f3f3; padding: 1rem; margin-top: 1rem; }
-			</style>
+			<link rel="stylesheet" href={ layout.NocturnePath }/>
+			<link rel="stylesheet" href={ layout.AppCSSPath }/>
 		</head>
 		<body>
-			<main>
+			<main class="auth-main">
 				{ children... }
 			</main>
 		</body>
@@ -37,14 +34,14 @@ type loginForm struct {
 }
 
 templ loginPage(f loginForm) {
-	@layout(f.Title) {
+	@authLayout(f.Title) {
 		<h1>{ f.Title }</h1>
 		<form method="post" action={ templ.SafeURL(f.Action) }>
 			@csrfField(f.CSRF)
 			<label>Email <input type="email" name="email" value={ f.Email } required autofocus/></label>
 			<label>Password <input type="password" name="password" required/></label>
 			if f.Error != "" {
-				<p class="error" role="alert">{ f.Error }</p>
+				<p class="auth-error" role="alert">{ f.Error }</p>
 			}
 			<button type="submit">Sign in</button>
 		</form>
@@ -58,10 +55,10 @@ type resetRequestForm struct {
 }
 
 templ resetRequestPage(f resetRequestForm) {
-	@layout("Reset password") {
+	@authLayout("Reset password") {
 		<h1>Reset password</h1>
 		if f.Sent {
-			<p class="notice">If that email belongs to an account, a reset link is on its way.</p>
+			<p class="auth-notice">If that email belongs to an account, a reset link is on its way.</p>
 		} else {
 			<form method="post" action={ templ.SafeURL(f.Action) }>
 				@csrfField(f.CSRF)
@@ -77,13 +74,13 @@ type resetForm struct {
 }
 
 templ resetPage(f resetForm) {
-	@layout("Choose a new password") {
+	@authLayout("Choose a new password") {
 		<h1>Choose a new password</h1>
 		<form method="post" action={ templ.SafeURL(f.Action) }>
 			@csrfField(f.CSRF)
 			<label>New password <input type="password" name="password" minlength="10" required autofocus/></label>
 			if f.Error != "" {
-				<p class="error" role="alert">{ f.Error }</p>
+				<p class="auth-error" role="alert">{ f.Error }</p>
 			}
 			<button type="submit">Set password</button>
 		</form>
@@ -91,7 +88,7 @@ templ resetPage(f resetForm) {
 }
 
 templ errorPage(title, message string) {
-	@layout(title) {
+	@authLayout(title) {
 		<h1>{ title }</h1>
 		<p>{ message }</p>
 	}

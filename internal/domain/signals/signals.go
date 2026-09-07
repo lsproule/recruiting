@@ -21,6 +21,8 @@ const (
 	BlurThenSolution    = "blur_then_solution"
 	SpeedVsDifficulty   = "speed_vs_difficulty"
 	ReferenceSimilarity = "reference_similarity"
+	FullscreenExits     = "fullscreen_exits"
+	SnapshotGaps        = "snapshot_gaps"
 )
 
 // Confidence levels; they mirror the integrity_signal.confidence check.
@@ -116,6 +118,9 @@ type Input struct {
 	InitialSources map[uuid.UUID]string
 	Submissions    []Submission
 	Problems       []Problem
+	// WebcamEvery is how often the session was to take a webcam frame; zero
+	// is a session that asked for no webcam, and so has no beats to miss.
+	WebcamEvery time.Duration
 	// Incomplete is set when the recording has a gap; every signal is then
 	// reported at low confidence but still computed.
 	Incomplete bool
@@ -161,6 +166,8 @@ func Compute(in Input) []Signal {
 		ctx.blurThenSolution(),
 		ctx.speedVsDifficulty(),
 		ctx.referenceSimilarity(),
+		ctx.fullscreenExits(),
+		ctx.snapshotGaps(),
 	}
 	for i := range sigs {
 		sigs[i].Value = clamp01(sigs[i].Value)
@@ -214,8 +221,8 @@ func at(t time.Time) *time.Time {
 }
 
 // Risk is the weighted sum of the signals, clamped to 0–100. Weights are
-// points out of 100 (the org defaults sum to 100), so a signal at 1 adds its
-// whole weight; weights that sum past 100 saturate rather than scale.
+// points out of 100, so a signal at 1 adds its whole weight; weights that sum
+// past 100 saturate rather than scale.
 // Confidence does not enter the score: a gap in the recording is shown next
 // to it, not hidden in it.
 func Risk(sigs []Signal, weights map[string]float64) float64 {

@@ -1,0 +1,308 @@
+package intake
+
+import (
+	"recruiting/internal/service"
+	"recruiting/internal/web/layout"
+)
+
+// wizardPage is the intake screen: the rail of five steps and the panel of
+// the one the recruiter is on. Every step posts its own panel, so leaving the
+// wizard never loses more than the panel that is open.
+templ wizardPage(page layout.Page, v wizardView) {
+	@layout.Base(page) {
+		<div class="page-head">
+			<div>
+				<div class="page-kicker">{ v.kicker() }</div>
+				<h1>New client &amp; job — { service.IntakeStepNames[v.step()-1] }</h1>
+			</div>
+			<div class="page-actions">
+				<form method="post" action={ templ.SafeURL(v.discardPath()) }>
+					@layout.CSRFField(page.CSRF)
+					<button type="submit">Discard intake</button>
+				</form>
+			</div>
+		</div>
+		@wizard(v)
+	}
+}
+
+// wizard is the region htmx swaps: the rail, the open panel, and the moves
+// out of it. The rail's entries submit the panel too, so jumping to another
+// step keeps what is on screen.
+templ wizard(v wizardView) {
+	<div id="intake" class="wizard">
+		<form
+			id="intake-panel"
+			method="post"
+			action={ templ.SafeURL(v.stepPath()) }
+			hx-post={ v.stepPath() }
+			hx-target="#intake"
+			hx-swap="outerHTML"
+		>
+			@layout.CSRFField(v.CSRF)
+			<nav class="wizard-steps" aria-label="Intake steps">
+				for _, s := range v.steps() {
+					<button
+						type="submit"
+						name="goto"
+						value={ itoa(s.Number) }
+						class={ "wizard-step", templ.KV("active", s.Active), templ.KV("done", s.Done) }
+						aria-current?={ s.Active }
+					>
+						<span class="wizard-num">{ itoa(s.Number) }</span>
+						<span>{ s.Label }</span>
+					</button>
+				}
+			</nav>
+			if v.Error != "" {
+				<p class="flash flash-error" role="alert">{ v.Error }</p>
+			}
+			<div class="wizard-panels">
+				switch v.step() {
+					case service.IntakeStepClient:
+						@clientPanel(v)
+					case service.IntakeStepJob:
+						@jobPanel(v)
+					case service.IntakeStepSkills:
+						@skillsPanel(v)
+					case service.IntakeStepQuestion:
+						@questionPanel(v)
+					default:
+						@reviewPanel(v)
+				}
+				<div class="wizard-nav">
+					if v.prevStep() > 0 {
+						<button type="submit" name="goto" value={ itoa(v.prevStep()) }>Back</button>
+					}
+					if v.nextStep() > 0 {
+						<button type="submit" name="goto" value={ itoa(v.nextStep()) } class="btn-primary">{ v.nextLabel() }</button>
+					}
+				</div>
+			</div>
+		</form>
+		if v.step() == service.IntakeStepReview {
+			<form class="intake-confirm" method="post" action={ templ.SafeURL(v.createPath()) }>
+				@layout.CSRFField(v.CSRF)
+				<button type="submit">Open job &amp; invite the client</button>
+			</form>
+		}
+	</div>
+}
+
+templ clientPanel(v wizardView) {
+	<section class="wizard-panel">
+		<div class="grid-2">
+			<label>
+				Company
+				<input type="text" name="company" value={ v.client().Company } placeholder="Northwind Systems" required/>
+			</label>
+			<label>
+				Industry
+				<input type="text" name="industry" value={ v.client().Industry } placeholder="Payments infrastructure"/>
+			</label>
+			<label>
+				Hiring contact
+				<input type="text" name="contact_name" value={ v.client().ContactName } placeholder="Priya Raman"/>
+			</label>
+			<label>
+				Contact email
+				<input type="email" name="contact_email" value={ v.client().ContactEmail } placeholder="priya@northwind.example"/>
+			</label>
+			<label>
+				Shortlist SLA (business days)
+				<input type="number" name="shortlist_sla_days" min="0" value={ numberValue(v.client().ShortlistSLADays) } placeholder="5"/>
+			</label>
+		</div>
+		<label>
+			What the client actually said — this becomes the brief
+			<textarea name="brief" placeholder="We lose people at the systems-design round. Send us fewer, but only ones who can reason about backpressure.">{ v.client().Brief }</textarea>
+		</label>
+		<p class="muted">The contact is invited to the client portal when the intake finishes. They see released candidates only.</p>
+	</section>
+}
+
+templ jobPanel(v wizardView) {
+	<section class="wizard-panel">
+		<div class="grid-2">
+			<label>
+				Job title
+				<input type="text" name="title" value={ v.job().Title } placeholder="Staff Backend Engineer" required/>
+			</label>
+			<label>
+				Seniority
+				<select name="seniority">
+					<option value="" selected?={ v.job().Seniority == "" }>Not stated</option>
+					for _, s := range service.Seniorities {
+						<option value={ s } selected?={ v.job().Seniority == s }>{ s }</option>
+					}
+				</select>
+			</label>
+			<label>
+				Location
+				<input type="text" name="location" value={ v.job().Location } placeholder="New York"/>
+			</label>
+			<label>
+				Remote policy
+				<select name="remote_policy">
+					<option value="" selected?={ v.job().RemotePolicy == "" }>Not stated</option>
+					for _, r := range service.RemotePolicies {
+						<option value={ r } selected?={ v.job().RemotePolicy == r }>{ r }</option>
+					}
+				</select>
+			</label>
+			<label>
+				Base minimum
+				<input type="number" name="salary_min" min="0" value={ numberValue(v.job().SalaryMin) } placeholder="210000"/>
+			</label>
+			<label>
+				Base maximum
+				<input type="number" name="salary_max" min="0" value={ numberValue(v.job().SalaryMax) } placeholder="255000"/>
+			</label>
+		</div>
+		<label>
+			Pipeline template
+			<select name="template_id">
+				for _, t := range v.Templates {
+					<option value={ t.ID.String() } selected?={ v.job().TemplateID == t.ID }>{ t.Name }</option>
+				}
+			</select>
+		</label>
+		for _, t := range v.Templates {
+			if v.showsPipeline(t) {
+				@pipelinePreview(t)
+			}
+		}
+	</section>
+}
+
+// pipelinePreview shows the stages the job will run, and says plainly when
+// the template cannot carry the assessment this intake is about to build.
+templ pipelinePreview(t service.IntakeTemplate) {
+	<div class="intake-note">
+		<div class="intake-note-head">Pipeline this job will run</div>
+		<div class="intake-chips">
+			for _, name := range t.Stages {
+				<span class="tag">{ name }</span>
+			}
+		</div>
+		if t.HasAssessment {
+			<p class="muted">No stage advances itself. Every move waits for your approval.</p>
+		} else {
+			<p class="muted">This pipeline has no assessment stage, so the intake has nowhere to attach the assessment. Pick another template.</p>
+		}
+	</div>
+}
+
+templ skillsPanel(v wizardView) {
+	<section class="wizard-panel">
+		<label>
+			Skills the assessment has to prove
+			<input type="text" name="skills" value={ v.skillsText() } placeholder="concurrency, distributed systems, api design"/>
+		</label>
+		<p class="muted">Comma-separated, most important first. The order picks the problems: the first skill decides the hardest slot.</p>
+	</section>
+}
+
+templ questionPanel(v wizardView) {
+	<section class="wizard-panel">
+		<div class="intake-options">
+			for _, o := range sourceOptions() {
+				<label class={ "intake-option", templ.KV("chosen", v.source() == o.Value) }>
+					<input type="radio" name="source" value={ o.Value } checked?={ v.source() == o.Value }/>
+					<span>
+						<span class="intake-option-title">{ o.Title }</span>
+						<span class="intake-option-body">{ o.Body }</span>
+					</span>
+				</label>
+			}
+		</div>
+		switch v.source() {
+			case service.IntakeSourceBank:
+				@bankPicker(v)
+			case service.IntakeSourceAuthor:
+				@authorPicker(v)
+			default:
+				@defaultSet(v)
+		}
+	</section>
+}
+
+// defaultSet is one row per slot the seniority calls for, each swappable for
+// any other problem of that difficulty.
+templ defaultSet(v wizardView) {
+	<div class="intake-note">
+		<div class="intake-note-head">Recommended set</div>
+		if len(v.Slots) == 0 {
+			<p class="muted">The bank has nothing at this seniority yet. Choose from the bank, or write a problem for this job.</p>
+		}
+		for _, slot := range v.Slots {
+			<div class="intake-slot">
+				<span class={ "tag", "diff-" + slot.Difficulty }>{ slot.Difficulty }</span>
+				<select name="problem_id">
+					<option value="">No problem in this slot</option>
+					for _, choice := range slot.Choices {
+						<option value={ choice.ID.String() } selected?={ choice.ID == slot.Chosen.ID }>{ choice.Title }</option>
+					}
+				</select>
+			</div>
+		}
+		<p class="muted">Swapping a slot keeps the difficulty; only problems that cleared quality review are offered.</p>
+	</div>
+}
+
+templ bankPicker(v wizardView) {
+	<div class="intake-note">
+		<div class="intake-note-head">Pick from the bank</div>
+		<div class="intake-bank">
+			for _, p := range v.Bank {
+				<label class={ "lang-option", templ.KV("chosen", v.picked()[p.ID]) }>
+					<input type="checkbox" name="problem_id" value={ p.ID.String() } checked?={ v.picked()[p.ID] }/>
+					<span>{ p.Title }</span>
+					<span class="lang-note">{ p.Difficulty }</span>
+				</label>
+			}
+		</div>
+		if len(v.Bank) == 0 {
+			<p class="muted">Nothing in the bank has cleared quality review yet.</p>
+		}
+	</div>
+}
+
+templ authorPicker(v wizardView) {
+	<div class="intake-note">
+		<div class="intake-note-head">Write your own</div>
+		<p class="muted">The draft is saved. Write the problem, prove its reference solution, and you land back on this step with it in the set.</p>
+		<p><a class="btn btn-primary" href={ templ.SafeURL(v.authorPath()) }>Author a problem</a></p>
+		if len(v.Draft.Payload.Assessment.ProblemIDs) > 0 {
+			<div class="intake-bank">
+				for _, p := range v.Bank {
+					if v.picked()[p.ID] {
+						<label class="lang-option chosen">
+							<input type="checkbox" name="problem_id" value={ p.ID.String() } checked/>
+							<span>{ p.Title }</span>
+							<span class="lang-note">{ p.Difficulty }</span>
+						</label>
+					}
+				}
+			</div>
+		}
+	</div>
+}
+
+templ reviewPanel(v wizardView) {
+	<section class="wizard-panel">
+		<div class="intake-note">
+			<div class="intake-note-head">Ready to open</div>
+			for _, row := range v.review() {
+				<div class="intake-review-row">
+					<span class="intake-review-key">{ row.Label }</span>
+					<span>{ row.Value }</span>
+				</div>
+			}
+			<p class="muted">
+				Opening creates the client, invites { v.client().ContactEmail } to the portal, and attaches the
+				assessment to the pipeline&#39;s assessment stage. Nothing reaches the client until you release a candidate.
+			</p>
+		</div>
+	</section>
+}

@@ -176,8 +176,8 @@ func TestRunnerExecuteStoresPerTestResultsAndScoresTheSubmission(t *testing.T) {
 	if err := f.execute(t, exec, sub.ID, 1); err != nil {
 		t.Fatalf("execute submit: %v", err)
 	}
-	if got := len(exec.requests[1].Tests); got != 2 {
-		t.Errorf("a submit sent %d cases, want every case", got)
+	if got := len(exec.requests[1].Tests); got != len(problem.TestCases) {
+		t.Errorf("a submit sent %d cases, want every one of the %d", got, len(problem.TestCases))
 	}
 	if _, score, _ := f.submissionRow(t, sub.ID); score == nil || *score != 1 {
 		t.Errorf("submit score = %v, want 1", score)
@@ -274,22 +274,30 @@ func (f executorFn) Execute(ctx context.Context, req server.Request) (server.Res
 // doubleImport is a Python problem whose harness reads one number from stdin.
 func doubleImport(t *testing.T) domain.ImportProblem {
 	t.Helper()
-	return parseOne(t, `{"kind":"code","title":"Double It","statement":"Double the number.","difficulty":"easy",
-		"tags":["math"],"allowed_languages":["python"],"time_limit_ms":5000,
-		"reference_solutions":[{"language":"python","source":"import sys\nprint(2 * int(sys.stdin.read().strip()))\n"}],
+	return parseOne(t, `{"kind":"code","title":"Double It","statement":"`+longStatement+`","difficulty":"easy",
+		"tags":["math"],"allowed_languages":["python","javascript"],"time_limit_ms":5000,
+		"reference_solutions":[
+			{"language":"python","source":"import sys\nprint(2 * int(sys.stdin.read().strip()))\n"},
+			{"language":"javascript","source":"const n = require(\"fs\").readFileSync(0, \"utf8\").trim();\nconsole.log(2 * Number(n));\n"}],
 		"test_cases":[{"input":"2\n","expected":"4","visibility":"public","weight":1},
-			{"input":"5\n","expected":"10","visibility":"hidden","weight":3}]}`)
+			{"input":"5\n","expected":"10","visibility":"hidden","weight":3},
+			{"input":"0\n","expected":"0","visibility":"hidden","weight":1},
+			{"input":"7\n","expected":"14","visibility":"hidden","weight":1}]}`)
 }
 
 // sumImport is a SQL problem seeded with three rows.
 func sumImport(t *testing.T) domain.ImportProblem {
 	t.Helper()
-	return parseOne(t, `{"kind":"sql","title":"Sum The Rows","statement":"Total the column.","difficulty":"easy",
+	return parseOne(t, `{"kind":"sql","title":"Sum The Rows","statement":"`+longStatement+`","difficulty":"easy",
 		"tags":["sql"],"allowed_languages":["sql"],"time_limit_ms":5000,
 		"sql_schema":"create table t (n int not null);","sql_seed":"insert into t values (1), (2), (3);",
 		"reference_solutions":[{"language":"sql","source":"select sum(n) from t"}],
 		"test_cases":[{"input":"","expected":"6","visibility":"public","weight":1},
-			{"input":"insert into t values (4);","expected":"10","visibility":"hidden","weight":1}]}`)
+			{"input":"insert into t values (4);","expected":"10","visibility":"hidden","weight":1},
+			{"input":"insert into t values (5);","expected":"11","visibility":"hidden","weight":1},
+			{"input":"insert into t values (10);","expected":"16","visibility":"hidden","weight":1},
+			{"input":"delete from t where n = 1;","expected":"5","visibility":"hidden","weight":1},
+			{"input":"delete from t;","expected":"NULL","visibility":"hidden","weight":1}]}`)
 }
 
 func parseOne(t *testing.T, body string) domain.ImportProblem {

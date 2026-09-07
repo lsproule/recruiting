@@ -4,23 +4,29 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
 )
 
+// appRole is the RLS-bound Postgres role serve and worker connect as; the
+// schema owner (DATABASE_URL) would bypass RLS (store.ErrOwnerRole).
+const appRole = "app_rw"
+
 // Config holds every setting the binary needs, regardless of mode.
 type Config struct {
-	DatabaseURL   string
-	BlobEndpoint  string
-	BlobBucket    string
-	BlobKey       string
-	BlobSecret    string
-	SMTPURL       string
-	RunnerURL     string
-	RunnerSecret  string
-	SessionSecret string
-	BaseURL       string
+	DatabaseURL    string
+	DatabaseURLApp string
+	BlobEndpoint   string
+	BlobBucket     string
+	BlobKey        string
+	BlobSecret     string
+	SMTPURL        string
+	RunnerURL      string
+	RunnerSecret   string
+	SessionSecret  string
+	BaseURL        string
 }
 
 // MissingError reports environment variables that are required but unset.
@@ -61,7 +67,30 @@ func Load() (*Config, error) {
 		sort.Strings(missing)
 		return nil, &MissingError{Names: missing}
 	}
+
+	// DATABASE_URL_APP is optional: serve/worker need the app_rw role (N1),
+	// but a fresh checkout should not have to spell out a second URL that
+	// only swaps the user/password of the one it already has.
+	cfg.DatabaseURLApp = strings.TrimSpace(os.Getenv("DATABASE_URL_APP"))
+	if cfg.DatabaseURLApp == "" {
+		derived, err := deriveAppURL(cfg.DatabaseURL)
+		if err != nil {
+			return nil, fmt.Errorf("config: derive DATABASE_URL_APP from DATABASE_URL: %w", err)
+		}
+		cfg.DatabaseURLApp = derived
+	}
 	return cfg, nil
+}
+
+// deriveAppURL swaps dbURL's userinfo for the app_rw role, leaving host,
+// path, and query untouched.
+func deriveAppURL(dbURL string) (string, error) {
+	u, err := url.Parse(dbURL)
+	if err != nil {
+		return "", err
+	}
+	u.User = url.UserPassword(appRole, appRole)
+	return u.String(), nil
 }
 
 // IsMissing reports whether err was caused by unset configuration.

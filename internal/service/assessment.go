@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -20,7 +21,34 @@ var (
 	ErrAssessmentInUse = errors.New("service: candidates have attempted this assessment; it cannot be deleted")
 	// ErrStageNotAssessment refuses attaching to a stage of another kind.
 	ErrStageNotAssessment = errors.New("service: only an assessment stage can carry an assessment")
+	// ErrNoLanguage refuses an assessment whose languages leave one of its
+	// problems with nothing a candidate could answer in.
+	ErrNoLanguage = errors.New("service: the assessment's languages leave a problem with none")
+	// ErrProblemQuality refuses attaching a problem the quality review scores
+	// below the floor: the scores such a problem produces say nothing about
+	// the candidate, so it cannot be what a client is shown.
+	ErrProblemQuality = errors.New("service: this problem scores below the quality floor and cannot be attached to an assessment")
 )
+
+// Webcam snapshot intervals, in seconds. The default is a frame a minute;
+// anything faster is a stream the candidate did not agree to, and anything
+// slower proves nothing about who sat the assessment.
+const (
+	DefaultWebcamInterval = 60
+	MinWebcamInterval     = 15
+	MaxWebcamInterval     = 600
+)
+
+// IntegritySettings is what the session runs under: the measures the
+// candidate is told about before they start. It is stored as the
+// assessment's integrity object and boots the candidate island.
+type IntegritySettings struct {
+	Fullscreen  bool `json:"fullscreen"`
+	BlockPaste  bool `json:"block_paste"`
+	Webcam      bool `json:"webcam"`
+	WebcamEvery int  `json:"webcam_interval_s"`
+	PhotoID     bool `json:"photo_id"`
+}
 
 // Assessment is an ordered set of problems a candidate solves within a time
 // limit. The language override, when set, narrows every problem to that one
@@ -32,6 +60,10 @@ type Assessment struct {
 	DurationMinutes  int
 	LanguageOverride string
 	InviteWindowDays int
+	// AllowedLanguages narrows every problem to this set; empty defers to
+	// each problem's own languages.
+	AllowedLanguages []string
+	Integrity        IntegritySettings
 	Problems         []Problem // in order; scalar fields only on List
 	ProblemCount     int
 }
@@ -42,13 +74,21 @@ type AssessmentInput struct {
 	DurationMinutes  int
 	LanguageOverride string
 	InviteWindowDays int
+	AllowedLanguages []string
+	Integrity        IntegritySettings
 	ProblemIDs       []uuid.UUID
 }
 
 func (in AssessmentInput) clean() (AssessmentInput, error) {
 	in.Name = strings.TrimSpace(in.Name)
-	in.LanguageOverride = strings.ToLower(strings.TrimSpace(in.LanguageOverride))
+	in.LanguageOverride = domain.NormalizeLanguageID(in.LanguageOverride)
 	var problems []string
+	langs, langProblems := cleanLanguageSet(in.AllowedLanguages)
+	in.AllowedLanguages = langs
+	problems = append(problems, langProblems...)
+	integrity, integrityProblems := in.Integrity.clean()
+	in.Integrity = integrity
+	problems = append(problems, integrityProblems...)
 	if in.Name == "" {
 		problems = append(problems, "name is required")
 	}
@@ -76,6 +116,83 @@ func (in AssessmentInput) clean() (AssessmentInput, error) {
 		return in, fmt.Errorf("%w: %s", ErrAssessmentInvalid, strings.Join(problems, "; "))
 	}
 	return in, nil
+}
+
+// clean applies the interval default and reports what cannot be honoured:
+// a photo of an ID is taken through the webcam, so it cannot be asked for
+// without it, and an interval outside the bounds is a setting the session
+// would silently ignore.
+func (s IntegritySettings) clean() (IntegritySettings, []string) {
+	var problems []string
+	if !s.Webcam {
+		s.WebcamEvery = 0
+		if s.PhotoID {
+			problems = append(problems, "a photo ID check needs the webcam turned on")
+		}
+		return s, problems
+	}
+	if s.WebcamEvery == 0 {
+		s.WebcamEvery = DefaultWebcamInterval
+	}
+	if s.WebcamEvery < MinWebcamInterval || s.WebcamEvery > MaxWebcamInterval {
+		problems = append(problems, fmt.Sprintf("webcam interval must be between %d and %d seconds", MinWebcamInterval, MaxWebcamInterval))
+	}
+	return s, problems
+}
+
+// cleanLanguageSet normalises the assessment's allowed languages: retired
+// ids resolve, duplicates collapse, and the registry's order is kept so two
+// forms with the same ticks store the same array. The "any" wildcard, and
+// an empty set, mean the assessment defers to each problem.
+func cleanLanguageSet(in []string) ([]string, []string) {
+	var problems []string
+	picked := make(map[string]bool, len(in))
+	for _, raw := range in {
+		id := domain.NormalizeLanguageID(raw)
+		switch {
+		case id == "":
+			continue
+		case id == domain.LanguageAny:
+			return nil, nil
+		default:
+			if _, ok := domain.LanguageByID(id); !ok {
+				problems = append(problems, "unknown language "+id)
+				continue
+			}
+			picked[id] = true
+		}
+	}
+	var out []string
+	for _, l := range domain.Languages {
+		if picked[l.ID] {
+			out = append(out, l.ID)
+		}
+	}
+	return out, problems
+}
+
+// nonNil keeps an empty language set out of a not-null array column.
+func nonNil(list []string) []string {
+	if list == nil {
+		return []string{}
+	}
+	return list
+}
+
+// intersectLanguages narrows a problem's languages to the assessment's set,
+// keeping the problem's order. An empty set means the assessment defers to
+// the problem.
+func intersectLanguages(allowed, problem []string) []string {
+	if len(allowed) == 0 {
+		return problem
+	}
+	var out []string
+	for _, l := range problem {
+		if containsString(allowed, l) {
+			out = append(out, l)
+		}
+	}
+	return out
 }
 
 func containsString(list []string, s string) bool {
@@ -153,14 +270,19 @@ func (s *AssessmentService) Create(ctx context.Context, p Principal, in Assessme
 	}
 	var out Assessment
 	err = s.st.WithTx(ctx, p, func(ctx context.Context, tx *store.Tx) error {
+		integrity, err := json.Marshal(in.Integrity)
+		if err != nil {
+			return err
+		}
 		row, err := tx.Q.CreateAssessment(ctx, db.CreateAssessmentParams{
 			OrgID: p.OrgID, Name: in.Name, DurationMinutes: int32(in.DurationMinutes),
 			LanguageOverride: nullText(in.LanguageOverride), InviteWindowDays: int32(in.InviteWindowDays),
+			AllowedLanguages: nonNil(in.AllowedLanguages), Integrity: integrity,
 		})
 		if err != nil {
 			return err
 		}
-		if err := writeAssessmentProblems(ctx, tx, p.OrgID, row.ID, in.ProblemIDs); err != nil {
+		if err := writeAssessmentProblems(ctx, tx, p.OrgID, row.ID, in.AllowedLanguages, in.ProblemIDs); err != nil {
 			return err
 		}
 		out, err = loadAssessment(ctx, tx, row.ID)
@@ -183,16 +305,21 @@ func (s *AssessmentService) Update(ctx context.Context, p Principal, id uuid.UUI
 	}
 	var out Assessment
 	err = s.st.WithTx(ctx, p, func(ctx context.Context, tx *store.Tx) error {
+		integrity, err := json.Marshal(in.Integrity)
+		if err != nil {
+			return err
+		}
 		if _, err := tx.Q.UpdateAssessment(ctx, db.UpdateAssessmentParams{
 			ID: id, OrgID: p.OrgID, Name: in.Name, DurationMinutes: int32(in.DurationMinutes),
 			LanguageOverride: nullText(in.LanguageOverride), InviteWindowDays: int32(in.InviteWindowDays),
+			AllowedLanguages: nonNil(in.AllowedLanguages), Integrity: integrity,
 		}); err != nil {
 			return err
 		}
 		if err := tx.Q.DeleteAssessmentProblems(ctx, id); err != nil {
 			return err
 		}
-		if err := writeAssessmentProblems(ctx, tx, p.OrgID, id, in.ProblemIDs); err != nil {
+		if err := writeAssessmentProblems(ctx, tx, p.OrgID, id, in.AllowedLanguages, in.ProblemIDs); err != nil {
 			return err
 		}
 		out, err = loadAssessment(ctx, tx, id)
@@ -290,14 +417,24 @@ func (s *AssessmentService) StageAssessment(ctx context.Context, p Principal, st
 	return out, nil
 }
 
-func writeAssessmentProblems(ctx context.Context, tx *store.Tx, orgID, id uuid.UUID, problemIDs []uuid.UUID) error {
+func writeAssessmentProblems(ctx context.Context, tx *store.Tx, orgID, id uuid.UUID, allowed []string, problemIDs []uuid.UUID) error {
 	for i, pid := range problemIDs {
 		// The read proves the problem is visible to the org (its own or seed).
-		if _, err := tx.Q.GetProblem(ctx, pid); err != nil {
+		row, err := tx.Q.GetProblem(ctx, pid)
+		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return fmt.Errorf("%w: problem %s does not exist", ErrAssessmentInvalid, pid)
 			}
 			return err
+		}
+		if int(row.Quality) < domain.ProblemQualityFloor {
+			return fmt.Errorf("%w: %q scores %d of the %d needed", ErrProblemQuality, row.Title, row.Quality, domain.ProblemQualityFloor)
+		}
+		// A candidate needs one language to answer in, so a problem the
+		// assessment's set leaves with none cannot be attached.
+		if len(intersectLanguages(allowed, row.AllowedLanguages)) == 0 {
+			return fmt.Errorf("%w: %q offers %s, which the assessment's languages rule out",
+				ErrNoLanguage, row.Title, strings.Join(row.AllowedLanguages, ", "))
 		}
 		if err := tx.Q.CreateAssessmentProblem(ctx, db.CreateAssessmentProblemParams{
 			AssessmentID: id, OrgID: orgID, ProblemID: pid, Position: int32(i + 1),
@@ -332,10 +469,17 @@ func loadAssessment(ctx context.Context, tx *store.Tx, id uuid.UUID) (Assessment
 }
 
 func toAssessment(r db.Assessment) Assessment {
-	return Assessment{
+	out := Assessment{
 		ID: r.ID, OrgID: r.OrgID, Name: r.Name, DurationMinutes: int(r.DurationMinutes),
 		LanguageOverride: text(r.LanguageOverride), InviteWindowDays: int(r.InviteWindowDays),
+		AllowedLanguages: r.AllowedLanguages,
 	}
+	if len(r.Integrity) > 0 {
+		// A stored object that no longer parses must not hide the
+		// assessment; the zero settings are the safe reading.
+		_ = json.Unmarshal(r.Integrity, &out.Integrity)
+	}
+	return out
 }
 
 func wrapAssessment(what string, err error) error {
@@ -345,7 +489,8 @@ func wrapAssessment(what string, err error) error {
 	case errors.Is(err, pgx.ErrNoRows):
 		return ErrNotFound
 	case errors.Is(err, ErrNotFound), errors.Is(err, ErrForbidden), errors.Is(err, ErrAssessmentInvalid),
-		errors.Is(err, ErrAssessmentInUse), errors.Is(err, ErrStageNotAssessment):
+		errors.Is(err, ErrAssessmentInUse), errors.Is(err, ErrStageNotAssessment), errors.Is(err, ErrNoLanguage),
+		errors.Is(err, ErrProblemQuality):
 		return err
 	}
 	return fmt.Errorf("%s: %w", what, err)

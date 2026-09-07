@@ -27,6 +27,8 @@ import (
 //	runner.execute    {submission_id}
 //	attempt.finalize  {attempt_id}
 //	signals.compute   {attempt_id}
+//	attempt.purge_preview {}
+//	snapshot.purge    {}
 //
 // Handlers must be idempotent on their payload: a job may be worked more than
 // once when a worker dies mid-flight.
@@ -38,6 +40,11 @@ const (
 	KindRunnerExecute    = "runner.execute"
 	KindAttemptFinalize  = "attempt.finalize"
 	KindSignalsCompute   = "signals.compute"
+	// attempt.purge_preview sweeps every org; its payload is empty.
+	KindAttemptPurgePreview = "attempt.purge_preview"
+	// snapshot.purge sweeps every org under its own retention; its payload
+	// is empty.
+	KindSnapshotPurge = "snapshot.purge"
 )
 
 // MaxAttempts is how many times a job is tried before it is discarded.
@@ -233,6 +240,15 @@ func (c *Client) enqueue(ctx context.Context, tx pgx.Tx, kind string, payload an
 	opts := &river.InsertOpts{Queue: queueName, MaxAttempts: MaxAttempts}
 	if !runAt.IsZero() {
 		opts.ScheduledAt = runAt.UTC()
+	}
+	// A periodic sweep has no transaction to commit with; everything else
+	// queues inside the one that decided on the work.
+	if tx == nil {
+		res, err := c.river.Insert(ctx, def.args(raw), opts)
+		if err != nil {
+			return 0, fmt.Errorf("queue: enqueue %s: %w", kind, err)
+		}
+		return res.Job.ID, nil
 	}
 	res, err := c.river.InsertTx(ctx, tx, def.args(raw), opts)
 	if err != nil {

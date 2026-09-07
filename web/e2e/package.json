@@ -1,0 +1,11 @@
+{
+  "name": "recruiting-e2e",
+  "private": true,
+  "description": "Browser end-to-end checks for the recruiting platform.",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1"
+  }
+}

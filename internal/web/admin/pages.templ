@@ -130,6 +130,10 @@ templ settingsPage(page layout.Page, s service.Settings) {
 				Assessment invite validity in days ({ service.SettingAssessmentInviteDays })
 				<input type="number" name={ service.SettingAssessmentInviteDays } min="1" value={ strconv.Itoa(s.AssessmentInviteDays) } required/>
 			</label>
+			<label>
+				Webcam snapshot retention in days ({ service.SettingSnapshotRetentionDays })
+				<input type="number" name={ service.SettingSnapshotRetentionDays } min="1" value={ strconv.Itoa(s.SnapshotRetentionDays) } required/>
+			</label>
 			<fieldset>
 				<legend>Integrity signal weights</legend>
 				<p class="muted">Weights scale each signal's contribution to the risk score. They never move an application on their own.</p>

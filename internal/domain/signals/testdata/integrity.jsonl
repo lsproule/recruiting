@@ -1,0 +1,16 @@
+{"seq": 1, "kind": "focus", "problem_id": "11111111-1111-1111-1111-111111111111", "client_ts": "2024-08-29T02:53:20.000Z", "server_ts": "2024-08-29T02:53:20.000Z", "payload": {}}
+{"seq": 2, "kind": "fullscreen_enter", "problem_id": "11111111-1111-1111-1111-111111111111", "client_ts": "2024-08-29T02:53:30.000Z", "server_ts": "2024-08-29T02:53:30.000Z", "payload": {}}
+{"seq": 3, "kind": "snapshot", "client_ts": "2024-08-29T02:54:20.000Z", "server_ts": "2024-08-29T02:54:20.000Z", "payload": {"seq": 1, "ok": true}}
+{"seq": 4, "kind": "snapshot", "client_ts": "2024-08-29T02:55:20.000Z", "server_ts": "2024-08-29T02:55:20.000Z", "payload": {"seq": 2, "ok": true}}
+{"seq": 5, "kind": "fullscreen_exit", "problem_id": "11111111-1111-1111-1111-111111111111", "client_ts": "2024-08-29T02:55:20.000Z", "server_ts": "2024-08-29T02:55:20.000Z", "payload": {}}
+{"seq": 6, "kind": "fullscreen_enter", "problem_id": "11111111-1111-1111-1111-111111111111", "client_ts": "2024-08-29T02:55:50.000Z", "server_ts": "2024-08-29T02:55:50.000Z", "payload": {}}
+{"seq": 7, "kind": "snapshot", "client_ts": "2024-08-29T02:56:20.000Z", "server_ts": "2024-08-29T02:56:20.000Z", "payload": {"seq": 3, "ok": false}}
+{"seq": 8, "kind": "snapshot", "client_ts": "2024-08-29T02:57:20.000Z", "server_ts": "2024-08-29T02:57:20.000Z", "payload": {"seq": 4, "ok": true}}
+{"seq": 9, "kind": "snapshot", "client_ts": "2024-08-29T02:58:20.000Z", "server_ts": "2024-08-29T02:58:20.000Z", "payload": {"seq": 5, "ok": true}}
+{"seq": 10, "kind": "fullscreen_exit", "problem_id": "11111111-1111-1111-1111-111111111111", "client_ts": "2024-08-29T02:58:20.000Z", "server_ts": "2024-08-29T02:58:20.000Z", "payload": {}}
+{"seq": 11, "kind": "fullscreen_enter", "problem_id": "11111111-1111-1111-1111-111111111111", "client_ts": "2024-08-29T02:58:50.000Z", "server_ts": "2024-08-29T02:58:50.000Z", "payload": {}}
+{"seq": 12, "kind": "snapshot", "client_ts": "2024-08-29T02:59:20.000Z", "server_ts": "2024-08-29T02:59:20.000Z", "payload": {"seq": 6, "ok": false}}
+{"seq": 13, "kind": "snapshot", "client_ts": "2024-08-29T03:00:20.000Z", "server_ts": "2024-08-29T03:00:20.000Z", "payload": {"seq": 7, "ok": true}}
+{"seq": 14, "kind": "snapshot", "client_ts": "2024-08-29T03:01:20.000Z", "server_ts": "2024-08-29T03:01:20.000Z", "payload": {"seq": 8, "ok": true}}
+{"seq": 15, "kind": "snapshot", "client_ts": "2024-08-29T03:02:20.000Z", "server_ts": "2024-08-29T03:02:20.000Z", "payload": {"seq": 9, "ok": false}}
+{"seq": 16, "kind": "snapshot", "client_ts": "2024-08-29T03:03:20.000Z", "server_ts": "2024-08-29T03:03:20.000Z", "payload": {"seq": 10, "ok": true}}

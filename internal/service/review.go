@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"recruiting/internal/domain/signals"
+	"recruiting/internal/runner/server"
 	"recruiting/internal/store"
 	"recruiting/internal/store/db"
 )
@@ -82,12 +83,30 @@ type AttemptSignal struct {
 	Evidence   []signals.Evidence
 }
 
-// ReviewProblem is one problem of the attempt with what it scored.
+// ReviewProblem is one problem of the attempt with what it scored, the code
+// it was scored on, and how each case went.
 type ReviewProblem struct {
 	ID         uuid.UUID
 	Title      string
 	Difficulty string
 	Score      ProblemScore
+	Language   string
+	// FinalSource is the code of the last submit, or the last text the
+	// editor synced when the problem was never submitted.
+	FinalSource string
+	Tests       []ReviewTest
+}
+
+// ReviewTest is one case of a problem's scored submit. The reviewer sees the
+// hidden cases go by; their inputs and expected outputs stay server-side.
+type ReviewTest struct {
+	Position   int
+	Name       string
+	Class      string
+	Visibility string
+	Status     string
+	TimeMs     int64
+	Weight     float64
 }
 
 // ReviewSubmission is one run or submit as the reviewer sees it.
@@ -100,6 +119,12 @@ type ReviewSubmission struct {
 	Status       string
 	Score        *float64
 	CreatedAt    time.Time
+	// RunnerStatus is the runner's own verdict, empty while the submission
+	// is still queued or the runner never answered.
+	RunnerStatus string
+	TestsPassed  int
+	TestsTotal   int
+	TimedOut     bool
 }
 
 // AttemptReview is the review screen: the score, the breakdown, the
@@ -205,17 +230,17 @@ func (s *ReviewService) Attempt(ctx context.Context, p Principal, attemptID uuid
 		if err != nil {
 			return err
 		}
-		card, err := tx.Q.GetApplicationCard(ctx, att.ApplicationID)
+		card, err := tx.Q.GetApplicationCard(ctx, att.ApplicationID.UUID)
 		if err != nil {
 			return err
 		}
-		stage, err := tx.Q.GetStage(ctx, att.StageID)
+		stage, err := tx.Q.GetStage(ctx, att.StageID.UUID)
 		if err != nil {
 			return err
 		}
 		canReview := requireVetter(p) == nil && requireAssigned(app, stage, p) == nil
 		out = AttemptReview{
-			AttemptID: att.ID, ApplicationID: att.ApplicationID, StageID: att.StageID,
+			AttemptID: att.ID, ApplicationID: att.ApplicationID.UUID, StageID: att.StageID.UUID,
 			CandidateName: card.CandidateName, JobTitle: card.JobTitle, StageName: stage.Name,
 			Status: att.Status, Score: numericPtr(att.Score), RiskScore: numericPtr(att.RiskScore),
 			ErrorCount: int(att.ErrorCount), RecordingStatus: att.RecordingStatus,
@@ -234,8 +259,10 @@ func (s *ReviewService) Attempt(ctx context.Context, p Principal, attemptID uuid
 			scored[ps.ProblemID] = ps
 		}
 		titles := make(map[uuid.UUID]string, len(a.Problems))
+		byID := make(map[uuid.UUID]Problem, len(a.Problems))
 		for _, problem := range a.Problems {
 			titles[problem.ID] = problem.Title
+			byID[problem.ID] = problem
 			out.Problems = append(out.Problems, ReviewProblem{
 				ID: problem.ID, Title: problem.Title, Difficulty: problem.Difficulty, Score: scored[problem.ID],
 			})
@@ -253,7 +280,17 @@ func (s *ReviewService) Attempt(ctx context.Context, p Principal, attemptID uuid
 				Language: sub.Language, Status: sub.Status, Score: numericPtr(sub.Score),
 				CreatedAt: sub.CreatedAt.Time.UTC(),
 			}
+			rs.RunnerStatus, rs.TestsPassed, rs.TestsTotal, rs.TimedOut = submissionOutcome(sub.Result)
 			out.Submissions = append(out.Submissions, rs)
+		}
+		sources, err := tx.Q.ListAttemptSources(ctx, attemptID)
+		if err != nil {
+			return err
+		}
+		for i := range out.Problems {
+			problem := byID[out.Problems[i].ID]
+			out.Problems[i].Language, out.Problems[i].FinalSource = finalSource(problem.ID, subs, sources)
+			out.Problems[i].Tests = reviewTests(scoredSubmit(problem.ID, subs), problem.TestCases)
 		}
 		filed, err := tx.Q.GetReviewForAttempt(ctx, attemptID)
 		switch {
@@ -295,11 +332,14 @@ func (s *ReviewService) Save(ctx context.Context, p Principal, in ReviewInput) (
 		if err != nil {
 			return err
 		}
-		app, err := tx.Q.GetApplication(ctx, att.ApplicationID)
+		if att.Preview {
+			return ErrNotFound
+		}
+		app, err := tx.Q.GetApplication(ctx, att.ApplicationID.UUID)
 		if err != nil {
 			return err
 		}
-		stage, err := tx.Q.GetStage(ctx, att.StageID)
+		stage, err := tx.Q.GetStage(ctx, att.StageID.UUID)
 		if err != nil {
 			return err
 		}
@@ -333,7 +373,7 @@ func (s *ReviewService) Save(ctx context.Context, p Principal, in ReviewInput) (
 			return nil
 		}
 		if in.Verdict != VerdictPass {
-			return s.pool.RetractReviewPass(ctx, tx, p.OrgID, att.ApplicationID)
+			return s.pool.RetractReviewPass(ctx, tx, p.OrgID, att.ApplicationID.UUID)
 		}
 		threshold, err := poolThreshold(ctx, tx, p.OrgID)
 		if err != nil {
@@ -343,7 +383,7 @@ func (s *ReviewService) Save(ctx context.Context, p Principal, in ReviewInput) (
 		if err != nil {
 			return err
 		}
-		return s.pool.OnReviewPass(ctx, tx, p.OrgID, att.ApplicationID, score.Float64, threshold)
+		return s.pool.OnReviewPass(ctx, tx, p.OrgID, att.ApplicationID.UUID, score.Float64, threshold)
 	})
 	if err != nil {
 		return Review{}, wrapReview("save review", err)
@@ -396,11 +436,15 @@ func (s *ReviewService) reviewable(ctx context.Context, tx *store.Tx, p Principa
 	if err != nil {
 		return db.Attempt{}, db.Application{}, err
 	}
-	app, err := tx.Q.GetApplication(ctx, att.ApplicationID)
+	if att.Preview {
+		// A recruiter's own sitting is not a candidate to review.
+		return db.Attempt{}, db.Application{}, ErrNotFound
+	}
+	app, err := tx.Q.GetApplication(ctx, att.ApplicationID.UUID)
 	if err != nil {
 		return db.Attempt{}, db.Application{}, err
 	}
-	stage, err := tx.Q.GetStage(ctx, att.StageID)
+	stage, err := tx.Q.GetStage(ctx, att.StageID.UUID)
 	if err != nil {
 		return db.Attempt{}, db.Application{}, err
 	}
@@ -496,4 +540,65 @@ func wrapReview(what string, err error) error {
 		return err
 	}
 	return fmt.Errorf("%s: %w", what, err)
+}
+
+// submissionOutcome reads the runner's answer off a stored submission: its
+// verdict, how many cases passed of how many ran, and whether anything ran
+// out of time. A submission the runner never answered for reports nothing,
+// which is what keeps it off the replay's jump chips.
+func submissionOutcome(raw json.RawMessage) (status string, passed, total int, timedOut bool) {
+	if len(raw) == 0 {
+		return "", 0, 0, false
+	}
+	var res server.Response
+	if err := json.Unmarshal(raw, &res); err != nil {
+		return "", 0, 0, false
+	}
+	timedOut = res.Status == server.StatusTimeout
+	for _, r := range res.Results {
+		total++
+		switch r.Status {
+		case server.TestPass:
+			passed++
+		case server.TestTimeout:
+			timedOut = true
+		}
+	}
+	return res.Status, passed, total, timedOut
+}
+
+// scoredSubmit is the submit a problem's score came from: the last one, the
+// same reading finalSource takes.
+func scoredSubmit(problemID uuid.UUID, subs []db.Submission) json.RawMessage {
+	var out json.RawMessage
+	for _, sub := range subs {
+		if sub.ProblemID == problemID && sub.Kind == SubmissionSubmit {
+			out = sub.Result // ordered by created_at, so the last wins
+		}
+	}
+	return out
+}
+
+// reviewTests projects a stored runner response onto the problem's cases.
+// Cases the response says nothing about are still listed, so a compile error
+// reads as every case unrun rather than as a problem with no cases.
+func reviewTests(raw json.RawMessage, cases []ProblemTestCase) []ReviewTest {
+	var res server.Response
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &res)
+	}
+	byID := make(map[string]string, len(res.Results))
+	timeByID := make(map[string]int64, len(res.Results))
+	for _, r := range res.Results {
+		byID[r.TestID] = r.Status
+		timeByID[r.TestID] = r.TimeMs
+	}
+	out := make([]ReviewTest, 0, len(cases))
+	for _, c := range cases {
+		out = append(out, ReviewTest{
+			Position: c.Position, Name: c.Name, Class: c.Class, Visibility: c.Visibility,
+			Status: byID[c.ID.String()], TimeMs: timeByID[c.ID.String()], Weight: c.Weight,
+		})
+	}
+	return out
 }

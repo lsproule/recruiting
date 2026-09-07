@@ -203,15 +203,13 @@ func renumber(ctx context.Context, tx *store.Tx, stages []domain.Stage) error {
 	return nil
 }
 
-// copyTemplateStages copies the org's default template into the job's own
-// stage rows. Terminal template stages carry no outcome of their own, so the
-// outcome comes from the stage name; whatever the template leaves out is
-// appended, because a job without both terminals cannot close an application.
-func copyTemplateStages(ctx context.Context, tx *store.Tx, orgID, jobID uuid.UUID) error {
-	tmpl, err := tx.Q.GetDefaultPipelineTemplate(ctx, orgID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrNoTemplate
-	}
+// copyTemplateStages copies a pipeline template into the job's own stage
+// rows; the nil template id takes the org's default. Terminal template stages
+// carry no outcome of their own, so the outcome comes from the stage name;
+// whatever the template leaves out is appended, because a job without both
+// terminals cannot close an application.
+func copyTemplateStages(ctx context.Context, tx *store.Tx, orgID, jobID, templateID uuid.UUID) error {
+	tmpl, err := pipelineTemplate(ctx, tx, orgID, templateID)
 	if err != nil {
 		return err
 	}
@@ -255,6 +253,22 @@ func copyTemplateStages(ctx context.Context, tx *store.Tx, orgID, jobID uuid.UUI
 		copied = append(copied, toStage(row))
 	}
 	return domain.ValidatePipeline(copied)
+}
+
+// pipelineTemplate loads the named template, or the org's default when the
+// id is nil.
+func pipelineTemplate(ctx context.Context, tx *store.Tx, orgID, templateID uuid.UUID) (db.PipelineTemplate, error) {
+	var tmpl db.PipelineTemplate
+	var err error
+	if templateID == uuid.Nil {
+		tmpl, err = tx.Q.GetDefaultPipelineTemplate(ctx, orgID)
+	} else {
+		tmpl, err = tx.Q.GetPipelineTemplate(ctx, db.GetPipelineTemplateParams{ID: templateID, OrgID: orgID})
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		return db.PipelineTemplate{}, ErrNoTemplate
+	}
+	return tmpl, err
 }
 
 // terminalOutcomeFor reads a template terminal stage's outcome off its name;

@@ -25,14 +25,18 @@ type assessmentRemindArgs struct{ payload }
 type runnerExecuteArgs struct{ payload }
 type attemptFinalizeArgs struct{ payload }
 type signalsComputeArgs struct{ payload }
+type attemptPurgePreviewArgs struct{ payload }
+type snapshotPurgeArgs struct{ payload }
 
-func (emailSendArgs) Kind() string        { return KindEmailSend }
-func (interviewRemindArgs) Kind() string  { return KindInterviewRemind }
-func (assessmentInviteArgs) Kind() string { return KindAssessmentInvite }
-func (assessmentRemindArgs) Kind() string { return KindAssessmentRemind }
-func (runnerExecuteArgs) Kind() string    { return KindRunnerExecute }
-func (attemptFinalizeArgs) Kind() string  { return KindAttemptFinalize }
-func (signalsComputeArgs) Kind() string   { return KindSignalsCompute }
+func (emailSendArgs) Kind() string           { return KindEmailSend }
+func (interviewRemindArgs) Kind() string     { return KindInterviewRemind }
+func (assessmentInviteArgs) Kind() string    { return KindAssessmentInvite }
+func (assessmentRemindArgs) Kind() string    { return KindAssessmentRemind }
+func (runnerExecuteArgs) Kind() string       { return KindRunnerExecute }
+func (attemptFinalizeArgs) Kind() string     { return KindAttemptFinalize }
+func (signalsComputeArgs) Kind() string      { return KindSignalsCompute }
+func (attemptPurgePreviewArgs) Kind() string { return KindAttemptPurgePreview }
+func (snapshotPurgeArgs) Kind() string       { return KindSnapshotPurge }
 
 // kindDef is one row of the kind table: how to build args for an insert and
 // how to bind a handler to river's typed worker registry.
@@ -78,6 +82,8 @@ var registry = []kindDef{
 	define[runnerExecuteArgs, *runnerExecuteArgs](),
 	define[attemptFinalizeArgs, *attemptFinalizeArgs](),
 	define[signalsComputeArgs, *signalsComputeArgs](),
+	define[attemptPurgePreviewArgs, *attemptPurgePreviewArgs](),
+	define[snapshotPurgeArgs, *snapshotPurgeArgs](),
 }
 
 var defByKind = func() map[string]kindDef {

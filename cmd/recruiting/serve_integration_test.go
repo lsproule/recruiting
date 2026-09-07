@@ -33,9 +33,10 @@ func TestServeMountsEverySurface(t *testing.T) {
 	appURL.User = url.UserPassword("app_rw", "app_rw")
 
 	cfg := &config.Config{
-		DatabaseURL:   appURL.String(),
-		BaseURL:       "http://127.0.0.1",
-		SessionSecret: "serve-test-secret",
+		DatabaseURL:    ownerURL,
+		DatabaseURLApp: appURL.String(),
+		BaseURL:        "http://127.0.0.1",
+		SessionSecret:  "serve-test-secret",
 	}
 	addrs := make(chan net.Addr, 1)
 	done := make(chan error, 1)

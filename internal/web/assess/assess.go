@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"recruiting/internal/service"
+	"recruiting/internal/web/markdown"
 	"recruiting/internal/web/middleware"
 )
 
@@ -31,6 +32,11 @@ const APIBase = SessionPath + "api"
 
 // apiPrefix is where the JSON API is mounted on the outer mux.
 const apiPrefix = "/api/v1"
+
+// ConsentPath takes the consent screen's answer. Agreeing records the
+// consent and starts the session in one step, so the island can store the
+// photo of an ID against a sitting that has begun.
+const ConsentPath = SessionPath + "consent"
 
 // BeaconPath takes the island's last event batch as a form post, which is
 // what navigator.sendBeacon can send along with the CSRF field.
@@ -55,6 +61,7 @@ func Mount(r chi.Router, d Deps) {
 	h := &handlers{d: d}
 	r.With(d.Assessment).Get(SessionPath, h.session)
 	r.With(d.Assessment).Post(SessionPath+"start", h.start)
+	r.With(d.Assessment).Post(ConsentPath, h.consent)
 	r.With(d.Assessment).Post(BeaconPath, h.beacon)
 	if d.API != nil {
 		r.With(d.Assessment).Handle(APIBase+"/*", forwardAPI(d.API))
@@ -100,16 +107,46 @@ func (h *handlers) session(w http.ResponseWriter, r *http.Request) {
 
 func (h *handlers) start(w http.ResponseWriter, r *http.Request) {
 	p, _ := middleware.PrincipalFrom(r.Context())
-	if _, err := h.d.Attempts.Start(r.Context(), p); err != nil && !errors.Is(err, service.ErrAttemptClosed) {
+	switch _, err := h.d.Attempts.Start(r.Context(), p); {
+	case err == nil, errors.Is(err, service.ErrAttemptClosed):
+	case errors.Is(err, service.ErrConsentRequired):
+		// The session records something; the consent screen is where the
+		// candidate answers for it.
+	default:
 		h.fail(w, r, err)
 		return
 	}
 	http.Redirect(w, r, SessionPath, http.StatusSeeOther)
 }
 
+// consent takes the one answer the consent screen asks for. Agreeing starts
+// the session; declining leaves the invite alone and tells the recruiter.
+func (h *handlers) consent(w http.ResponseWriter, r *http.Request) {
+	p, _ := middleware.PrincipalFrom(r.Context())
+	if r.PostFormValue("decision") == "decline" {
+		if err := h.d.Attempts.Decline(r.Context(), p); err != nil {
+			h.fail(w, r, err)
+			return
+		}
+		render(w, r, http.StatusOK, closedPage("Assessment declined",
+			"Nothing was recorded and the timer never started. Your recruiter has been told, and can send you a new invite."))
+		return
+	}
+	if err := h.d.Attempts.Consent(r.Context(), p); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	h.start(w, r)
+}
+
 func (h *handlers) renderSession(w http.ResponseWriter, r *http.Request, s service.AttemptSession) {
 	c := configFor(s)
 	c.CSRF = middleware.CSRFToken(r)
+	if s.Attempt.Status == service.AttemptInvited {
+		// The consent screen boots from this too, and no problem is the
+		// candidate's to read before the clock starts.
+		c.Problems = []islandProblem{}
+	}
 	cfg, err := json.Marshal(c)
 	if err != nil {
 		h.fail(w, r, err)
@@ -121,25 +158,45 @@ func (h *handlers) renderSession(w http.ResponseWriter, r *http.Request, s servi
 // islandConfig is the JSON the island boots from. Only what the candidate
 // may see is included: hidden cases never leave the server.
 type islandConfig struct {
+	// Mode tells the island which surface it is on; the candidate page is
+	// always an attempt, with the recorder and the timer running.
+	Mode      string          `json:"mode"`
 	AttemptID string          `json:"attempt_id"`
 	APIBase   string          `json:"api_base"`
 	BeaconURL string          `json:"beacon_url"`
 	CSRF      string          `json:"csrf"`
 	Status    string          `json:"status"`
 	ExpiresAt int64           `json:"expires_at"`
+	Integrity islandIntegrity `json:"integrity"`
 	Problems  []islandProblem `json:"problems"`
 }
 
+// islandIntegrity is the assessment's integrity settings plus where the
+// session posts what they produce: the webcam beats and the consent step's
+// photo of an ID.
+type islandIntegrity struct {
+	Fullscreen  bool   `json:"fullscreen"`
+	BlockPaste  bool   `json:"block_paste"`
+	Webcam      bool   `json:"webcam"`
+	WebcamEvery int    `json:"webcam_interval_s"`
+	PhotoID     bool   `json:"photo_id"`
+	SnapshotURL string `json:"snapshot_url"`
+	ConsentURL  string `json:"consent_url"`
+}
+
 type islandProblem struct {
-	ID          string       `json:"id"`
-	Title       string       `json:"title"`
-	Kind        string       `json:"kind"`
-	Statement   string       `json:"statement"`
-	Languages   []string     `json:"languages"`
-	Language    string       `json:"language"`
-	Source      string       `json:"source"`
-	SQLSchema   string       `json:"sql_schema"`
-	PublicTests []islandTest `json:"public_tests"`
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	Kind      string `json:"kind"`
+	Statement string `json:"statement"`
+	// StatementHTML is the statement rendered from Markdown on the server;
+	// the island has no Markdown parser and shows this instead.
+	StatementHTML string       `json:"statement_html"`
+	Languages     []string     `json:"languages"`
+	Language      string       `json:"language"`
+	Source        string       `json:"source"`
+	SQLSchema     string       `json:"sql_schema"`
+	PublicTests   []islandTest `json:"public_tests"`
 }
 
 type islandTest struct {
@@ -148,13 +205,24 @@ type islandTest struct {
 }
 
 func configFor(s service.AttemptSession) islandConfig {
-	out := islandConfig{AttemptID: s.Attempt.ID.String(), APIBase: APIBase, BeaconURL: BeaconPath, Status: s.Attempt.Status, Problems: []islandProblem{}}
+	integrity := s.Assessment.Integrity
+	out := islandConfig{
+		Mode: "attempt", AttemptID: s.Attempt.ID.String(), APIBase: APIBase, BeaconURL: BeaconPath,
+		Status: s.Attempt.Status, Problems: []islandProblem{},
+		Integrity: islandIntegrity{
+			Fullscreen: integrity.Fullscreen, BlockPaste: integrity.BlockPaste, Webcam: integrity.Webcam,
+			WebcamEvery: integrity.WebcamEvery, PhotoID: integrity.PhotoID,
+			SnapshotURL: APIBase + "/attempts/" + s.Attempt.ID.String() + "/snapshots",
+			ConsentURL:  APIBase + "/attempts/" + s.Attempt.ID.String() + "/identity",
+		},
+	}
 	if !s.Attempt.ExpiresAt.IsZero() {
 		out.ExpiresAt = s.Attempt.ExpiresAt.UnixMilli()
 	}
 	for _, p := range s.Problems {
 		ip := islandProblem{
-			ID: p.ID.String(), Title: p.Title, Kind: p.Kind, Statement: p.Statement, Languages: p.Languages,
+			ID: p.ID.String(), Title: p.Title, Kind: p.Kind, Statement: p.Statement,
+			StatementHTML: markdown.ToHTML(p.Statement), Languages: p.Languages,
 			Language: p.Language, Source: p.Source, SQLSchema: p.SQLSchema, PublicTests: []islandTest{},
 		}
 		if ip.Languages == nil {

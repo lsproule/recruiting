@@ -28,22 +28,35 @@ func (q *Queries) AddOrgUserRole(ctx context.Context, arg AddOrgUserRoleParams) 
 }
 
 const createClientCompany = `-- name: CreateClientCompany :one
-insert into client_company (org_id, name) values ($1, $2) returning id, org_id, name, created_at
+insert into client_company (org_id, name, industry, shortlist_sla_days, brief)
+values ($1, $2, $3, $4, $5) returning id, org_id, name, created_at, industry, shortlist_sla_days, brief
 `
 
 type CreateClientCompanyParams struct {
-	OrgID uuid.UUID
-	Name  string
+	OrgID            uuid.UUID
+	Name             string
+	Industry         string
+	ShortlistSlaDays *int32
+	Brief            string
 }
 
 func (q *Queries) CreateClientCompany(ctx context.Context, arg CreateClientCompanyParams) (ClientCompany, error) {
-	row := q.db.QueryRow(ctx, createClientCompany, arg.OrgID, arg.Name)
+	row := q.db.QueryRow(ctx, createClientCompany,
+		arg.OrgID,
+		arg.Name,
+		arg.Industry,
+		arg.ShortlistSlaDays,
+		arg.Brief,
+	)
 	var i ClientCompany
 	err := row.Scan(
 		&i.ID,
 		&i.OrgID,
 		&i.Name,
 		&i.CreatedAt,
+		&i.Industry,
+		&i.ShortlistSlaDays,
+		&i.Brief,
 	)
 	return i, err
 }
@@ -282,7 +295,7 @@ func (q *Queries) DeleteSession(ctx context.Context, tokenHash string) error {
 }
 
 const getClientCompany = `-- name: GetClientCompany :one
-select id, org_id, name, created_at from client_company where id = $1 and org_id = $2
+select id, org_id, name, created_at, industry, shortlist_sla_days, brief from client_company where id = $1 and org_id = $2
 `
 
 type GetClientCompanyParams struct {
@@ -298,6 +311,9 @@ func (q *Queries) GetClientCompany(ctx context.Context, arg GetClientCompanyPara
 		&i.OrgID,
 		&i.Name,
 		&i.CreatedAt,
+		&i.Industry,
+		&i.ShortlistSlaDays,
+		&i.Brief,
 	)
 	return i, err
 }
@@ -430,8 +446,30 @@ func (q *Queries) GetOrgUserCredential(ctx context.Context, orgUserID uuid.UUID)
 	return i, err
 }
 
+const getPipelineTemplate = `-- name: GetPipelineTemplate :one
+select id, org_id, name, is_default, created_at from pipeline_template where id = $1 and org_id = $2
+`
+
+type GetPipelineTemplateParams struct {
+	ID    uuid.UUID
+	OrgID uuid.UUID
+}
+
+func (q *Queries) GetPipelineTemplate(ctx context.Context, arg GetPipelineTemplateParams) (PipelineTemplate, error) {
+	row := q.db.QueryRow(ctx, getPipelineTemplate, arg.ID, arg.OrgID)
+	var i PipelineTemplate
+	err := row.Scan(
+		&i.ID,
+		&i.OrgID,
+		&i.Name,
+		&i.IsDefault,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const listClientCompanies = `-- name: ListClientCompanies :many
-select id, org_id, name, created_at from client_company where org_id = $1 order by name
+select id, org_id, name, created_at, industry, shortlist_sla_days, brief from client_company where org_id = $1 order by name
 `
 
 func (q *Queries) ListClientCompanies(ctx context.Context, orgID uuid.UUID) ([]ClientCompany, error) {
@@ -448,6 +486,9 @@ func (q *Queries) ListClientCompanies(ctx context.Context, orgID uuid.UUID) ([]C
 			&i.OrgID,
 			&i.Name,
 			&i.CreatedAt,
+			&i.Industry,
+			&i.ShortlistSlaDays,
+			&i.Brief,
 		); err != nil {
 			return nil, err
 		}
@@ -625,6 +666,37 @@ func (q *Queries) ListPipelineTemplateStages(ctx context.Context, templateID uui
 			&i.Name,
 			&i.Kind,
 			&i.Unblind,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPipelineTemplates = `-- name: ListPipelineTemplates :many
+select id, org_id, name, is_default, created_at from pipeline_template where org_id = $1 order by is_default desc, name
+`
+
+// The default first, so a picker that takes the head takes the org's default.
+func (q *Queries) ListPipelineTemplates(ctx context.Context, orgID uuid.UUID) ([]PipelineTemplate, error) {
+	rows, err := q.db.Query(ctx, listPipelineTemplates, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []PipelineTemplate{}
+	for rows.Next() {
+		var i PipelineTemplate
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrgID,
+			&i.Name,
+			&i.IsDefault,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}

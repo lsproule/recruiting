@@ -398,6 +398,8 @@ func (s *OrgService) Settings(ctx context.Context, p Principal) (Settings, error
 				out.PoolScoreThreshold, err = settingInt(row)
 			case SettingAssessmentInviteDays:
 				out.AssessmentInviteDays, err = settingInt(row)
+			case SettingSnapshotRetentionDays:
+				out.SnapshotRetentionDays, err = settingInt(row)
 			case SettingIntegrityWeights:
 				var stored map[string]float64
 				if err = json.Unmarshal(row.Value, &stored); err != nil {

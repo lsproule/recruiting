@@ -42,10 +42,24 @@ func SummaryPath(applicationID uuid.UUID) string {
 // ManifestPath is the replay manifest for one attempt.
 func ManifestPath(attemptID uuid.UUID) string { return ManifestPrefix + attemptID.String() }
 
+// AttemptPrefix is where the per-attempt partials the replay island fetches
+// live.
+const AttemptPrefix = "/app/attempts"
+
+// SnapshotsPath is the webcam frames of one attempt. The links it hands back
+// are signed and short-lived, so they are minted when a reviewer asks for a
+// frame rather than baked into the page.
+func SnapshotsPath(attemptID uuid.UUID) string {
+	return AttemptPrefix + "/" + attemptID.String() + "/snapshots"
+}
+
 // Deps is what Mount needs. Org supplies the signed-in user's display name.
 type Deps struct {
 	Reviews *service.ReviewService
 	Org     *service.OrgService
+	// Attempts serves the webcam frames behind the timeline's snapshot
+	// markers. Nil serves none, and the markers open nothing.
+	Attempts *service.AttemptService
 	// Logger records the errors behind a 500; nil disables that logging.
 	Logger *slog.Logger
 }
@@ -62,6 +76,7 @@ func Mount(r chi.Router, d Deps) {
 		r.Get(Prefix+"/{attemptID}", h.review)
 		r.Post(Prefix+"/{attemptID}", h.save)
 		r.Get(ApplicationPrefix+"/{id}/reviews", h.summary)
+		r.Get(AttemptPrefix+"/{attemptID}/snapshots", h.snapshots)
 	})
 }
 
@@ -76,7 +91,7 @@ func render(w http.ResponseWriter, r *http.Request, status int, c templ.Componen
 func (h *handlers) page(r *http.Request, title, nav string, flashes ...layout.Flash) layout.Page {
 	p, _ := middleware.PrincipalFrom(r.Context())
 	return layout.Page{
-		Title: title, Surface: layout.SurfaceApp, Nav: layout.AppNav(p, nav),
+		Title: title, Surface: layout.SurfaceApp, Nav: layout.AppNav(p, nav), UserRole: layout.RoleLabel(p), Menu: layout.AppMenu(p, nav),
 		Flashes: flashes, CSRF: middleware.CSRFToken(r), UserName: h.displayName(r, p),
 	}
 }
@@ -131,7 +146,7 @@ func (h *handlers) renderReview(w http.ResponseWriter, r *http.Request, status i
 		}
 		detail.Review = &filed
 	}
-	cfg, err := json.Marshal(islandConfig{AttemptID: id.String(), ManifestURL: ManifestPath(id)})
+	cfg, err := IslandConfig(id, service.ReplayJumps(detail.Submissions))
 	if err != nil {
 		h.fail(w, r, err)
 		return
@@ -140,11 +155,42 @@ func (h *handlers) renderReview(w http.ResponseWriter, r *http.Request, status i
 }
 
 // islandConfig is the JSON the replay island boots from; it fetches the
-// manifest itself so the page stays small.
+// manifest itself so the page stays small. The jump chips ride along because
+// they are derived from the submissions, which the server already has and the
+// manifest does not carry.
 type islandConfig struct {
-	AttemptID   string `json:"attempt_id"`
-	ManifestURL string `json:"manifest_url"`
+	AttemptID    string       `json:"attempt_id"`
+	ManifestURL  string       `json:"manifest_url"`
+	SnapshotsURL string       `json:"snapshots_url"`
+	Jumps        []islandJump `json:"jumps"`
 }
+
+// islandJump is one chip: a label and the moment it seeks to, in epoch
+// milliseconds, the same clock the manifest's events carry.
+type islandJump struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
+	At    int64  `json:"at"`
+}
+
+// IslandConfig is the replay island's boot JSON for one attempt. Every page
+// that mounts the island builds it here, so the viewer boots the same way
+// wherever it is embedded.
+func IslandConfig(attemptID uuid.UUID, jumps []service.ReplayJump) (string, error) {
+	cfg := islandConfig{
+		AttemptID: attemptID.String(), ManifestURL: ManifestPath(attemptID),
+		SnapshotsURL: SnapshotsPath(attemptID), Jumps: []islandJump{},
+	}
+	for _, j := range jumps {
+		cfg.Jumps = append(cfg.Jumps, islandJump{Key: j.Key, Label: j.Label, At: j.At.UnixMilli()})
+	}
+	b, err := json.Marshal(cfg)
+	return string(b), err
+}
+
+// ConfigScript is the island's boot JSON as a whole script element, for a
+// page outside this package that mounts the viewer.
+func ConfigScript(id, body string) templ.Component { return configScript(id, body) }
 
 func (h *handlers) save(w http.ResponseWriter, r *http.Request) {
 	p, _ := middleware.PrincipalFrom(r.Context())
@@ -187,6 +233,43 @@ func (h *handlers) summary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	render(w, r, http.StatusOK, SummaryFragment(rows))
+}
+
+// snapshots hands the island the frames behind the timeline's snapshot
+// markers, each with a link that expires within service.SnapshotURLTTL. The
+// service refuses anyone but the org's own users, so a client principal
+// never reaches a frame.
+func (h *handlers) snapshots(w http.ResponseWriter, r *http.Request) {
+	p, _ := middleware.PrincipalFrom(r.Context())
+	id, ok := param(w, r, "attemptID")
+	if !ok {
+		return
+	}
+	if h.d.Attempts == nil {
+		http.Error(w, "snapshots are not configured", http.StatusNotFound)
+		return
+	}
+	shots, err := h.d.Attempts.Snapshots(r.Context(), p, id)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	out := make([]snapshotFrame, 0, len(shots))
+	for _, shot := range shots {
+		// The key is where the bytes live; naming it would hand a reader a
+		// handle that outlives the signature.
+		out = append(out, snapshotFrame{Seq: shot.Seq, TakenAt: shot.TakenAt.Unix() * 1000, URL: shot.URL})
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+// snapshotFrame is one webcam beat as the island reads it.
+type snapshotFrame struct {
+	Seq     int    `json:"seq"`
+	TakenAt int64  `json:"taken_at"`
+	URL     string `json:"url"`
 }
 
 func (h *handlers) fail(w http.ResponseWriter, r *http.Request, err error) {

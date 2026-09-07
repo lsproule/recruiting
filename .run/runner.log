@@ -1,0 +1,2 @@
+{"time":"2026-08-31T16:22:37.317966197Z","level":"WARN","msg":"INSECURE: requested runtime unavailable; candidate code runs under runc without gVisor isolation","mode":"runner","requested":"runsc","using":"runc"}
+{"time":"2026-08-31T16:22:37.318143406Z","level":"INFO","msg":"runner listening","mode":"runner","addr":"[::]:8081","runtime":"runc","sql":true}

@@ -34,9 +34,12 @@ templ jobsPage(page layout.Page, jobs []service.ClientJob) {
 	}
 }
 
-templ jobPage(page layout.Page, job service.ClientJob, apps []service.ClientApplication) {
+templ jobPage(page layout.Page, job service.ClientJob, apps []service.ClientApplication, hasShortlist bool) {
 	@layout.Base(page) {
 		<h1>{ job.Title }</h1>
+		if hasShortlist {
+			<p><a href={ templ.SafeURL(ShortlistPath(job.ID)) }>Read the shortlist your recruiter sent</a></p>
+		}
 		if job.BlindMode {
 			<p class="muted">This job is blind: candidates are anonymous until they reach a stage that reveals them.</p>
 		}
@@ -193,3 +196,82 @@ func overallLabel(v string) string {
 }
 
 func when(t time.Time) string { return t.UTC().Format("2 Jan 2006 15:04 UTC") }
+
+// shortlistPage is the packet as the client reads it: the ranking, the
+// recruiter's note, and a way into each candidate. Nothing about the
+// applicants who were not picked reaches this page.
+templ shortlistPage(page layout.Page, packet service.ClientShortlist) {
+	@layout.Base(page) {
+		<p><a href={ templ.SafeURL(JobPath(packet.JobID)) }>&larr; { packet.JobTitle }</a></p>
+		<h1>Shortlist</h1>
+		<p class="muted">Sent { when(packet.SentAt) }</p>
+		if packet.Note != "" {
+			<section class="shortlist-note">
+				<h2>Why these</h2>
+				<p>{ packet.Note }</p>
+			</section>
+		}
+		<ol class="shortlist-ranked">
+			for _, pick := range packet.Picks {
+				<li class="shortlist-ranked-pick">
+					<span class="shortlist-rank">{ strconv.Itoa(pick.Rank) }</span>
+					<a href={ templ.SafeURL(ShortlistPickPath(packet.JobID, pick.ApplicationID)) }>{ pick.Label }</a>
+					if pick.Score != "" {
+						<span class="muted">exam { pick.Score }</span>
+					}
+				</li>
+			}
+		</ol>
+	}
+}
+
+// shortlistPickPage is one candidate: their résumé, the code they wrote, how
+// each case went, and the recording played back read-only.
+templ shortlistPickPage(page layout.Page, d service.ClientShortlistDetail, config string) {
+	@layout.Base(page) {
+		<script src={ layout.ReplayPath } defer></script>
+		<p><a href={ templ.SafeURL(ShortlistPath(d.Packet.JobID)) }>&larr; Shortlist</a></p>
+		<h1>{ d.Pick.Label }</h1>
+		<p class="muted">Ranked { strconv.Itoa(d.Pick.Rank) } of { strconv.Itoa(len(d.Packet.Picks)) }</p>
+		<section>
+			<h2>Résumé</h2>
+			if d.HasResume {
+				<p><a href={ templ.SafeURL(ResumePath(d.Pick.ApplicationID)) }>Download the résumé</a></p>
+			} else {
+				<p class="muted">No résumé on file.</p>
+			}
+		</section>
+		<section>
+			<h2>Replay</h2>
+			<p class="muted">The sitting played back: the code as it was written, run and submitted.</p>
+			<div id="replay" class="replay"></div>
+			@ConfigScript("replay-config", config)
+			<noscript><p class="muted">The replay needs JavaScript enabled.</p></noscript>
+		</section>
+		for _, code := range d.Problems {
+			<section>
+				<h2>{ code.Title }</h2>
+				<p class="muted">{ code.Language }</p>
+				if code.FinalSource == "" {
+					<p class="muted">Nothing was submitted for this problem.</p>
+				} else {
+					<pre class="shortlist-code"><code>{ code.FinalSource }</code></pre>
+				}
+				if len(code.Tests) > 0 {
+					<table>
+						<thead><tr><th>Case</th><th>Visibility</th><th>Result</th></tr></thead>
+						<tbody>
+							for _, test := range code.Tests {
+								<tr>
+									<td>{ testName(test) }</td>
+									<td>{ test.Visibility }</td>
+									<td>{ testStatus(test) }</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				}
+			</section>
+		}
+	}
+}

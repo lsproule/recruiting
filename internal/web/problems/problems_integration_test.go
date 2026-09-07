@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -416,5 +417,211 @@ func TestImportScreenRefusesAnEmptySubmission(t *testing.T) {
 	res, body := s.post(problems.ImportPath, url.Values{})
 	if res.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(body, "choose a JSON file or paste the batch") {
 		t.Fatalf("empty import = %d, body %q", res.StatusCode, body)
+	}
+}
+
+// wizardForm is the authoring wizard as the browser posts it: every step's
+// fields at once, with the step the author is on.
+func wizardForm(title, source string, step int) url.Values {
+	v := url.Values{
+		"id": {""}, "step": {strconv.Itoa(step)}, "lang_choice": {"1"},
+		"title": {title}, "kind": {"code"}, "difficulty": {"medium"},
+		"tags":                {"intervals"},
+		"recommended_minutes": {"40"},
+		"guidelines":          {"Watch for the eviction step."},
+		"time_limit_ms":       {"2000"}, "memory_limit_kb": {"262144"},
+		"statement":      {strings.Repeat("Merge the overlapping intervals. ", 10)},
+		"ref_language_0": {"python"}, "ref_source_0": {source},
+		"ref_language_1": {""}, "ref_source_1": {""},
+	}
+	v["lang"] = []string{"python"}
+	for i := range 6 {
+		suffix := "_" + strconv.Itoa(i)
+		visibility := "hidden"
+		if i == 0 {
+			visibility = "public"
+		}
+		v.Set("tc_name"+suffix, "case "+strconv.Itoa(i+1))
+		v.Set("tc_class"+suffix, "core")
+		v.Set("tc_input"+suffix, "1 2")
+		v.Set("tc_expected"+suffix, "3")
+		v.Set("tc_visibility"+suffix, visibility)
+		v.Set("tc_weight"+suffix, "1")
+	}
+	return v
+}
+
+// The wizard stores a draft on every step, so nothing an author typed is lost
+// when they walk back and forth; the save at the end is the only write that
+// runs the runner and scores the problem.
+func TestAuthoringWizardRoundTrip(t *testing.T) {
+	f := newFixture(t, stubRunner{})
+	s := f.browser(t)
+	s.login(f.recruiterEmail)
+
+	if res, body := s.get(problems.Prefix + "/new"); res.StatusCode != http.StatusOK ||
+		!strings.Contains(body, "Quality review") || !strings.Contains(body, "Interviewer guidelines") {
+		t.Fatalf("wizard = %d, body %q", res.StatusCode, body)
+	}
+
+	form := wizardForm("Wizard Intervals", "print(3)", 1)
+	res, body := s.post(problems.StepPath, form)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("step 2 = %d, body %q", res.StatusCode, body)
+	}
+	id := hiddenValue(t, body, "id")
+	if id == "" || id == uuid.Nil.String() {
+		t.Fatalf("the draft was not stored; body %q", body)
+	}
+
+	// Every later step carries the stored draft's id, so Next never makes a
+	// second problem.
+	form.Set("id", id)
+	for _, step := range []int{2, 3, 4} {
+		form.Set("goto", strconv.Itoa(step))
+		res, body := s.post(problems.StepPath, form)
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("step %d = %d, body %q", step, res.StatusCode, body)
+		}
+		if got := hiddenValue(t, body, "id"); got != id {
+			t.Fatalf("step %d moved the draft from %s to %s", step, id, got)
+		}
+	}
+
+	// Step 4's verify shows every case for every language before the author
+	// commits to a save.
+	res, body = s.post(problems.VerifyPath, form)
+	if res.StatusCode != http.StatusOK || !strings.Contains(body, "solves every case") {
+		t.Fatalf("verify = %d, body %q", res.StatusCode, body)
+	}
+	if strings.Count(body, "<tr>") < 6 {
+		t.Errorf("the verify grid does not report every case: %q", body)
+	}
+
+	res, body = s.post(problems.Prefix+"/"+id, form)
+	if res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("save = %d, body %q", res.StatusCode, body)
+	}
+	if res, body := s.get(problems.Prefix + "/" + id); res.StatusCode != http.StatusOK ||
+		!strings.Contains(body, "Watch for the eviction step.") || !strings.Contains(body, "Python") {
+		t.Fatalf("detail = %d, body %q", res.StatusCode, body)
+	}
+	// A saved problem is proven, so the bank badges the language.
+	if res, body := s.get(problems.Prefix + "?q=Wizard"); res.StatusCode != http.StatusOK ||
+		!strings.Contains(body, "tag-accent") || !strings.Contains(body, "Python") {
+		t.Fatalf("bank = %d, body %q", res.StatusCode, body)
+	}
+}
+
+// A failing reference stops the save and says what the runner made of it.
+func TestWizardVerifyReportsAFailingReference(t *testing.T) {
+	f := newFixture(t, stubRunner{fail: map[string]bool{"print(9)": true}})
+	s := f.browser(t)
+	s.login(f.recruiterEmail)
+
+	form := wizardForm("Wizard Broken", "print(9)", 4)
+	if res, body := s.post(problems.VerifyPath, form); res.StatusCode != http.StatusOK ||
+		!strings.Contains(body, "does not solve the problem") {
+		t.Fatalf("verify = %d, body %q", res.StatusCode, body)
+	}
+	res, body := s.post(problems.Prefix+"/", form)
+	if res.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(body, "does not solve the problem") {
+		t.Fatalf("save with a failing reference = %d, body %q", res.StatusCode, body)
+	}
+}
+
+func TestCloneAndTryScreens(t *testing.T) {
+	f := newFixture(t, stubRunner{})
+	s := f.browser(t)
+	s.login(f.recruiterEmail)
+
+	res, _ := s.post(problems.Prefix+"/", newProblemForm("Clone Source", "print(3)"))
+	if res.StatusCode != http.StatusSeeOther {
+		t.Fatal("create failed")
+	}
+	detail := res.Header.Get("Location")
+
+	res, body := s.post(detail+"/clone", url.Values{})
+	if res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("clone = %d, body %q", res.StatusCode, body)
+	}
+	// A clone opens for editing: it is the org's own problem now.
+	edit := res.Header.Get("Location")
+	if !strings.HasSuffix(edit, "/edit") {
+		t.Fatalf("clone redirected to %q", edit)
+	}
+	if res, body := s.get(edit); res.StatusCode != http.StatusOK || !strings.Contains(body, "Clone Source (copy)") {
+		t.Fatalf("clone edit = %d, body %q", res.StatusCode, body)
+	}
+
+	res, body = s.get(detail + "/try")
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("try screen = %d, body %q", res.StatusCode, body)
+	}
+	for _, want := range []string{`id="assess-config"`, `"mode":"try"`, `"api_base":"/api/v1"`, "assess.js"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the try screen does not carry %s: %q", want, body)
+		}
+	}
+	// Try it shows the candidate's view: no hidden case's expected output.
+	if strings.Contains(body, `"expected":"4"`) {
+		t.Errorf("a hidden case reached the try screen: %q", body)
+	}
+}
+
+// hiddenValue reads one hidden input's value out of a rendered fragment.
+func hiddenValue(t *testing.T, body, name string) string {
+	t.Helper()
+	marker := `name="` + name + `" value="`
+	i := strings.Index(body, marker)
+	if i < 0 {
+		return ""
+	}
+	rest := body[i+len(marker):]
+	j := strings.Index(rest, `"`)
+	if j < 0 {
+		return ""
+	}
+	return rest[:j]
+}
+
+// The bank lists a problem's size, which a listing has to count for itself:
+// the rows it loads carry no test cases.
+func TestBankListsTheCaseCount(t *testing.T) {
+	f := newFixture(t, stubRunner{})
+	s := f.browser(t)
+	s.login(f.recruiterEmail)
+	if res, _ := s.post(problems.Prefix+"/", newProblemForm("Counted Adder", "print(3)")); res.StatusCode != http.StatusSeeOther {
+		t.Fatal("create failed")
+	}
+	res, body := s.get(problems.Prefix + "?q=Counted")
+	if res.StatusCode != http.StatusOK || !strings.Contains(body, "2 cases") {
+		t.Fatalf("bank = %d, body %q", res.StatusCode, body)
+	}
+}
+
+// Walking the wizard over a problem whose solutions have already passed must
+// not demote it to a draft: it stays attachable until the author saves.
+func TestSteppingThroughAVerifiedProblemKeepsItProven(t *testing.T) {
+	f := newFixture(t, stubRunner{})
+	s := f.browser(t)
+	s.login(f.recruiterEmail)
+
+	form := wizardForm("Still Proven", "print(3)", 4)
+	res, body := s.post(problems.Prefix+"/", form)
+	if res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("save = %d, body %q", res.StatusCode, body)
+	}
+	id := strings.TrimPrefix(res.Header.Get("Location"), problems.Prefix+"/")
+
+	form.Set("id", id)
+	form.Set("goto", "2")
+	if res, body := s.post(problems.StepPath, form); res.StatusCode != http.StatusOK ||
+		!strings.Contains(body, "proven") {
+		t.Fatalf("step = %d, body %q", res.StatusCode, body)
+	}
+	if res, body := s.get(problems.Prefix + "/" + id); res.StatusCode != http.StatusOK ||
+		strings.Contains(body, "not attachable") {
+		t.Fatalf("detail after stepping = %d, body %q", res.StatusCode, body)
 	}
 }

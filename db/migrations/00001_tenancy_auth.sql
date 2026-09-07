@@ -261,8 +261,18 @@ revoke usage on schema public from app_rw;
 do $$
 begin
     if exists (select 1 from pg_roles where rolname = 'app_rw') then
+        -- Objects owned by or granted to app_rw in THIS database go first.
         execute 'drop owned by app_rw';
-        execute 'drop role app_rw';
+        -- The role itself is cluster-wide, so another database on the same
+        -- cluster (a developer's alongside the test suite's, say) may still
+        -- carry grants for it. Dropping it then fails, and that is not this
+        -- database's migration to force: leave the role in place and let the
+        -- last database holding it clean it up.
+        begin
+            execute 'drop role app_rw';
+        exception when dependent_objects_still_exist then
+            raise notice 'app_rw kept: another database still grants to it';
+        end;
     end if;
 end
 $$;

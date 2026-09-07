@@ -92,3 +92,31 @@ func TestReferencedAssetsAreEmbedded(t *testing.T) {
 		}
 	}
 }
+
+// The content type follows the file extension: a stylesheet served as
+// text/javascript is dropped by the browser.
+func TestStaticContentTypeFollowsExtension(t *testing.T) {
+	srv := staticServer(t)
+	for path, want := range map[string]string{
+		layout.NocturnePath: "text/css; charset=utf-8",
+		layout.AppCSSPath:   "text/css; charset=utf-8",
+		layout.HTMXPath:     "text/javascript; charset=utf-8",
+		layout.AssessPath:   "text/javascript; charset=utf-8",
+	} {
+		res, err := http.Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		if res.StatusCode != http.StatusOK {
+			t.Errorf("GET %s: %d, want 200", path, res.StatusCode)
+			continue
+		}
+		if got := res.Header.Get("Content-Type"); got != want {
+			t.Errorf("GET %s: Content-Type = %q, want %q", path, got, want)
+		}
+		if res.Header.Get("ETag") == "" {
+			t.Errorf("GET %s: no ETag", path)
+		}
+	}
+}

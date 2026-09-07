@@ -319,7 +319,7 @@ func TestFlagButtonFilesTheApplicationInThePool(t *testing.T) {
 	}
 
 	res, body := s.post(pool.FlagPath(f.appID), url.Values{})
-	if res.StatusCode != http.StatusOK || !strings.Contains(body, "In the talent pool") {
+	if res.StatusCode != http.StatusOK || !strings.Contains(body, "On the shortlist") {
 		t.Fatalf("flag = %d, body %q", res.StatusCode, body)
 	}
 	var flagged bool

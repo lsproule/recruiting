@@ -44,6 +44,7 @@ type Deps struct {
 	Reviews      *service.ReviewService
 	Pool         *service.PoolService
 	Portal       *service.ClientPortalService
+	Shortlists   *service.ShortlistService
 	APITokens    *service.APITokenService
 
 	// Resolve replaces the session-or-bearer resolution for every operation
@@ -68,14 +69,16 @@ var bearerSecurity = []map[string][]string{{BearerScheme: {}}}
 // reviewer's replay manifest. Naming them keeps the guard default-deny, so an
 // operation merely forgotten in a mount is refused rather than served.
 var selfGuardedOps = map[string]bool{
-	"get-attempt":            true,
-	"record-attempt-events":  true,
-	"save-attempt-source":    true,
-	"run-attempt-problem":    true,
-	"submit-attempt-problem": true,
-	"get-attempt-submission": true,
-	"finish-attempt":         true,
-	replayOp:                 true,
+	"get-attempt":             true,
+	"record-attempt-events":   true,
+	"save-attempt-source":     true,
+	"run-attempt-problem":     true,
+	"submit-attempt-problem":  true,
+	"get-attempt-submission":  true,
+	"finish-attempt":          true,
+	"upload-attempt-snapshot": true,
+	"upload-attempt-identity": true,
+	replayOp:                  true,
 }
 
 // access is who may reach an operation.
@@ -153,6 +156,7 @@ func mountAll(a huma.API, d Deps) map[string]guarded {
 	m.mountAssessments()
 	m.mountReviews()
 	m.mountPool()
+	m.mountShortlists()
 	m.mountPortal()
 	m.mountAPITokens()
 

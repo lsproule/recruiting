@@ -16,6 +16,15 @@ const (
 	poolAssessmentWeight = 0.1
 )
 
+// PoolWeights are the weights ScorePoolMatch gives the four parts, exposed
+// so a screen can show what earned a candidate their score.
+var PoolWeights = MatchBreakdown{
+	Skills:     poolSkillsWeight,
+	Seniority:  poolSeniorityWeight,
+	Location:   poolLocationWeight,
+	Assessment: poolAssessmentWeight,
+}
+
 // PoolThreshold is the score a suggestion must reach to be worth showing.
 const PoolThreshold = 0.2
 

@@ -92,9 +92,19 @@ func TestSealedCookieReachesTheAttemptAPIUnderAssess(t *testing.T) {
 	exec(`insert into application (id, org_id, job_id, candidate_id, client_company_id, stage_id) values ($1, $2, $3, $4, $5, $6)`, appID, orgID, jobID, candID, companyID, stageID)
 
 	rec := service.Principal{Kind: service.PrincipalOrgUser, OrgID: orgID, Roles: []string{service.RoleRecruiter}}
-	parsed, err := domain.ParseProblemImport([]byte(`[{"kind":"code","title":"Adder","statement":"Add.","difficulty":"easy","allowed_languages":["python"],
-		"reference_solutions":[{"language":"python","source":"print(3)"}],
-		"test_cases":[{"input":"1 2","expected":"3","visibility":"public"},{"input":"2 2","expected":"4","visibility":"hidden"}]}]`))
+	// The problem has to clear the quality review before an assessment will
+	// take it: six cases, one public and three hidden, a tag, a statement of
+	// some length, and two languages with a reference solution.
+	parsed, err := domain.ParseProblemImport([]byte(`[{"kind":"code","title":"Adder","difficulty":"easy",
+		"statement":"Read two integers from one line and print their sum. The line always holds exactly two integers separated by a single space. Both fit in a 64-bit signed integer, and so does the answer. Print the sum on its own line.",
+		"tags":["math"],"allowed_languages":["python","javascript"],
+		"reference_solutions":[{"language":"python","source":"print(3)"},{"language":"javascript","source":"console.log(3)"}],
+		"test_cases":[{"input":"1 2","expected":"3","visibility":"public"},
+			{"input":"2 2","expected":"4","visibility":"hidden"},
+			{"input":"3 3","expected":"6","visibility":"hidden"},
+			{"input":"4 4","expected":"8","visibility":"hidden"},
+			{"input":"5 5","expected":"10","visibility":"hidden"},
+			{"input":"6 6","expected":"12","visibility":"hidden"}]}]`))
 	if err != nil {
 		t.Fatal(err)
 	}

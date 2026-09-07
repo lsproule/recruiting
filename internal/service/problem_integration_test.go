@@ -100,13 +100,26 @@ func (f *problemFixture) systemTx(t *testing.T, ctx context.Context, fn func(tx 
 	return tx.Commit(ctx)
 }
 
+// codeProblemJSON is a problem good enough to attach to an assessment: the
+// quality review wants six cases, one of them public and three of them
+// hidden, a tag, and a statement long enough to be unambiguous.
 func codeProblemJSON(title, source string) string {
-	return `{"kind":"code","title":"` + title + `","statement":"Add them.","difficulty":"easy",
+	return `{"kind":"code","title":"` + title + `","statement":"` + longStatement + `","difficulty":"easy",
 		"tags":["math"],"allowed_languages":["python"],
 		"reference_solutions":[{"language":"python","source":"` + source + `"}],
 		"test_cases":[{"input":"1 2","expected":"3","visibility":"public","weight":1},
-			{"input":"2 2","expected":"4","visibility":"hidden","weight":2}]}`
+			{"input":"2 2","expected":"4","visibility":"hidden","weight":2},
+			{"input":"3 3","expected":"6","visibility":"hidden","weight":1},
+			{"input":"4 4","expected":"8","visibility":"hidden","weight":1},
+			{"input":"5 5","expected":"10","visibility":"hidden","weight":1},
+			{"input":"6 6","expected":"12","visibility":"hidden","weight":1}]}`
 }
+
+// longStatement clears the quality review's 200-character bar.
+const longStatement = "Read two integers from one line and print their sum. " +
+	"The line always holds exactly two integers separated by a single space. " +
+	"Both fit in a 64-bit signed integer, and so does the answer. " +
+	"Print the sum on its own line with no other output."
 
 func TestProblemCRUD(t *testing.T) {
 	f := newProblemFixture(t)
@@ -121,8 +134,8 @@ func TestProblemCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if len(created.TestCases) != 2 || len(created.References) != 1 {
-		t.Fatalf("created %+v, want 2 test cases and 1 reference", created)
+	if len(created.TestCases) != 6 || len(created.References) != 1 {
+		t.Fatalf("created %+v, want 6 test cases and 1 reference", created)
 	}
 	if created.TestCases[1].Weight != 2 {
 		t.Errorf("hidden case weight = %v, want 2", created.TestCases[1].Weight)

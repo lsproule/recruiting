@@ -80,7 +80,7 @@ func render(w http.ResponseWriter, r *http.Request, status int, c templ.Componen
 func (h *handlers) page(r *http.Request, title, nav string, flashes ...layout.Flash) layout.Page {
 	p, _ := middleware.PrincipalFrom(r.Context())
 	return layout.Page{
-		Title: title, Surface: layout.SurfaceApp, Nav: layout.AppNav(p, nav),
+		Title: title, Surface: layout.SurfaceApp, Nav: layout.AppNav(p, nav), UserRole: layout.RoleLabel(p), Menu: layout.AppMenu(p, nav),
 		Flashes: flashes, CSRF: middleware.CSRFToken(r), UserName: h.displayName(r, p),
 	}
 }

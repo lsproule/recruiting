@@ -44,7 +44,7 @@ func (q *Queries) AppendAttemptEvent(ctx context.Context, arg AppendAttemptEvent
 
 const closeAttempt = `-- name: CloseAttempt :one
 update attempt set status = $2, finished_at = $3, updated_at = now()
-where id = $1 and status = 'started' returning id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count
+where id = $1 and status = 'started' returning id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key
 `
 
 type CloseAttemptParams struct {
@@ -77,6 +77,10 @@ func (q *Queries) CloseAttempt(ctx context.Context, arg CloseAttemptParams) (Att
 		&i.LastEventSeq,
 		&i.ProblemScores,
 		&i.ErrorCount,
+		&i.Preview,
+		&i.PreviewUserID,
+		&i.ConsentAt,
+		&i.IdentityBlobKey,
 	)
 	return i, err
 }
@@ -133,9 +137,11 @@ func (q *Queries) CountAttemptSubmissionErrors(ctx context.Context, attemptID uu
 }
 
 const countAttemptsForAssessment = `-- name: CountAttemptsForAssessment :one
-select count(*) from attempt where assessment_id = $1
+select count(*) from attempt where assessment_id = $1 and not preview
 `
 
+// A preview is the recruiter's own sitting and never stands in the way of
+// deleting the assessment it previewed.
 func (q *Queries) CountAttemptsForAssessment(ctx context.Context, assessmentID uuid.UUID) (int64, error) {
 	row := q.db.QueryRow(ctx, countAttemptsForAssessment, assessmentID)
 	var count int64
@@ -160,8 +166,8 @@ func (q *Queries) CountPendingSubmissions(ctx context.Context, arg CountPendingS
 }
 
 const createAssessment = `-- name: CreateAssessment :one
-insert into assessment (org_id, name, duration_minutes, language_override, invite_window_days)
-values ($1, $2, $3, $4, $5) returning id, org_id, name, duration_minutes, language_override, invite_window_days, created_at, updated_at
+insert into assessment (org_id, name, duration_minutes, language_override, invite_window_days, allowed_languages, integrity)
+values ($1, $2, $3, $4, $5, $6, $7) returning id, org_id, name, duration_minutes, language_override, invite_window_days, created_at, updated_at, allowed_languages, integrity
 `
 
 type CreateAssessmentParams struct {
@@ -170,6 +176,8 @@ type CreateAssessmentParams struct {
 	DurationMinutes  int32
 	LanguageOverride *string
 	InviteWindowDays int32
+	AllowedLanguages []string
+	Integrity        []byte
 }
 
 func (q *Queries) CreateAssessment(ctx context.Context, arg CreateAssessmentParams) (Assessment, error) {
@@ -179,6 +187,8 @@ func (q *Queries) CreateAssessment(ctx context.Context, arg CreateAssessmentPara
 		arg.DurationMinutes,
 		arg.LanguageOverride,
 		arg.InviteWindowDays,
+		arg.AllowedLanguages,
+		arg.Integrity,
 	)
 	var i Assessment
 	err := row.Scan(
@@ -190,6 +200,8 @@ func (q *Queries) CreateAssessment(ctx context.Context, arg CreateAssessmentPara
 		&i.InviteWindowDays,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AllowedLanguages,
+		&i.Integrity,
 	)
 	return i, err
 }
@@ -217,7 +229,8 @@ func (q *Queries) CreateAssessmentProblem(ctx context.Context, arg CreateAssessm
 
 const createAttempt = `-- name: CreateAttempt :one
 insert into attempt (org_id, application_id, assessment_id, stage_id, invite_expires_at)
-values ($1, $2, $3, $4, $5) returning id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count
+values ($1, $2::uuid, $3, $4::uuid,
+        $5) returning id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key
 `
 
 type CreateAttemptParams struct {
@@ -258,6 +271,10 @@ func (q *Queries) CreateAttempt(ctx context.Context, arg CreateAttemptParams) (A
 		&i.LastEventSeq,
 		&i.ProblemScores,
 		&i.ErrorCount,
+		&i.Preview,
+		&i.PreviewUserID,
+		&i.ConsentAt,
+		&i.IdentityBlobKey,
 	)
 	return i, err
 }
@@ -290,85 +307,53 @@ func (q *Queries) CreateIntegritySignal(ctx context.Context, arg CreateIntegrity
 	return err
 }
 
-const createProblem = `-- name: CreateProblem :one
-insert into problem (org_id, kind, title, statement, difficulty, tags, allowed_languages, time_limit_ms, memory_limit_kb, sql_schema, sql_seed)
-values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) returning id, org_id, kind, title, statement, difficulty, tags, allowed_languages, time_limit_ms, memory_limit_kb, sql_schema, sql_seed, created_at, updated_at
+const createPreviewAttempt = `-- name: CreatePreviewAttempt :one
+insert into attempt (org_id, assessment_id, preview, preview_user_id, invite_expires_at)
+values ($1, $2, true, $3, $4) returning id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key
 `
 
-type CreateProblemParams struct {
-	OrgID            uuid.UUID
-	Kind             string
-	Title            string
-	Statement        string
-	Difficulty       string
-	Tags             []string
-	AllowedLanguages []string
-	TimeLimitMs      int32
-	MemoryLimitKb    int32
-	SqlSchema        *string
-	SqlSeed          *string
+type CreatePreviewAttemptParams struct {
+	OrgID           uuid.UUID
+	AssessmentID    uuid.UUID
+	PreviewUserID   uuid.NullUUID
+	InviteExpiresAt pgtype.Timestamptz
 }
 
-func (q *Queries) CreateProblem(ctx context.Context, arg CreateProblemParams) (Problem, error) {
-	row := q.db.QueryRow(ctx, createProblem,
+// A recruiter sitting their own assessment: no application, no stage, and
+// nothing downstream reads it.
+func (q *Queries) CreatePreviewAttempt(ctx context.Context, arg CreatePreviewAttemptParams) (Attempt, error) {
+	row := q.db.QueryRow(ctx, createPreviewAttempt,
 		arg.OrgID,
-		arg.Kind,
-		arg.Title,
-		arg.Statement,
-		arg.Difficulty,
-		arg.Tags,
-		arg.AllowedLanguages,
-		arg.TimeLimitMs,
-		arg.MemoryLimitKb,
-		arg.SqlSchema,
-		arg.SqlSeed,
+		arg.AssessmentID,
+		arg.PreviewUserID,
+		arg.InviteExpiresAt,
 	)
-	var i Problem
+	var i Attempt
 	err := row.Scan(
 		&i.ID,
 		&i.OrgID,
-		&i.Kind,
-		&i.Title,
-		&i.Statement,
-		&i.Difficulty,
-		&i.Tags,
-		&i.AllowedLanguages,
-		&i.TimeLimitMs,
-		&i.MemoryLimitKb,
-		&i.SqlSchema,
-		&i.SqlSeed,
+		&i.ApplicationID,
+		&i.AssessmentID,
+		&i.StageID,
+		&i.Status,
+		&i.InvitedAt,
+		&i.InviteExpiresAt,
+		&i.StartedAt,
+		&i.ExpiresAt,
+		&i.FinishedAt,
+		&i.Score,
+		&i.RiskScore,
+		&i.RecordingStatus,
+		&i.RecordingBlobKey,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const createProblemReference = `-- name: CreateProblemReference :one
-insert into problem_reference (org_id, problem_id, language, source)
-values ($1, $2, $3, $4) returning id, org_id, problem_id, language, source
-`
-
-type CreateProblemReferenceParams struct {
-	OrgID     uuid.UUID
-	ProblemID uuid.UUID
-	Language  string
-	Source    string
-}
-
-func (q *Queries) CreateProblemReference(ctx context.Context, arg CreateProblemReferenceParams) (ProblemReference, error) {
-	row := q.db.QueryRow(ctx, createProblemReference,
-		arg.OrgID,
-		arg.ProblemID,
-		arg.Language,
-		arg.Source,
-	)
-	var i ProblemReference
-	err := row.Scan(
-		&i.ID,
-		&i.OrgID,
-		&i.ProblemID,
-		&i.Language,
-		&i.Source,
+		&i.LastEventSeq,
+		&i.ProblemScores,
+		&i.ErrorCount,
+		&i.Preview,
+		&i.PreviewUserID,
+		&i.ConsentAt,
+		&i.IdentityBlobKey,
 	)
 	return i, err
 }
@@ -414,48 +399,6 @@ func (q *Queries) CreateSubmission(ctx context.Context, arg CreateSubmissionPara
 	return i, err
 }
 
-const createTestCase = `-- name: CreateTestCase :one
-insert into test_case (org_id, problem_id, position, input, expected_output, visibility, weight, unordered)
-values ($1, $2, $3, $4, $5, $6, $7, $8) returning id, org_id, problem_id, position, input, expected_output, visibility, weight, unordered
-`
-
-type CreateTestCaseParams struct {
-	OrgID          uuid.UUID
-	ProblemID      uuid.UUID
-	Position       int32
-	Input          string
-	ExpectedOutput string
-	Visibility     string
-	Weight         pgtype.Numeric
-	Unordered      bool
-}
-
-func (q *Queries) CreateTestCase(ctx context.Context, arg CreateTestCaseParams) (TestCase, error) {
-	row := q.db.QueryRow(ctx, createTestCase,
-		arg.OrgID,
-		arg.ProblemID,
-		arg.Position,
-		arg.Input,
-		arg.ExpectedOutput,
-		arg.Visibility,
-		arg.Weight,
-		arg.Unordered,
-	)
-	var i TestCase
-	err := row.Scan(
-		&i.ID,
-		&i.OrgID,
-		&i.ProblemID,
-		&i.Position,
-		&i.Input,
-		&i.ExpectedOutput,
-		&i.Visibility,
-		&i.Weight,
-		&i.Unordered,
-	)
-	return i, err
-}
-
 const deleteAssessment = `-- name: DeleteAssessment :execrows
 delete from assessment where id = $1 and org_id = $2
 `
@@ -482,6 +425,25 @@ func (q *Queries) DeleteAssessmentProblems(ctx context.Context, assessmentID uui
 	return err
 }
 
+const deleteAttempt = `-- name: DeleteAttempt :exec
+delete from attempt where id = $1 and preview
+`
+
+// Events, sources, and submissions cascade from the attempt row.
+func (q *Queries) DeleteAttempt(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteAttempt, id)
+	return err
+}
+
+const deleteAttemptSnapshot = `-- name: DeleteAttemptSnapshot :exec
+delete from attempt_snapshot where id = $1
+`
+
+func (q *Queries) DeleteAttemptSnapshot(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteAttemptSnapshot, id)
+	return err
+}
+
 const deleteIntegritySignals = `-- name: DeleteIntegritySignals :exec
 delete from integrity_signal where attempt_id = $1
 `
@@ -491,39 +453,62 @@ func (q *Queries) DeleteIntegritySignals(ctx context.Context, attemptID uuid.UUI
 	return err
 }
 
-const deleteProblem = `-- name: DeleteProblem :execrows
-delete from problem where id = $1 and org_id = $2
+const deleteMagicLinksForSubject = `-- name: DeleteMagicLinksForSubject :exec
+delete from magic_link where purpose = $1 and subject_id = $2
 `
 
-type DeleteProblemParams struct {
-	ID    uuid.UUID
-	OrgID uuid.UUID
+type DeleteMagicLinksForSubjectParams struct {
+	Purpose   string
+	SubjectID uuid.UUID
 }
 
-func (q *Queries) DeleteProblem(ctx context.Context, arg DeleteProblemParams) (int64, error) {
-	result, err := q.db.Exec(ctx, deleteProblem, arg.ID, arg.OrgID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const deleteProblemReferences = `-- name: DeleteProblemReferences :exec
-delete from problem_reference where problem_id = $1
-`
-
-func (q *Queries) DeleteProblemReferences(ctx context.Context, problemID uuid.UUID) error {
-	_, err := q.db.Exec(ctx, deleteProblemReferences, problemID)
+func (q *Queries) DeleteMagicLinksForSubject(ctx context.Context, arg DeleteMagicLinksForSubjectParams) error {
+	_, err := q.db.Exec(ctx, deleteMagicLinksForSubject, arg.Purpose, arg.SubjectID)
 	return err
 }
 
-const deleteTestCases = `-- name: DeleteTestCases :exec
-delete from test_case where problem_id = $1
+const expireInvitedAttempt = `-- name: ExpireInvitedAttempt :one
+update attempt set status = 'expired', finished_at = $2, updated_at = now()
+where id = $1 and status = 'invited' returning id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key
 `
 
-func (q *Queries) DeleteTestCases(ctx context.Context, problemID uuid.UUID) error {
-	_, err := q.db.Exec(ctx, deleteTestCases, problemID)
-	return err
+type ExpireInvitedAttemptParams struct {
+	ID         uuid.UUID
+	FinishedAt pgtype.Timestamptz
+}
+
+// A revoked invite the candidate never opened: there is no work to close
+// over, so it is marked expired where it stands.
+func (q *Queries) ExpireInvitedAttempt(ctx context.Context, arg ExpireInvitedAttemptParams) (Attempt, error) {
+	row := q.db.QueryRow(ctx, expireInvitedAttempt, arg.ID, arg.FinishedAt)
+	var i Attempt
+	err := row.Scan(
+		&i.ID,
+		&i.OrgID,
+		&i.ApplicationID,
+		&i.AssessmentID,
+		&i.StageID,
+		&i.Status,
+		&i.InvitedAt,
+		&i.InviteExpiresAt,
+		&i.StartedAt,
+		&i.ExpiresAt,
+		&i.FinishedAt,
+		&i.Score,
+		&i.RiskScore,
+		&i.RecordingStatus,
+		&i.RecordingBlobKey,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.LastEventSeq,
+		&i.ProblemScores,
+		&i.ErrorCount,
+		&i.Preview,
+		&i.PreviewUserID,
+		&i.ConsentAt,
+		&i.IdentityBlobKey,
+	)
+	return i, err
 }
 
 const extendMagicLinkExpiry = `-- name: ExtendMagicLinkExpiry :exec
@@ -541,67 +526,6 @@ type ExtendMagicLinkExpiryParams struct {
 func (q *Queries) ExtendMagicLinkExpiry(ctx context.Context, arg ExtendMagicLinkExpiryParams) error {
 	_, err := q.db.Exec(ctx, extendMagicLinkExpiry, arg.Purpose, arg.SubjectID, arg.ExpiresAt)
 	return err
-}
-
-const filterProblems = `-- name: FilterProblems :many
-select id, org_id, kind, title, statement, difficulty, tags, allowed_languages, time_limit_ms, memory_limit_kb, sql_schema, sql_seed, created_at, updated_at from problem
-where ($1::text = '' or kind = $1::text)
-  and ($2::text = '' or difficulty = $2::text)
-  and ($3::text = '' or $3::text = any(tags))
-  and ($4::text = '' or title ilike '%' || $4::text || '%')
-order by title
-limit $5::int
-`
-
-type FilterProblemsParams struct {
-	Kind       string
-	Difficulty string
-	Tag        string
-	Query      string
-	RowLimit   int32
-}
-
-// RLS shows the caller's own problems and the platform seed; the filters are
-// all optional, an empty string meaning "any".
-func (q *Queries) FilterProblems(ctx context.Context, arg FilterProblemsParams) ([]Problem, error) {
-	rows, err := q.db.Query(ctx, filterProblems,
-		arg.Kind,
-		arg.Difficulty,
-		arg.Tag,
-		arg.Query,
-		arg.RowLimit,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []Problem{}
-	for rows.Next() {
-		var i Problem
-		if err := rows.Scan(
-			&i.ID,
-			&i.OrgID,
-			&i.Kind,
-			&i.Title,
-			&i.Statement,
-			&i.Difficulty,
-			&i.Tags,
-			&i.AllowedLanguages,
-			&i.TimeLimitMs,
-			&i.MemoryLimitKb,
-			&i.SqlSchema,
-			&i.SqlSeed,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }
 
 const finishSubmission = `-- name: FinishSubmission :exec
@@ -626,7 +550,7 @@ func (q *Queries) FinishSubmission(ctx context.Context, arg FinishSubmissionPara
 }
 
 const getAssessment = `-- name: GetAssessment :one
-select id, org_id, name, duration_minutes, language_override, invite_window_days, created_at, updated_at from assessment where id = $1
+select id, org_id, name, duration_minutes, language_override, invite_window_days, created_at, updated_at, allowed_languages, integrity from assessment where id = $1
 `
 
 func (q *Queries) GetAssessment(ctx context.Context, id uuid.UUID) (Assessment, error) {
@@ -641,12 +565,14 @@ func (q *Queries) GetAssessment(ctx context.Context, id uuid.UUID) (Assessment, 
 		&i.InviteWindowDays,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AllowedLanguages,
+		&i.Integrity,
 	)
 	return i, err
 }
 
 const getAttempt = `-- name: GetAttempt :one
-select id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count from attempt where id = $1
+select id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key from attempt where id = $1
 `
 
 func (q *Queries) GetAttempt(ctx context.Context, id uuid.UUID) (Attempt, error) {
@@ -673,12 +599,17 @@ func (q *Queries) GetAttempt(ctx context.Context, id uuid.UUID) (Attempt, error)
 		&i.LastEventSeq,
 		&i.ProblemScores,
 		&i.ErrorCount,
+		&i.Preview,
+		&i.PreviewUserID,
+		&i.ConsentAt,
+		&i.IdentityBlobKey,
 	)
 	return i, err
 }
 
 const getAttemptForApplicationStage = `-- name: GetAttemptForApplicationStage :one
-select id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count from attempt where application_id = $1 and stage_id = $2 order by created_at desc limit 1
+select id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key from attempt where application_id = $1::uuid and stage_id = $2::uuid
+order by created_at desc limit 1
 `
 
 type GetAttemptForApplicationStageParams struct {
@@ -710,12 +641,16 @@ func (q *Queries) GetAttemptForApplicationStage(ctx context.Context, arg GetAtte
 		&i.LastEventSeq,
 		&i.ProblemScores,
 		&i.ErrorCount,
+		&i.Preview,
+		&i.PreviewUserID,
+		&i.ConsentAt,
+		&i.IdentityBlobKey,
 	)
 	return i, err
 }
 
 const getAttemptForUpdate = `-- name: GetAttemptForUpdate :one
-select id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count from attempt where id = $1 for update
+select id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key from attempt where id = $1 for update
 `
 
 func (q *Queries) GetAttemptForUpdate(ctx context.Context, id uuid.UUID) (Attempt, error) {
@@ -742,63 +677,10 @@ func (q *Queries) GetAttemptForUpdate(ctx context.Context, id uuid.UUID) (Attemp
 		&i.LastEventSeq,
 		&i.ProblemScores,
 		&i.ErrorCount,
-	)
-	return i, err
-}
-
-const getProblem = `-- name: GetProblem :one
-select id, org_id, kind, title, statement, difficulty, tags, allowed_languages, time_limit_ms, memory_limit_kb, sql_schema, sql_seed, created_at, updated_at from problem where id = $1
-`
-
-func (q *Queries) GetProblem(ctx context.Context, id uuid.UUID) (Problem, error) {
-	row := q.db.QueryRow(ctx, getProblem, id)
-	var i Problem
-	err := row.Scan(
-		&i.ID,
-		&i.OrgID,
-		&i.Kind,
-		&i.Title,
-		&i.Statement,
-		&i.Difficulty,
-		&i.Tags,
-		&i.AllowedLanguages,
-		&i.TimeLimitMs,
-		&i.MemoryLimitKb,
-		&i.SqlSchema,
-		&i.SqlSeed,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const getProblemByTitle = `-- name: GetProblemByTitle :one
-select id, org_id, kind, title, statement, difficulty, tags, allowed_languages, time_limit_ms, memory_limit_kb, sql_schema, sql_seed, created_at, updated_at from problem where org_id = $1 and lower(title) = lower($2)
-`
-
-type GetProblemByTitleParams struct {
-	OrgID uuid.UUID
-	Lower string
-}
-
-func (q *Queries) GetProblemByTitle(ctx context.Context, arg GetProblemByTitleParams) (Problem, error) {
-	row := q.db.QueryRow(ctx, getProblemByTitle, arg.OrgID, arg.Lower)
-	var i Problem
-	err := row.Scan(
-		&i.ID,
-		&i.OrgID,
-		&i.Kind,
-		&i.Title,
-		&i.Statement,
-		&i.Difficulty,
-		&i.Tags,
-		&i.AllowedLanguages,
-		&i.TimeLimitMs,
-		&i.MemoryLimitKb,
-		&i.SqlSchema,
-		&i.SqlSeed,
-		&i.CreatedAt,
-		&i.UpdatedAt,
+		&i.Preview,
+		&i.PreviewUserID,
+		&i.ConsentAt,
+		&i.IdentityBlobKey,
 	)
 	return i, err
 }
@@ -891,7 +773,7 @@ func (q *Queries) GetSubmissionForUpdate(ctx context.Context, id uuid.UUID) (Sub
 }
 
 const listAssessmentProblems = `-- name: ListAssessmentProblems :many
-select p.id, p.org_id, p.kind, p.title, p.statement, p.difficulty, p.tags, p.allowed_languages, p.time_limit_ms, p.memory_limit_kb, p.sql_schema, p.sql_seed, p.created_at, p.updated_at from assessment_problem ap join problem p on p.id = ap.problem_id
+select p.id, p.org_id, p.kind, p.title, p.statement, p.difficulty, p.tags, p.allowed_languages, p.time_limit_ms, p.memory_limit_kb, p.sql_schema, p.sql_seed, p.created_at, p.updated_at, p.recommended_minutes, p.guidelines, p.origin_problem_id, p.quality, p.proven_languages from assessment_problem ap join problem p on p.id = ap.problem_id
 where ap.assessment_id = $1 order by ap.position
 `
 
@@ -919,6 +801,11 @@ func (q *Queries) ListAssessmentProblems(ctx context.Context, assessmentID uuid.
 			&i.SqlSeed,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.RecommendedMinutes,
+			&i.Guidelines,
+			&i.OriginProblemID,
+			&i.Quality,
+			&i.ProvenLanguages,
 		); err != nil {
 			return nil, err
 		}
@@ -931,7 +818,7 @@ func (q *Queries) ListAssessmentProblems(ctx context.Context, assessmentID uuid.
 }
 
 const listAssessments = `-- name: ListAssessments :many
-select id, org_id, name, duration_minutes, language_override, invite_window_days, created_at, updated_at from assessment where org_id = $1 order by name
+select id, org_id, name, duration_minutes, language_override, invite_window_days, created_at, updated_at, allowed_languages, integrity from assessment where org_id = $1 order by name
 `
 
 func (q *Queries) ListAssessments(ctx context.Context, orgID uuid.UUID) ([]Assessment, error) {
@@ -952,6 +839,8 @@ func (q *Queries) ListAssessments(ctx context.Context, orgID uuid.UUID) ([]Asses
 			&i.InviteWindowDays,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.AllowedLanguages,
+			&i.Integrity,
 		); err != nil {
 			return nil, err
 		}
@@ -1039,6 +928,122 @@ func (q *Queries) ListAttemptEventsAfter(ctx context.Context, arg ListAttemptEve
 	return items, nil
 }
 
+const listAttemptInvites = `-- name: ListAttemptInvites :many
+select t.id as attempt_id, t.application_id::uuid as application_id, t.stage_id::uuid as stage_id,
+    t.status, t.invited_at, t.invite_expires_at, t.expires_at, t.finished_at, t.score, t.risk_score,
+    c.name as candidate_name, c.email as candidate_email,
+    j.title as job_title, cc.name as client_company_name, a.name as assessment_name,
+    (select count(*) from assessment_problem ap where ap.assessment_id = t.assessment_id)::int as problems_total,
+    (select count(distinct s.problem_id) from submission s
+        where s.attempt_id = t.id and s.kind = 'submit')::int as problems_submitted,
+    (select count(*) from attempt_event e
+        where e.attempt_id = t.id and e.kind in ('blur', 'paste', 'fullscreen_exit'))::int as integrity_flags
+from attempt t
+join application app on app.id = t.application_id
+join candidate c on c.id = app.candidate_id
+join job j on j.id = app.job_id
+join client_company cc on cc.id = j.client_company_id
+join assessment a on a.id = t.assessment_id
+where not t.preview
+  and ($1::text is null or t.status = $1::text)
+order by t.invited_at desc, t.id
+`
+
+type ListAttemptInvitesRow struct {
+	AttemptID         uuid.UUID
+	ApplicationID     uuid.UUID
+	StageID           uuid.UUID
+	Status            string
+	InvitedAt         pgtype.Timestamptz
+	InviteExpiresAt   pgtype.Timestamptz
+	ExpiresAt         pgtype.Timestamptz
+	FinishedAt        pgtype.Timestamptz
+	Score             pgtype.Numeric
+	RiskScore         pgtype.Numeric
+	CandidateName     string
+	CandidateEmail    string
+	JobTitle          string
+	ClientCompanyName string
+	AssessmentName    string
+	ProblemsTotal     int32
+	ProblemsSubmitted int32
+	IntegrityFlags    int32
+}
+
+// The org's assessment sittings for the recruiter's Assessments screen: what
+// each candidate was sent, how much of the set they have submitted, and how
+// many events the recording flagged. A null status asks for all of them.
+func (q *Queries) ListAttemptInvites(ctx context.Context, status *string) ([]ListAttemptInvitesRow, error) {
+	rows, err := q.db.Query(ctx, listAttemptInvites, status)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAttemptInvitesRow{}
+	for rows.Next() {
+		var i ListAttemptInvitesRow
+		if err := rows.Scan(
+			&i.AttemptID,
+			&i.ApplicationID,
+			&i.StageID,
+			&i.Status,
+			&i.InvitedAt,
+			&i.InviteExpiresAt,
+			&i.ExpiresAt,
+			&i.FinishedAt,
+			&i.Score,
+			&i.RiskScore,
+			&i.CandidateName,
+			&i.CandidateEmail,
+			&i.JobTitle,
+			&i.ClientCompanyName,
+			&i.AssessmentName,
+			&i.ProblemsTotal,
+			&i.ProblemsSubmitted,
+			&i.IntegrityFlags,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAttemptSnapshots = `-- name: ListAttemptSnapshots :many
+select id, org_id, attempt_id, seq, taken_at, blob_key, bytes from attempt_snapshot where attempt_id = $1 order by seq
+`
+
+func (q *Queries) ListAttemptSnapshots(ctx context.Context, attemptID uuid.UUID) ([]AttemptSnapshot, error) {
+	rows, err := q.db.Query(ctx, listAttemptSnapshots, attemptID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AttemptSnapshot{}
+	for rows.Next() {
+		var i AttemptSnapshot
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrgID,
+			&i.AttemptID,
+			&i.Seq,
+			&i.TakenAt,
+			&i.BlobKey,
+			&i.Bytes,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAttemptSources = `-- name: ListAttemptSources :many
 select attempt_id, org_id, problem_id, language, source, updated_at from attempt_source where attempt_id = $1 order by problem_id
 `
@@ -1071,14 +1076,14 @@ func (q *Queries) ListAttemptSources(ctx context.Context, attemptID uuid.UUID) (
 }
 
 const listAttemptSummariesForApplication = `-- name: ListAttemptSummariesForApplication :many
-select t.id as attempt_id, t.stage_id, t.status, t.score, t.risk_score, t.error_count, t.finished_at,
+select t.id as attempt_id, t.stage_id::uuid as stage_id, t.status, t.score, t.risk_score, t.error_count, t.finished_at,
     st.name as stage_name, r.verdict as verdict, r.notes as review_notes,
     r.created_at as reviewed_at, u.name as vetter_name
 from attempt t
 join stage st on st.id = t.stage_id
 left join review r on r.attempt_id = t.id
 left join org_user u on u.id = r.vetter_id
-where t.application_id = $1
+where t.application_id = $1::uuid
 order by t.created_at
 `
 
@@ -1157,7 +1162,7 @@ func (q *Queries) ListDueAttemptOrgs(ctx context.Context, at pgtype.Timestamptz)
 }
 
 const listDueAttempts = `-- name: ListDueAttempts :many
-select id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count from attempt where status = 'started' and expires_at <= $1 order by expires_at for update skip locked
+select id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key from attempt where status = 'started' and expires_at <= $1 order by expires_at for update skip locked
 `
 
 func (q *Queries) ListDueAttempts(ctx context.Context, expiresAt pgtype.Timestamptz) ([]Attempt, error) {
@@ -1190,6 +1195,10 @@ func (q *Queries) ListDueAttempts(ctx context.Context, expiresAt pgtype.Timestam
 			&i.LastEventSeq,
 			&i.ProblemScores,
 			&i.ErrorCount,
+			&i.Preview,
+			&i.PreviewUserID,
+			&i.ConsentAt,
+			&i.IdentityBlobKey,
 		); err != nil {
 			return nil, err
 		}
@@ -1263,9 +1272,10 @@ func (q *Queries) ListIntegritySignals(ctx context.Context, attemptID uuid.UUID)
 
 const listOtherProblemSubmits = `-- name: ListOtherProblemSubmits :many
 select attempt_id, source from (
-    select distinct on (attempt_id) attempt_id, source, created_at from submission
-    where problem_id = $1 and attempt_id <> $2 and kind = 'submit' and language = $3
-    order by attempt_id, created_at desc
+    select distinct on (s.attempt_id) s.attempt_id, s.source, s.created_at from submission s
+    join attempt t on t.id = s.attempt_id and not t.preview
+    where s.problem_id = $1 and s.attempt_id <> $2 and s.kind = 'submit' and s.language = $3
+    order by s.attempt_id, s.created_at desc
 ) latest order by created_at desc limit 200
 `
 
@@ -1303,29 +1313,128 @@ func (q *Queries) ListOtherProblemSubmits(ctx context.Context, arg ListOtherProb
 	return items, nil
 }
 
-const listProblemReferences = `-- name: ListProblemReferences :many
-select id, org_id, problem_id, language, source from problem_reference where problem_id = $1 order by language
+const listSnapshotOrgs = `-- name: ListSnapshotOrgs :many
+select org_id::uuid from snapshot_orgs($1::timestamptz) as t(org_id)
 `
 
-func (q *Queries) ListProblemReferences(ctx context.Context, problemID uuid.UUID) ([]ProblemReference, error) {
-	rows, err := q.db.Query(ctx, listProblemReferences, problemID)
+func (q *Queries) ListSnapshotOrgs(ctx context.Context, before pgtype.Timestamptz) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listSnapshotOrgs, before)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ProblemReference{}
+	items := []uuid.UUID{}
 	for rows.Next() {
-		var i ProblemReference
+		var org_id uuid.UUID
+		if err := rows.Scan(&org_id); err != nil {
+			return nil, err
+		}
+		items = append(items, org_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSnapshotsTakenBefore = `-- name: ListSnapshotsTakenBefore :many
+select id, org_id, attempt_id, seq, taken_at, blob_key, bytes from attempt_snapshot where taken_at < $1 order by taken_at for update skip locked
+`
+
+func (q *Queries) ListSnapshotsTakenBefore(ctx context.Context, takenAt pgtype.Timestamptz) ([]AttemptSnapshot, error) {
+	rows, err := q.db.Query(ctx, listSnapshotsTakenBefore, takenAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AttemptSnapshot{}
+	for rows.Next() {
+		var i AttemptSnapshot
 		if err := rows.Scan(
 			&i.ID,
 			&i.OrgID,
-			&i.ProblemID,
-			&i.Language,
-			&i.Source,
+			&i.AttemptID,
+			&i.Seq,
+			&i.TakenAt,
+			&i.BlobKey,
+			&i.Bytes,
 		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStalePreviewAttempts = `-- name: ListStalePreviewAttempts :many
+select id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key from attempt where preview and created_at < $1 order by created_at for update skip locked
+`
+
+func (q *Queries) ListStalePreviewAttempts(ctx context.Context, createdAt pgtype.Timestamptz) ([]Attempt, error) {
+	rows, err := q.db.Query(ctx, listStalePreviewAttempts, createdAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Attempt{}
+	for rows.Next() {
+		var i Attempt
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrgID,
+			&i.ApplicationID,
+			&i.AssessmentID,
+			&i.StageID,
+			&i.Status,
+			&i.InvitedAt,
+			&i.InviteExpiresAt,
+			&i.StartedAt,
+			&i.ExpiresAt,
+			&i.FinishedAt,
+			&i.Score,
+			&i.RiskScore,
+			&i.RecordingStatus,
+			&i.RecordingBlobKey,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.LastEventSeq,
+			&i.ProblemScores,
+			&i.ErrorCount,
+			&i.Preview,
+			&i.PreviewUserID,
+			&i.ConsentAt,
+			&i.IdentityBlobKey,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStalePreviewOrgs = `-- name: ListStalePreviewOrgs :many
+select org_id::uuid from stale_preview_orgs($1::timestamptz) as t(org_id)
+`
+
+func (q *Queries) ListStalePreviewOrgs(ctx context.Context, before pgtype.Timestamptz) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listStalePreviewOrgs, before)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var org_id uuid.UUID
+		if err := rows.Scan(&org_id); err != nil {
+			return nil, err
+		}
+		items = append(items, org_id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -1370,42 +1479,9 @@ func (q *Queries) ListSubmissions(ctx context.Context, attemptID uuid.UUID) ([]S
 	return items, nil
 }
 
-const listTestCases = `-- name: ListTestCases :many
-select id, org_id, problem_id, position, input, expected_output, visibility, weight, unordered from test_case where problem_id = $1 order by position
-`
-
-func (q *Queries) ListTestCases(ctx context.Context, problemID uuid.UUID) ([]TestCase, error) {
-	rows, err := q.db.Query(ctx, listTestCases, problemID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []TestCase{}
-	for rows.Next() {
-		var i TestCase
-		if err := rows.Scan(
-			&i.ID,
-			&i.OrgID,
-			&i.ProblemID,
-			&i.Position,
-			&i.Input,
-			&i.ExpectedOutput,
-			&i.Visibility,
-			&i.Weight,
-			&i.Unordered,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listVetterAttemptReviews = `-- name: ListVetterAttemptReviews :many
-select t.id as attempt_id, t.application_id, t.stage_id, t.status, t.score, t.risk_score,
+select t.id as attempt_id, t.application_id::uuid as application_id, t.stage_id::uuid as stage_id,
+    t.status, t.score, t.risk_score,
     t.error_count, t.recording_status, t.finished_at,
     c.name as candidate_name, c.email as candidate_email,
     j.title as job_title, st.name as stage_name, r.verdict as verdict
@@ -1415,7 +1491,7 @@ join candidate c on c.id = a.candidate_id
 join job j on j.id = a.job_id
 join stage st on st.id = t.stage_id
 left join review r on r.attempt_id = t.id
-where t.status in ('scored', 'reviewed')
+where t.status in ('scored', 'reviewed') and not t.preview
   and coalesce(a.vetter_id, st.default_vetter_id) = $1
 order by t.finished_at desc nulls last, t.id
 `
@@ -1478,7 +1554,7 @@ func (q *Queries) ListVetterAttemptReviews(ctx context.Context, vetterID uuid.Nu
 const scoreAttempt = `-- name: ScoreAttempt :one
 update attempt set status = 'scored', score = $2, problem_scores = $3, error_count = $4,
     recording_status = $5, recording_blob_key = $6, updated_at = now()
-where id = $1 and status in ('submitted', 'expired') returning id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count
+where id = $1 and status in ('submitted', 'expired') returning id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key
 `
 
 type ScoreAttemptParams struct {
@@ -1523,6 +1599,97 @@ func (q *Queries) ScoreAttempt(ctx context.Context, arg ScoreAttemptParams) (Att
 		&i.LastEventSeq,
 		&i.ProblemScores,
 		&i.ErrorCount,
+		&i.Preview,
+		&i.PreviewUserID,
+		&i.ConsentAt,
+		&i.IdentityBlobKey,
+	)
+	return i, err
+}
+
+const setAttemptConsentAt = `-- name: SetAttemptConsentAt :one
+update attempt set consent_at = $2, updated_at = now()
+where id = $1 and status = 'invited' returning id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key
+`
+
+type SetAttemptConsentAtParams struct {
+	ID        uuid.UUID
+	ConsentAt pgtype.Timestamptz
+}
+
+// Consent is given before the timer starts; a session already under way has
+// nothing left to agree to.
+func (q *Queries) SetAttemptConsentAt(ctx context.Context, arg SetAttemptConsentAtParams) (Attempt, error) {
+	row := q.db.QueryRow(ctx, setAttemptConsentAt, arg.ID, arg.ConsentAt)
+	var i Attempt
+	err := row.Scan(
+		&i.ID,
+		&i.OrgID,
+		&i.ApplicationID,
+		&i.AssessmentID,
+		&i.StageID,
+		&i.Status,
+		&i.InvitedAt,
+		&i.InviteExpiresAt,
+		&i.StartedAt,
+		&i.ExpiresAt,
+		&i.FinishedAt,
+		&i.Score,
+		&i.RiskScore,
+		&i.RecordingStatus,
+		&i.RecordingBlobKey,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.LastEventSeq,
+		&i.ProblemScores,
+		&i.ErrorCount,
+		&i.Preview,
+		&i.PreviewUserID,
+		&i.ConsentAt,
+		&i.IdentityBlobKey,
+	)
+	return i, err
+}
+
+const setAttemptIdentityBlobKey = `-- name: SetAttemptIdentityBlobKey :one
+update attempt set identity_blob_key = $2, updated_at = now()
+where id = $1 and identity_blob_key is null returning id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key
+`
+
+type SetAttemptIdentityBlobKeyParams struct {
+	ID              uuid.UUID
+	IdentityBlobKey *string
+}
+
+// The frame is taken once: an attempt that already has one matches no row.
+func (q *Queries) SetAttemptIdentityBlobKey(ctx context.Context, arg SetAttemptIdentityBlobKeyParams) (Attempt, error) {
+	row := q.db.QueryRow(ctx, setAttemptIdentityBlobKey, arg.ID, arg.IdentityBlobKey)
+	var i Attempt
+	err := row.Scan(
+		&i.ID,
+		&i.OrgID,
+		&i.ApplicationID,
+		&i.AssessmentID,
+		&i.StageID,
+		&i.Status,
+		&i.InvitedAt,
+		&i.InviteExpiresAt,
+		&i.StartedAt,
+		&i.ExpiresAt,
+		&i.FinishedAt,
+		&i.Score,
+		&i.RiskScore,
+		&i.RecordingStatus,
+		&i.RecordingBlobKey,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.LastEventSeq,
+		&i.ProblemScores,
+		&i.ErrorCount,
+		&i.Preview,
+		&i.PreviewUserID,
+		&i.ConsentAt,
+		&i.IdentityBlobKey,
 	)
 	return i, err
 }
@@ -1584,7 +1751,7 @@ func (q *Queries) SetStageAssessment(ctx context.Context, arg SetStageAssessment
 
 const startAttempt = `-- name: StartAttempt :one
 update attempt set status = 'started', started_at = $2, expires_at = $3, updated_at = now()
-where id = $1 and status = 'invited' returning id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count
+where id = $1 and status = 'invited' returning id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key
 `
 
 type StartAttemptParams struct {
@@ -1617,6 +1784,10 @@ func (q *Queries) StartAttempt(ctx context.Context, arg StartAttemptParams) (Att
 		&i.LastEventSeq,
 		&i.ProblemScores,
 		&i.ErrorCount,
+		&i.Preview,
+		&i.PreviewUserID,
+		&i.ConsentAt,
+		&i.IdentityBlobKey,
 	)
 	return i, err
 }
@@ -1631,8 +1802,9 @@ func (q *Queries) StartSubmission(ctx context.Context, id uuid.UUID) error {
 }
 
 const updateAssessment = `-- name: UpdateAssessment :one
-update assessment set name = $3, duration_minutes = $4, language_override = $5, invite_window_days = $6, updated_at = now()
-where id = $1 and org_id = $2 returning id, org_id, name, duration_minutes, language_override, invite_window_days, created_at, updated_at
+update assessment set name = $3, duration_minutes = $4, language_override = $5, invite_window_days = $6,
+    allowed_languages = $7, integrity = $8, updated_at = now()
+where id = $1 and org_id = $2 returning id, org_id, name, duration_minutes, language_override, invite_window_days, created_at, updated_at, allowed_languages, integrity
 `
 
 type UpdateAssessmentParams struct {
@@ -1642,6 +1814,8 @@ type UpdateAssessmentParams struct {
 	DurationMinutes  int32
 	LanguageOverride *string
 	InviteWindowDays int32
+	AllowedLanguages []string
+	Integrity        []byte
 }
 
 func (q *Queries) UpdateAssessment(ctx context.Context, arg UpdateAssessmentParams) (Assessment, error) {
@@ -1652,6 +1826,8 @@ func (q *Queries) UpdateAssessment(ctx context.Context, arg UpdateAssessmentPara
 		arg.DurationMinutes,
 		arg.LanguageOverride,
 		arg.InviteWindowDays,
+		arg.AllowedLanguages,
+		arg.Integrity,
 	)
 	var i Assessment
 	err := row.Scan(
@@ -1663,63 +1839,49 @@ func (q *Queries) UpdateAssessment(ctx context.Context, arg UpdateAssessmentPara
 		&i.InviteWindowDays,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AllowedLanguages,
+		&i.Integrity,
 	)
 	return i, err
 }
 
-const updateProblem = `-- name: UpdateProblem :one
-update problem set kind = $3, title = $4, statement = $5, difficulty = $6, tags = $7,
-    allowed_languages = $8, time_limit_ms = $9, memory_limit_kb = $10, sql_schema = $11,
-    sql_seed = $12, updated_at = now()
-where id = $1 and org_id = $2 returning id, org_id, kind, title, statement, difficulty, tags, allowed_languages, time_limit_ms, memory_limit_kb, sql_schema, sql_seed, created_at, updated_at
+const upsertAttemptSnapshot = `-- name: UpsertAttemptSnapshot :one
+insert into attempt_snapshot (org_id, attempt_id, seq, taken_at, blob_key, bytes)
+values ($1, $2, $3, $4, $5, $6)
+on conflict (attempt_id, seq) do update
+    set taken_at = excluded.taken_at, blob_key = excluded.blob_key, bytes = excluded.bytes
+returning id, org_id, attempt_id, seq, taken_at, blob_key, bytes
 `
 
-type UpdateProblemParams struct {
-	ID               uuid.UUID
-	OrgID            uuid.UUID
-	Kind             string
-	Title            string
-	Statement        string
-	Difficulty       string
-	Tags             []string
-	AllowedLanguages []string
-	TimeLimitMs      int32
-	MemoryLimitKb    int32
-	SqlSchema        *string
-	SqlSeed          *string
+type UpsertAttemptSnapshotParams struct {
+	OrgID     uuid.UUID
+	AttemptID uuid.UUID
+	Seq       int32
+	TakenAt   pgtype.Timestamptz
+	BlobKey   string
+	Bytes     int32
 }
 
-func (q *Queries) UpdateProblem(ctx context.Context, arg UpdateProblemParams) (Problem, error) {
-	row := q.db.QueryRow(ctx, updateProblem,
-		arg.ID,
+// The beat is the session's own counter, so a frame uploaded twice replaces
+// the first rather than doubling the row and orphaning its object.
+func (q *Queries) UpsertAttemptSnapshot(ctx context.Context, arg UpsertAttemptSnapshotParams) (AttemptSnapshot, error) {
+	row := q.db.QueryRow(ctx, upsertAttemptSnapshot,
 		arg.OrgID,
-		arg.Kind,
-		arg.Title,
-		arg.Statement,
-		arg.Difficulty,
-		arg.Tags,
-		arg.AllowedLanguages,
-		arg.TimeLimitMs,
-		arg.MemoryLimitKb,
-		arg.SqlSchema,
-		arg.SqlSeed,
+		arg.AttemptID,
+		arg.Seq,
+		arg.TakenAt,
+		arg.BlobKey,
+		arg.Bytes,
 	)
-	var i Problem
+	var i AttemptSnapshot
 	err := row.Scan(
 		&i.ID,
 		&i.OrgID,
-		&i.Kind,
-		&i.Title,
-		&i.Statement,
-		&i.Difficulty,
-		&i.Tags,
-		&i.AllowedLanguages,
-		&i.TimeLimitMs,
-		&i.MemoryLimitKb,
-		&i.SqlSchema,
-		&i.SqlSeed,
-		&i.CreatedAt,
-		&i.UpdatedAt,
+		&i.AttemptID,
+		&i.Seq,
+		&i.TakenAt,
+		&i.BlobKey,
+		&i.Bytes,
 	)
 	return i, err
 }

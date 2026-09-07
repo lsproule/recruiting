@@ -63,6 +63,8 @@ type Assessment struct {
 	InviteWindowDays int32
 	CreatedAt        pgtype.Timestamptz
 	UpdatedAt        pgtype.Timestamptz
+	AllowedLanguages []string
+	Integrity        []byte
 }
 
 type AssessmentProblem struct {
@@ -75,9 +77,9 @@ type AssessmentProblem struct {
 type Attempt struct {
 	ID               uuid.UUID
 	OrgID            uuid.UUID
-	ApplicationID    uuid.UUID
+	ApplicationID    uuid.NullUUID
 	AssessmentID     uuid.UUID
-	StageID          uuid.UUID
+	StageID          uuid.NullUUID
 	Status           string
 	InvitedAt        pgtype.Timestamptz
 	InviteExpiresAt  pgtype.Timestamptz
@@ -93,6 +95,10 @@ type Attempt struct {
 	LastEventSeq     int64
 	ProblemScores    []byte
 	ErrorCount       int32
+	Preview          bool
+	PreviewUserID    uuid.NullUUID
+	ConsentAt        pgtype.Timestamptz
+	IdentityBlobKey  *string
 }
 
 type AttemptEvent struct {
@@ -105,6 +111,16 @@ type AttemptEvent struct {
 	ClientTs  pgtype.Timestamptz
 	ServerTs  pgtype.Timestamptz
 	ProblemID uuid.NullUUID
+}
+
+type AttemptSnapshot struct {
+	ID        uuid.UUID
+	OrgID     uuid.UUID
+	AttemptID uuid.UUID
+	Seq       int32
+	TakenAt   pgtype.Timestamptz
+	BlobKey   string
+	Bytes     int32
 }
 
 type AttemptSource struct {
@@ -153,10 +169,13 @@ type Candidate struct {
 }
 
 type ClientCompany struct {
-	ID        uuid.UUID
-	OrgID     uuid.UUID
-	Name      string
-	CreatedAt pgtype.Timestamptz
+	ID               uuid.UUID
+	OrgID            uuid.UUID
+	Name             string
+	CreatedAt        pgtype.Timestamptz
+	Industry         string
+	ShortlistSlaDays *int32
+	Brief            string
 }
 
 type ClientUser struct {
@@ -189,6 +208,16 @@ type EmailLog struct {
 	CreatedAt pgtype.Timestamptz
 	SentAt    pgtype.Timestamptz
 	JobID     *int64
+}
+
+type IntakeDraft struct {
+	ID        uuid.UUID
+	OrgID     uuid.UUID
+	CreatedBy uuid.UUID
+	Step      int32
+	Payload   []byte
+	CreatedAt pgtype.Timestamptz
+	UpdatedAt pgtype.Timestamptz
 }
 
 type IntegritySignal struct {
@@ -317,20 +346,25 @@ type PipelineTemplateStage struct {
 }
 
 type Problem struct {
-	ID               uuid.UUID
-	OrgID            uuid.UUID
-	Kind             string
-	Title            string
-	Statement        string
-	Difficulty       string
-	Tags             []string
-	AllowedLanguages []string
-	TimeLimitMs      int32
-	MemoryLimitKb    int32
-	SqlSchema        *string
-	SqlSeed          *string
-	CreatedAt        pgtype.Timestamptz
-	UpdatedAt        pgtype.Timestamptz
+	ID                 uuid.UUID
+	OrgID              uuid.UUID
+	Kind               string
+	Title              string
+	Statement          string
+	Difficulty         string
+	Tags               []string
+	AllowedLanguages   []string
+	TimeLimitMs        int32
+	MemoryLimitKb      int32
+	SqlSchema          *string
+	SqlSeed            *string
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+	RecommendedMinutes int32
+	Guidelines         string
+	OriginProblemID    uuid.NullUUID
+	Quality            int32
+	ProvenLanguages    []string
 }
 
 type ProblemReference struct {
@@ -339,6 +373,16 @@ type ProblemReference struct {
 	ProblemID uuid.UUID
 	Language  string
 	Source    string
+}
+
+type QueueSnooze struct {
+	ID        uuid.UUID
+	OrgID     uuid.UUID
+	UserID    uuid.UUID
+	Kind      string
+	SubjectID uuid.UUID
+	Until     pgtype.Timestamptz
+	CreatedAt pgtype.Timestamptz
 }
 
 type Resume struct {
@@ -398,6 +442,27 @@ type Session struct {
 	CreatedAt    pgtype.Timestamptz
 }
 
+type ShortlistPacket struct {
+	ID        uuid.UUID
+	OrgID     uuid.UUID
+	JobID     uuid.UUID
+	Status    string
+	Note      string
+	SentAt    pgtype.Timestamptz
+	SentBy    uuid.NullUUID
+	CreatedBy uuid.UUID
+	CreatedAt pgtype.Timestamptz
+	UpdatedAt pgtype.Timestamptz
+}
+
+type ShortlistPick struct {
+	ID            uuid.UUID
+	OrgID         uuid.UUID
+	PacketID      uuid.UUID
+	ApplicationID uuid.UUID
+	Rank          int32
+}
+
 type Stage struct {
 	ID                uuid.UUID
 	OrgID             uuid.UUID
@@ -455,4 +520,6 @@ type TestCase struct {
 	Visibility     string
 	Weight         pgtype.Numeric
 	Unordered      bool
+	Name           string
+	Class          string
 }

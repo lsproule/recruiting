@@ -64,6 +64,9 @@ type ReplayMarker struct {
 	ProblemID uuid.UUID
 	At        time.Time
 	Note      string
+	// SnapshotSeq is the webcam beat a snapshot marker opens; zero when the
+	// marker is not a frame the reviewer can look at.
+	SnapshotSeq int
 }
 
 // Replay is one page of what the viewer reconstructs a sitting from: the
@@ -94,54 +97,72 @@ func (s *ReviewService) Replay(ctx context.Context, p Principal, attemptID uuid.
 		if err != nil {
 			return err
 		}
-		out = Replay{
-			AttemptID: att.ID, Status: att.Status, RecordingStatus: att.RecordingStatus,
-			StartedAt: att.StartedAt.Time.UTC(), FinishedAt: att.FinishedAt.Time.UTC(),
-			SnapshotEvery: ReplaySnapshotEvery,
-		}
-		limit := q.page()
-		// One event beyond the page tells the viewer there is more to come
-		// without a second count over the stream.
-		events, err := s.recording(ctx, tx, att, q.AfterSeq, limit+1)
-		if err != nil {
-			return err
-		}
-		if len(events) > limit {
-			events = events[:limit]
-			out.NextAfterSeq = events[len(events)-1].Seq
-		}
-		out.Events = events
-		out.Markers = replayMarkers(events)
-		if q.AfterSeq > 0 {
-			return nil
-		}
-		sources, err := tx.Q.ListAttemptSources(ctx, attemptID)
-		if err != nil {
-			return err
-		}
-		subs, err := tx.Q.ListSubmissions(ctx, attemptID)
-		if err != nil {
-			return err
-		}
-		a, err := loadAssessment(ctx, tx, att.AssessmentID)
-		if err != nil {
-			return err
-		}
-		edited, err := editedProblems(ctx, tx, attemptID)
-		if err != nil {
-			return err
-		}
-		for _, problem := range a.Problems {
-			language, final := finalSource(problem.ID, subs, sources)
-			out.Problems = append(out.Problems, ReplayProblem{
-				ID: problem.ID, Title: problem.Title, Language: language,
-				InitialSource: startingSource(problem.ID, edited, sources), FinalSource: final,
-			})
-		}
-		return nil
+		out, err = s.replay(ctx, tx, att, q, nil)
+		return err
 	})
 	if err != nil {
 		return Replay{}, wrapReview("attempt replay", err)
+	}
+	return out, nil
+}
+
+// replay builds one page of the recording for a caller the service has
+// already admitted. keep, when set, is the only event kinds the page may
+// carry: what it drops is dropped before the markers are derived, so a
+// surface that must not see an event cannot see its marker either.
+func (s *ReviewService) replay(ctx context.Context, tx *store.Tx, att db.Attempt, q ReplayQuery, keep map[string]bool) (Replay, error) {
+	out := Replay{
+		AttemptID: att.ID, Status: att.Status, RecordingStatus: att.RecordingStatus,
+		StartedAt: att.StartedAt.Time.UTC(), FinishedAt: att.FinishedAt.Time.UTC(),
+		SnapshotEvery: ReplaySnapshotEvery,
+	}
+	limit := q.page()
+	// One event beyond the page tells the viewer there is more to come
+	// without a second count over the stream.
+	events, err := s.recording(ctx, tx, att, q.AfterSeq, limit+1)
+	if err != nil {
+		return Replay{}, err
+	}
+	if len(events) > limit {
+		events = events[:limit]
+		out.NextAfterSeq = events[len(events)-1].Seq
+	}
+	if keep != nil {
+		kept := events[:0]
+		for _, ev := range events {
+			if keep[ev.Kind] {
+				kept = append(kept, ev)
+			}
+		}
+		events = kept
+	}
+	out.Events = events
+	out.Markers = replayMarkers(events)
+	if q.AfterSeq > 0 {
+		return out, nil
+	}
+	sources, err := tx.Q.ListAttemptSources(ctx, att.ID)
+	if err != nil {
+		return Replay{}, err
+	}
+	subs, err := tx.Q.ListSubmissions(ctx, att.ID)
+	if err != nil {
+		return Replay{}, err
+	}
+	a, err := loadAssessment(ctx, tx, att.AssessmentID)
+	if err != nil {
+		return Replay{}, err
+	}
+	edited, err := editedProblems(ctx, tx, att.ID)
+	if err != nil {
+		return Replay{}, err
+	}
+	for _, problem := range a.Problems {
+		language, final := finalSource(problem.ID, subs, sources)
+		out.Problems = append(out.Problems, ReplayProblem{
+			ID: problem.ID, Title: problem.Title, Language: language,
+			InitialSource: startingSource(problem.ID, edited, sources), FinalSource: final,
+		})
 	}
 	return out, nil
 }
@@ -238,38 +259,67 @@ func readCompactedEvents(ctx context.Context, b BlobReader, key string, afterSeq
 // the evidence pointing at it agree.
 func RecordedEventAt(ev RecordedEvent) time.Time { return signals.Event(ev).At() }
 
-// replayMarkers picks the points a reviewer scrubs to: what was pasted, when
-// the page lost focus, and every run and submit.
+// replayMarkers picks the points a reviewer scrubs to: the integrity
+// timeline (pasted text, lost focus, fullscreen, webcam beats) and every run
+// and submit. The timeline is derived here rather than in the viewer, so the
+// island stays a renderer of what the server already decided.
 func replayMarkers(events []RecordedEvent) []ReplayMarker {
 	var out []ReplayMarker
 	for _, ev := range events {
-		if ev.ProblemID == nil {
+		marker, ok := replayMarker(ev)
+		if !ok {
 			continue
 		}
-		note := ""
-		switch ev.Kind {
-		case "paste":
-			var d struct {
-				Len      int  `json:"len"`
-				Internal bool `json:"internal"`
-			}
-			_ = json.Unmarshal(ev.Payload, &d)
-			note = "pasted " + strconv.Itoa(max(d.Len, 0)) + " characters"
-			if d.Internal {
-				note += " copied from this page"
-			}
-		case "blur":
-			note = "left the page"
-		case "run":
-			note = "ran the code"
-		case "submit":
-			note = "submitted"
-		default:
-			continue
+		marker.Seq, marker.Kind, marker.At = ev.Seq, ev.Kind, signals.Event(ev).At()
+		if ev.ProblemID != nil {
+			marker.ProblemID = *ev.ProblemID
 		}
-		out = append(out, ReplayMarker{
-			Seq: ev.Seq, Kind: ev.Kind, ProblemID: *ev.ProblemID, At: signals.Event(ev).At(), Note: note,
-		})
+		out = append(out, marker)
 	}
 	return out
+}
+
+// replayMarker is the marker one event earns, if any. Fullscreen and webcam
+// beats belong to the sitting rather than to one editor, so they carry no
+// problem of their own.
+func replayMarker(ev RecordedEvent) (ReplayMarker, bool) {
+	switch ev.Kind {
+	case "paste":
+		var d struct {
+			Len      int  `json:"len"`
+			Internal bool `json:"internal"`
+			Blocked  bool `json:"blocked"`
+		}
+		_ = json.Unmarshal(ev.Payload, &d)
+		if d.Blocked {
+			return ReplayMarker{Note: "a paste was blocked"}, true
+		}
+		note := "pasted " + strconv.Itoa(max(d.Len, 0)) + " characters"
+		if d.Internal {
+			note += " copied from this page"
+		}
+		return ReplayMarker{Note: note}, true
+	case "blur":
+		return ReplayMarker{Note: "left the page"}, true
+	case "fullscreen_exit":
+		return ReplayMarker{Note: "left fullscreen"}, true
+	case "fullscreen_enter":
+		return ReplayMarker{Note: "returned to fullscreen"}, true
+	case "snapshot":
+		var d struct {
+			Seq int  `json:"seq"`
+			OK  bool `json:"ok"`
+		}
+		_ = json.Unmarshal(ev.Payload, &d)
+		if !d.OK {
+			return ReplayMarker{Note: "the webcam beat took no frame"}, true
+		}
+		// The beat, not the event seq, names the stored frame.
+		return ReplayMarker{Note: "webcam frame", SnapshotSeq: d.Seq}, true
+	case "run":
+		return ReplayMarker{Note: "ran the code"}, true
+	case "submit":
+		return ReplayMarker{Note: "submitted"}, true
+	}
+	return ReplayMarker{}, false
 }

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"strings"
 
@@ -104,9 +105,94 @@ func MountAttempts(api huma.API, d AttemptsDeps) {
 		Tags: []string{"attempts"},
 	}, h.submission)
 	huma.Register(api, huma.Operation{
+		OperationID: "upload-attempt-snapshot", Method: http.MethodPost, Path: "/attempts/{id}/snapshots", Summary: "Store one webcam frame",
+		Tags: []string{"attempts"}, MaxBodyBytes: maxFrameUpload,
+	}, h.snapshot)
+	huma.Register(api, huma.Operation{
+		OperationID: "upload-attempt-identity", Method: http.MethodPost, Path: "/attempts/{id}/identity", Summary: "Store the photo of an ID",
+		Tags: []string{"attempts"}, DefaultStatus: http.StatusNoContent, MaxBodyBytes: maxFrameUpload,
+	}, h.identity)
+	huma.Register(api, huma.Operation{
 		OperationID: "finish-attempt", Method: http.MethodPost, Path: "/attempts/{id}/finish", Summary: "End the attempt",
 		Tags: []string{"attempts"},
 	}, h.finish)
+}
+
+// maxFrameUpload bounds a frame upload's whole body: the frame itself plus
+// the multipart framing around it, so a body larger than a frame could ever
+// be is refused before it is read.
+const maxFrameUpload = service.MaxSnapshotBytes + 8<<10
+
+// snapshotForm is the multipart body of a frame upload: the beat the session
+// assigned and the JPEG itself.
+type snapshotForm struct {
+	Seq  int           `form:"seq" minimum:"0" doc:"The session's snapshot beat counter"`
+	File huma.FormFile `form:"file" contentType:"image/jpeg" required:"true"`
+}
+
+// identityForm is the consent step's photo of an ID; it belongs to no beat.
+type identityForm struct {
+	File huma.FormFile `form:"file" contentType:"image/jpeg" required:"true"`
+}
+
+type snapshotInput struct {
+	ID      uuid.UUID `path:"id"`
+	RawBody huma.MultipartFormFiles[snapshotForm]
+}
+
+type identityInput struct {
+	ID      uuid.UUID `path:"id"`
+	RawBody huma.MultipartFormFiles[identityForm]
+}
+
+// SnapshotAccepted is what the island reads back: the beat that was stored.
+type SnapshotAccepted struct {
+	Seq     int   `json:"seq"`
+	Bytes   int64 `json:"bytes"`
+	TakenAt int64 `json:"taken_at" doc:"Unix milliseconds"`
+}
+
+type snapshotOutput struct{ Body SnapshotAccepted }
+
+func (h attemptHandlers) snapshot(ctx context.Context, in *snapshotInput) (*snapshotOutput, error) {
+	form := in.RawBody.Data()
+	frame, err := readFrame(form.File)
+	if err != nil {
+		return nil, err
+	}
+	shot, err := h.d.Attempts.SaveSnapshot(ctx, principal(ctx), in.ID, form.Seq, frame)
+	if err != nil {
+		return nil, problemDetail(err)
+	}
+	return &snapshotOutput{Body: SnapshotAccepted{Seq: shot.Seq, Bytes: shot.Bytes, TakenAt: shot.TakenAt.UnixMilli()}}, nil
+}
+
+func (h attemptHandlers) identity(ctx context.Context, in *identityInput) (*struct{}, error) {
+	frame, err := readFrame(in.RawBody.Data().File)
+	if err != nil {
+		return nil, err
+	}
+	if err := h.d.Attempts.SaveIdentityFrame(ctx, principal(ctx), in.ID, frame); err != nil {
+		return nil, problemDetail(err)
+	}
+	return nil, nil
+}
+
+// readFrame reads the uploaded part, refusing anything past the frame bound
+// before it is held in memory rather than after.
+func readFrame(f huma.FormFile) ([]byte, error) {
+	if !f.IsSet {
+		return nil, huma.Error422UnprocessableEntity("the request carries no file part")
+	}
+	defer func() { _ = f.Close() }()
+	body, err := io.ReadAll(io.LimitReader(f, service.MaxSnapshotBytes+1))
+	if err != nil {
+		return nil, huma.Error422UnprocessableEntity("the file part could not be read")
+	}
+	if len(body) > service.MaxSnapshotBytes {
+		return nil, problemDetail(service.ErrSnapshotTooLarge)
+	}
+	return body, nil
 }
 
 type attemptHandlers struct{ d AttemptsDeps }

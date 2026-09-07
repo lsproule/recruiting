@@ -9,9 +9,18 @@ import (
 
 // Setting keys stored one row per key in org_setting.
 const (
-	SettingPoolScoreThreshold   = "pool_score_threshold"
-	SettingIntegrityWeights     = "integrity_weights"
-	SettingAssessmentInviteDays = "assessment_invite_days"
+	SettingPoolScoreThreshold    = "pool_score_threshold"
+	SettingIntegrityWeights      = "integrity_weights"
+	SettingAssessmentInviteDays  = "assessment_invite_days"
+	SettingSnapshotRetentionDays = "snapshot_retention_days"
+)
+
+// Snapshot retention bounds. The default is long enough for a dispute over a
+// sitting to be raised and settled, and a day is the shortest anyone may
+// keep frames for.
+const (
+	DefaultSnapshotRetentionDays = 90
+	MinSnapshotRetentionDays     = 1
 )
 
 // IntegritySignalNames is the closed set of signals the worker computes; an
@@ -24,6 +33,8 @@ var IntegritySignalNames = []string{
 	"blur_then_solution",
 	"speed_vs_difficulty",
 	"reference_similarity",
+	"fullscreen_exits",
+	"snapshot_gaps",
 }
 
 // Starting weights; calibration against recorded sessions will move them.
@@ -35,6 +46,8 @@ var defaultIntegrityWeights = map[string]float64{
 	"blur_then_solution":   15,
 	"speed_vs_difficulty":  5,
 	"reference_similarity": 10,
+	"fullscreen_exits":     10,
+	"snapshot_gaps":        5,
 }
 
 var ErrInvalidSettings = errors.New("service: invalid org settings")
@@ -46,6 +59,9 @@ type Settings struct {
 	PoolScoreThreshold int
 	// AssessmentInviteDays is how long an assessment invite stays usable.
 	AssessmentInviteDays int
+	// SnapshotRetentionDays is how long a sitting's webcam frames are kept
+	// before the sweep deletes them.
+	SnapshotRetentionDays int
 	// IntegrityWeights weights each signal in the risk score; one entry per
 	// IntegritySignalNames.
 	IntegrityWeights map[string]float64
@@ -56,7 +72,10 @@ func DefaultSettings() Settings {
 	for k, v := range defaultIntegrityWeights {
 		w[k] = v
 	}
-	return Settings{PoolScoreThreshold: 80, AssessmentInviteDays: 7, IntegrityWeights: w}
+	return Settings{
+		PoolScoreThreshold: 80, AssessmentInviteDays: 7,
+		SnapshotRetentionDays: DefaultSnapshotRetentionDays, IntegrityWeights: w,
+	}
 }
 
 // Validate reports every problem at once so a settings form can show them all.
@@ -67,6 +86,9 @@ func (s Settings) Validate() error {
 	}
 	if s.AssessmentInviteDays < 1 {
 		problems = append(problems, fmt.Sprintf("%s must be at least 1", SettingAssessmentInviteDays))
+	}
+	if s.SnapshotRetentionDays < MinSnapshotRetentionDays {
+		problems = append(problems, fmt.Sprintf("%s must be at least %d", SettingSnapshotRetentionDays, MinSnapshotRetentionDays))
 	}
 	known := make(map[string]bool, len(IntegritySignalNames))
 	for _, name := range IntegritySignalNames {

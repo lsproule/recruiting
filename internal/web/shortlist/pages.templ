@@ -1,0 +1,174 @@
+package shortlist
+
+import "recruiting/internal/web/layout"
+
+// builderPage is the shortlist builder: everyone who qualifies on the left,
+// the ranked recommendation and the note on the right. The right-hand column
+// is the whole of what the client will read, and the legend under it says so.
+templ builderPage(page layout.Page, v builderView, state string, csrf string) {
+	@layout.Base(page) {
+		<div class="page-head">
+			<div>
+				<p class="page-kicker">Shortlist</p>
+				<h1>Shortlist builder</h1>
+				<p class="muted">
+					The client sees only what you put in the right-hand column: your ranking,
+					your note, the recordings and the résumés.
+				</p>
+			</div>
+		</div>
+		<form class="shortlist" method="post" action={ templ.SafeURL(savePath(v.JobID)) } x-data={ "shortlistBuilder(" + state + ")" }>
+			@layout.CSRFField(csrf)
+			<input type="hidden" name="packet_id" value={ v.DraftID() }/>
+			@qualifiedPool(v)
+			@recommendation(v)
+		</form>
+		@sentPackets(v)
+		@builderScript()
+	}
+}
+
+// qualifiedPool is everyone the job has scored, ranked by fit and then by
+// score. Adding is the only thing that happens here; the ranking happens on
+// the other side of the screen.
+templ qualifiedPool(v builderView) {
+	<section class="shortlist-pool">
+		<h2 class="shortlist-heading">
+			Qualified pool
+			<span class="muted">{ itoa(len(v.Pool)) } scored, ranked by fit</span>
+			<span class="tag tag-neutral">Assessment scored &ge; { num(v.Threshold) }</span>
+		</h2>
+		if len(v.Pool) == 0 {
+			<p class="muted">
+				Nobody on this job has a scored sitting at { num(v.Threshold) } or above yet.
+			</p>
+		}
+		<ul class="shortlist-rows">
+			for _, c := range v.Pool {
+				<li class="shortlist-row">
+					<span class="shortlist-name">{ c.CandidateName }</span>
+					<span class="muted shortlist-stage">{ c.StageName }</span>
+					<span class="shortlist-metric"><span class="muted">Fit</span> <b>{ num(c.Fit) }</b></span>
+					<span class="shortlist-metric"><span class="muted">Exam</span> { num(c.Score) }</span>
+					<button
+						type="button"
+						class="btn btn-ghost shortlist-toggle"
+						@click={ "toggle('" + c.ApplicationID.String() + "')" }
+						x-text={ "picked('" + c.ApplicationID.String() + "') ? 'Remove' : 'Add'" }
+					>Add</button>
+				</li>
+			}
+		</ul>
+	</section>
+}
+
+// recommendation is the packet itself: the ranking, the note, and what the
+// client will and will not be shown.
+templ recommendation(v builderView) {
+	<aside class="shortlist-packet">
+		<h2 class="shortlist-heading">
+			Recommendation to client
+			<span class="muted" x-text="picks.length + ' of ' + max"></span>
+		</h2>
+		<ol class="shortlist-picks">
+			<template x-for="(pick, i) in picks" :key="pick.id">
+				<li class="shortlist-pick">
+					<span class="shortlist-rank" x-text="i + 1"></span>
+					<span class="shortlist-pick-who">
+						<span class="shortlist-name" x-text="pick.name"></span>
+						<span class="muted" x-text="'Fit ' + pick.fit + ' · exam ' + pick.score"></span>
+					</span>
+					<input type="hidden" name="application_ids" :value="pick.id"/>
+					<button type="button" class="btn btn-icon" @click="move(i, -1)" :disabled="i === 0" aria-label="Move up">&uarr;</button>
+					<button type="button" class="btn btn-icon" @click="move(i, 1)" :disabled="i === picks.length - 1" aria-label="Move down">&darr;</button>
+					<button type="button" class="btn btn-icon" @click="toggle(pick.id)" aria-label="Remove">&times;</button>
+				</li>
+			</template>
+		</ol>
+		<p class="shortlist-empty muted" x-show="picks.length === 0">
+			Add candidates from the pool. Ranking is what the client reads first.
+		</p>
+		<div class="field">
+			<label for="shortlist-note">Why these, in your words</label>
+			<textarea
+				class="input"
+				id="shortlist-note"
+				name="note"
+				rows="4"
+				placeholder="Ranked on how they debugged the concurrency case, not on score alone."
+			>{ v.DraftNote() }</textarea>
+		</div>
+		<dl class="shortlist-legend">
+			<dt>Client sees</dt>
+			<dd>Your ranking, your note, résumés, the code and its tests, the recording</dd>
+			<dt>Hidden</dt>
+			<dd>Integrity signals, webcam frames, interviewer guidelines, internal notes, every other applicant</dd>
+		</dl>
+		<div class="shortlist-actions">
+			<button type="submit" class="btn btn-secondary">Save draft</button>
+			<button
+				type="submit"
+				class="btn btn-primary"
+				formaction={ templ.SafeURL(sendPath(v.JobID)) }
+				:disabled="picks.length === 0"
+			>Send to client</button>
+		</div>
+	</aside>
+}
+
+// sentPackets is the record of what this client has already been sent. A sent
+// packet is never edited, so it is shown rather than offered.
+templ sentPackets(v builderView) {
+	if len(v.Sent()) > 0 {
+		<section class="shortlist-history">
+			<h2>Already sent</h2>
+			for _, packet := range v.Sent() {
+				<article class="shortlist-sent">
+					<h3>{ at(sentAt(packet)) }</h3>
+					if packet.Note != "" {
+						<p>{ packet.Note }</p>
+					}
+					<ol class="shortlist-sent-picks">
+						for _, pick := range packet.Picks {
+							<li>{ itoa(pick.Rank) }. { pick.CandidateName } <span class="muted">exam { score(pick.Score) }</span></li>
+						}
+					</ol>
+				</article>
+			}
+		</section>
+	}
+}
+
+// builderScript is the picks column: add, remove, reorder. The ranking lives
+// in the browser until the form is posted, so a recruiter can rearrange a
+// shortlist without writing a draft on every keystroke.
+templ builderScript() {
+	<script>
+		function shortlistBuilder(state) {
+			return {
+				pool: state.pool,
+				picks: state.picks,
+				max: state.max,
+				picked(id) {
+					return this.picks.some((p) => p.id === id);
+				},
+				toggle(id) {
+					const at = this.picks.findIndex((p) => p.id === id);
+					if (at >= 0) {
+						this.picks.splice(at, 1);
+						return;
+					}
+					if (this.picks.length >= this.max) return;
+					const found = this.pool.find((p) => p.id === id);
+					if (found) this.picks.push(found);
+				},
+				move(index, by) {
+					const to = index + by;
+					if (to < 0 || to >= this.picks.length) return;
+					const [pick] = this.picks.splice(index, 1);
+					this.picks.splice(to, 0, pick);
+				},
+			};
+		}
+	</script>
+}

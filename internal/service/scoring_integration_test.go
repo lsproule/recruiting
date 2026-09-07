@@ -96,9 +96,17 @@ func TestFinalizeScoresTheFinalSubmitOfEveryProblem(t *testing.T) {
 	if status != service.AttemptScored {
 		t.Fatalf("status = %s, want scored", status)
 	}
-	// One problem at 1/3, one never submitted at 0.
-	if score == nil || math.Abs(*score-100.0/3/2) > 0.01 {
-		t.Fatalf("attempt score = %v, want the mean of 33.3 and 0", score)
+	// One problem scored on its public case alone, one never submitted at 0.
+	var public, all float64
+	for _, c := range solved.TestCases {
+		all += c.Weight
+		if c.Visibility == "public" {
+			public += c.Weight
+		}
+	}
+	want := 100 * public / all / 2
+	if score == nil || math.Abs(*score-want) > 0.01 {
+		t.Fatalf("attempt score = %v, want the mean of %.1f and 0", score, 100*public/all)
 	}
 	if errCount != 0 {
 		t.Errorf("error count = %d, want 0", errCount)
@@ -111,10 +119,10 @@ func TestFinalizeScoresTheFinalSubmitOfEveryProblem(t *testing.T) {
 		byProblem[ps.ProblemID] = ps
 	}
 	got := byProblem[solved.ID]
-	if math.Abs(got.Score-1.0/3) > 1e-9 || got.PassedWeight != 1 || got.TotalWeight != 3 || got.SubmissionID != last.ID {
-		t.Errorf("solved problem = %+v, want 1 of 3 weight from the final submit %s", got, last.ID)
+	if math.Abs(got.Score-public/all) > 1e-9 || got.PassedWeight != public || got.TotalWeight != all || got.SubmissionID != last.ID {
+		t.Errorf("solved problem = %+v, want %v of %v weight from the final submit %s", got, public, all, last.ID)
 	}
-	if got := byProblem[unsolved.ID]; got.Score != 0 || got.TotalWeight != 3 || got.SubmissionID != uuid.Nil {
+	if got := byProblem[unsolved.ID]; got.Score != 0 || got.TotalWeight != all || got.SubmissionID != uuid.Nil {
 		t.Errorf("unsubmitted problem = %+v, want a zero with no submission", got)
 	}
 

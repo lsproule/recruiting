@@ -1,5 +1,7 @@
 package server
 
+import "recruiting/internal/domain"
+
 // Wire types for POST /execute. Field names are the contract with the app.
 
 const (
@@ -15,7 +17,17 @@ const (
 	TestTimeout = "timeout"
 )
 
-var Languages = map[string]bool{"python": true, "node": true, "go": true, "java": true, "sql": true}
+// Languages the runner accepts, derived from the problem bank's registry:
+// two hand-kept lists drifted apart once already.
+var Languages = languageSet()
+
+func languageSet() map[string]bool {
+	m := make(map[string]bool, len(domain.Languages))
+	for _, l := range domain.Languages {
+		m[l.ID] = true
+	}
+	return m
+}
 
 type Request struct {
 	ID        string `json:"id"`
@@ -60,6 +72,10 @@ type TestResult struct {
 	TestID     string `json:"test_id"`
 	Status     string `json:"status"`
 	StdoutHash string `json:"stdout_hash"`
+	// StdoutTail is the head of what the program printed, truncated by the
+	// harness. It exists so a run can be debugged; the scoring path reads the
+	// hash and never this.
+	StdoutTail string `json:"stdout_tail,omitempty"`
 	StderrTail string `json:"stderr_tail"`
 	TimeMs     int64  `json:"time_ms"`
 	MemKB      int64  `json:"mem_kb"`

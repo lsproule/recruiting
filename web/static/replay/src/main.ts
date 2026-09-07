@@ -13,6 +13,29 @@ import { EditorView, lineNumbers, drawSelection } from "@codemirror/view";
 interface Config {
   attempt_id: string;
   manifest_url: string;
+  // Where the webcam frames behind the snapshot markers are fetched from.
+  // Their links are signed and short-lived, so they are asked for when a
+  // marker is opened rather than baked into the page.
+  snapshots_url?: string;
+  // The jump chips, derived server-side from the submissions. Each names a
+  // moment in wall-clock milliseconds, the same clock the events carry.
+  jumps?: Jump[];
+  // readonly marks a viewer outside the org: the manifest it reads carries
+  // the code alone, so the timeline is described as runs and submits and no
+  // webcam frame is ever asked for.
+  readonly?: boolean;
+}
+
+interface Jump {
+  key: string;
+  label: string;
+  at: number;
+}
+
+interface Frame {
+  seq: number;
+  taken_at: number;
+  url: string;
 }
 
 interface ReplayEvent {
@@ -29,6 +52,8 @@ interface Marker {
   problem_id: string;
   at: number;
   note: string;
+  // The webcam beat this marker opens; absent or zero when it opens nothing.
+  snapshot_seq?: number;
 }
 
 interface Problem {
@@ -145,6 +170,67 @@ function stamp(at: number, startedAt: number): string {
   return String(m).padStart(2, "0") + ":" + String(secs % 60).padStart(2, "0");
 }
 
+// The playback speeds the transport offers, and how often it ticks. A tick
+// is short enough that 4x still lands on individual events.
+const SPEEDS = [1, 1.5, 2, 4];
+const TICK_MS = 80;
+
+// Frames fetches the webcam frames behind the snapshot markers, once. Their
+// links are signed and expire within minutes, so a reviewer who leaves the
+// page open long enough is told to reload rather than shown a dead image.
+class Frames {
+  private pending: Promise<Map<number, Frame>> | null = null;
+
+  constructor(private readonly url?: string) {}
+
+  get(seq: number): Promise<Frame | undefined> {
+    if (!this.url) return Promise.resolve(undefined);
+    if (!this.pending) {
+      const url = this.url;
+      this.pending = fetch(url, { headers: { Accept: "application/json" }, credentials: "same-origin" })
+        .then((res) => {
+          if (!res.ok) throw new Error("the webcam frames could not be loaded (" + res.status + ")");
+          return res.json() as Promise<Frame[]>;
+        })
+        .then((list) => new Map((list ?? []).map((f) => [f.seq, f])));
+    }
+    return this.pending.then((bySeq) => bySeq.get(seq));
+  }
+}
+
+// openFrame shows one webcam beat under the timeline. The link is minted for
+// this reader and expires shortly, so it is never offered as something to
+// copy — only as the image itself.
+async function openFrame(frames: Frames, host: HTMLElement, seq: number, caption: string): Promise<void> {
+  host.textContent = "";
+  host.hidden = false;
+  try {
+    const frame = await frames.get(seq);
+    if (!frame?.url) {
+      host.appendChild(el("p", "muted", "That beat stored no frame."));
+      return;
+    }
+    const img = document.createElement("img");
+    img.src = frame.url;
+    img.alt = "Webcam frame " + seq;
+    img.className = "replay-frame-image";
+    img.addEventListener("error", () => {
+      host.textContent = "";
+      host.appendChild(el("p", "muted", "The link to this frame has expired. Reload the page to look again."));
+    });
+    const close = el("button", "replay-frame-close", "Close");
+    close.setAttribute("type", "button");
+    close.addEventListener("click", () => {
+      host.hidden = true;
+      host.textContent = "";
+    });
+    host.append(img, el("span", "replay-frame-caption", caption), close);
+  } catch (err) {
+    host.textContent = "";
+    host.appendChild(el("p", "muted", (err as Error).message));
+  }
+}
+
 // MAX_PAGES bounds the paging loop so a server that kept handing back the
 // same cursor could not spin the browser forever.
 const MAX_PAGES = 1000;
@@ -194,7 +280,7 @@ function mount(root: HTMLElement, cfg: Config): void {
   });
   load(root, cfg)
     .then((m) => {
-      jump = render(root, m);
+      jump = render(root, m, cfg);
       if (pending !== null && jump) jump(pending);
     })
     .catch((err: Error) => {
@@ -203,7 +289,7 @@ function mount(root: HTMLElement, cfg: Config): void {
 }
 
 // render draws the viewer and returns the jump the page's evidence links use.
-function render(root: HTMLElement, m: Manifest): ((seq: number) => void) | null {
+function render(root: HTMLElement, m: Manifest, cfg: Config): ((seq: number) => void) | null {
   root.textContent = "";
   const every = m.snapshot_every > 0 ? m.snapshot_every : 500;
   const problems = m.problems ?? [];
@@ -271,19 +357,49 @@ function render(root: HTMLElement, m: Manifest): ((seq: number) => void) | null 
     parent: editorHost,
   });
 
+  // The transport: play/pause and the four speeds. Playback walks the wall
+  // clock the events carry, so a pause in the sitting reads as a pause here
+  // rather than being compressed away by an even event-per-tick step.
   const controls = el("div", "replay-controls");
+  const play = el("button", "replay-play", "Play");
+  play.setAttribute("type", "button");
+  const speeds = el("div", "replay-speeds");
+  const readout = el("span", "replay-readout");
+  const speedButtons = new Map<number, HTMLElement>();
+  let rate = 1;
+  for (const value of SPEEDS) {
+    const button = el("button", "replay-speed", value + "\u00d7");
+    button.setAttribute("type", "button");
+    button.addEventListener("click", () => {
+      rate = value;
+      for (const [v, b] of speedButtons) b.classList.toggle("on", v === rate);
+    });
+    button.classList.toggle("on", value === rate);
+    speedButtons.set(value, button);
+    speeds.appendChild(button);
+  }
+  controls.append(play, speeds, readout);
+  root.appendChild(controls);
+
   const scrubber = document.createElement("input");
   scrubber.type = "range";
   scrubber.min = "0";
   scrubber.max = String(events.length);
   scrubber.value = String(events.length);
   scrubber.className = "replay-scrubber";
-  const readout = el("span", "replay-readout");
-  controls.append(scrubber, readout);
-  root.appendChild(controls);
+  scrubber.setAttribute("aria-label", "Scrub the recording");
+  const timeline = el("div", "replay-timeline");
+  const track = el("div", "replay-track");
+  track.append(scrubber, timeline);
+  root.appendChild(track);
 
-  const markerBar = el("div", "replay-markers");
-  root.appendChild(markerBar);
+  const jumpBar = el("div", "replay-jumps");
+  root.appendChild(jumpBar);
+  const frameHost = el("div", "replay-frame");
+  frameHost.hidden = true;
+  root.appendChild(frameHost);
+  const legend = el("p", "replay-legend");
+  root.appendChild(legend);
 
   let current = problems[0].id;
   const tabButtons = new Map<string, HTMLElement>();
@@ -300,7 +416,7 @@ function render(root: HTMLElement, m: Manifest): ((seq: number) => void) | null 
     const at = index === 0 ? m.started_at : events[index - 1].at;
     const problem = problems.find((p) => p.id === current);
     readout.textContent =
-      (problem ? problem.title + " — " : "") +
+      (problem ? problem.title + " \u2014 " : "") +
       "event " + index + " of " + events.length +
       (stamp(at, m.started_at) ? " at " + stamp(at, m.started_at) : "");
     for (const [id, tab] of tabButtons) tab.classList.toggle("active", id === current);
@@ -308,6 +424,7 @@ function render(root: HTMLElement, m: Manifest): ((seq: number) => void) | null 
 
   for (const p of problems) {
     const tab = el("button", "replay-tab", p.title);
+    tab.setAttribute("type", "button");
     tab.addEventListener("click", () => {
       current = p.id;
       show(Number(scrubber.value));
@@ -324,23 +441,103 @@ function render(root: HTMLElement, m: Manifest): ((seq: number) => void) | null 
     return events.length;
   };
 
+  // indexOfTime is the scrubber position at a moment on the wall clock: the
+  // last event that had already happened by then.
+  const indexOfTime = (at: number): number => {
+    let index = 0;
+    for (let i = 0; i < events.length; i += 1) {
+      if (events[i].at > at) break;
+      index = i + 1;
+    }
+    return index;
+  };
+
   const jumpToSeq = (seq: number): void => {
     const ev = events.find((e) => e.seq === seq);
     if (ev?.problem_id && tracks.has(ev.problem_id)) current = ev.problem_id;
+    stop();
     show(indexOfSeq(seq));
     root.scrollIntoView({ block: "nearest" });
   };
 
-  for (const marker of m.markers ?? []) {
+  // Playback. The clock is the sitting's own; a tick advances it by the
+  // elapsed wall time times the chosen speed and lands on whatever event
+  // that reaches.
+  let timer: number | null = null;
+  let last = 0;
+  let clock = events.length > 0 ? events[events.length - 1].at : m.started_at;
+  const stop = (): void => {
+    if (timer !== null) window.clearInterval(timer);
+    timer = null;
+    play.textContent = "Play";
+  };
+  const tick = (): void => {
+    const now = performance.now();
+    clock += (now - last) * rate;
+    last = now;
+    const index = indexOfTime(clock);
+    show(index);
+    if (index >= events.length) stop();
+  };
+  play.addEventListener("click", () => {
+    if (timer !== null) {
+      stop();
+      return;
+    }
+    if (Number(scrubber.value) >= events.length) show(0);
+    const index = Number(scrubber.value);
+    clock = index === 0 ? m.started_at : events[index - 1].at;
+    last = performance.now();
+    timer = window.setInterval(tick, TICK_MS);
+    play.textContent = "Pause";
+  });
+  scrubber.addEventListener("input", () => {
+    stop();
+    show(Number(scrubber.value));
+  });
+
+  // The integrity timeline: every marker the server derived, placed on the
+  // same track as the scrubber so a blur, a paste, a fullscreen exit and a
+  // webcam beat read against the code they happened over.
+  const markers = m.markers ?? [];
+  const frames = new Frames(cfg.readonly ? undefined : cfg.snapshots_url);
+  for (const marker of markers) {
+    const index = indexOfSeq(marker.seq);
     const button = el("button", "replay-marker replay-marker-" + marker.kind);
+    button.setAttribute("type", "button");
+    button.style.left = events.length > 0 ? (index / events.length) * 100 + "%" : "0%";
     const time = stamp(marker.at, m.started_at);
-    button.textContent = (time ? time + " " : "") + marker.note;
-    button.title = marker.kind + " at seq " + marker.seq;
-    button.addEventListener("click", () => jumpToSeq(marker.seq));
-    markerBar.appendChild(button);
+    button.title = (time ? time + " \u2014 " : "") + marker.note;
+    button.setAttribute("aria-label", button.title);
+    button.addEventListener("click", () => {
+      jumpToSeq(marker.seq);
+      if (marker.snapshot_seq) void openFrame(frames, frameHost, marker.snapshot_seq, button.title);
+      else frameHost.hidden = true;
+    });
+    timeline.appendChild(button);
+  }
+  if (cfg.readonly) {
+    legend.textContent = markers.length > 0
+      ? "The marks on the track are each run and each submit. Click one to jump there."
+      : "Nothing was run or submitted.";
+  } else {
+    legend.textContent = markers.length > 0
+      ? "The marks on the track are what the recording flagged: leaving the page, pasting, leaving fullscreen, and each webcam frame. Click one to jump there."
+      : "The recording flagged nothing.";
   }
 
-  scrubber.addEventListener("input", () => show(Number(scrubber.value)));
+  for (const jump of cfg.jumps ?? []) {
+    const chip = el("button", "replay-jump", jump.label);
+    chip.setAttribute("type", "button");
+    const time = stamp(jump.at, m.started_at);
+    if (time) chip.appendChild(el("span", "replay-jump-at", time));
+    chip.addEventListener("click", () => {
+      stop();
+      show(indexOfTime(jump.at));
+    });
+    jumpBar.appendChild(chip);
+  }
+  if (jumpBar.childElementCount > 0) jumpBar.prepend(el("span", "replay-jumps-label", "Jump to"));
 
   show(events.length);
   return jumpToSeq;

@@ -62,45 +62,55 @@ func (s *ReleaseService) setReleased(ctx context.Context, p Principal, id uuid.U
 	}
 	var out Application
 	err := s.st.WithTx(ctx, p, func(ctx context.Context, tx *store.Tx) error {
-		app, err := tx.Q.GetApplicationForUpdate(ctx, id)
+		app, row, changed, err := s.apply(ctx, tx, p, id, released)
 		if err != nil {
 			return err
 		}
-		if app.ReleasedAt.Valid == released {
-			// Already in the asked-for state: nothing to record or send.
-			out, err = card(ctx, tx, id)
-			return err
-		}
-		at := ts(time.Now())
-		if !released {
-			at.Valid = false
-		}
-		if _, err := tx.Q.SetApplicationReleased(ctx, db.SetApplicationReleasedParams{ID: id, ReleasedAt: at}); err != nil {
-			return err
-		}
-		kind := EventUnreleased
-		if released {
-			kind = EventReleased
-		}
-		if _, err := tx.Q.CreateApplicationEvent(ctx, db.CreateApplicationEventParams{
-			OrgID: p.OrgID, ApplicationID: id, ActorKind: actorKind(p),
-			ActorID: uuid.NullUUID{UUID: p.UserID, Valid: p.UserID != uuid.Nil},
-			Kind:    kind, Payload: []byte("{}"),
-		}); err != nil {
-			return err
-		}
-		if out, err = card(ctx, tx, id); err != nil {
-			return err
-		}
-		if !released || s.q == nil {
+		out = app
+		if !changed || !released || s.q == nil {
 			return nil
 		}
-		return s.notify(ctx, tx, p.OrgID, app.ClientCompanyID, out)
+		return s.notify(ctx, tx, p.OrgID, row.ClientCompanyID, out)
 	})
 	if err != nil {
 		return Application{}, wrapMove("release application", err)
 	}
 	return out, nil
+}
+
+// apply flips released_at inside tx and records the event, without sending
+// anything: the caller owns whatever notice the change earns. changed is
+// false when the application already sits in the asked-for state, which is
+// how a concurrent release does nothing the second time.
+func (s *ReleaseService) apply(ctx context.Context, tx *store.Tx, p Principal, id uuid.UUID, released bool) (Application, db.Application, bool, error) {
+	app, err := tx.Q.GetApplicationForUpdate(ctx, id)
+	if err != nil {
+		return Application{}, db.Application{}, false, err
+	}
+	if app.ReleasedAt.Valid == released {
+		out, err := card(ctx, tx, id)
+		return out, app, false, err
+	}
+	at := ts(time.Now())
+	if !released {
+		at.Valid = false
+	}
+	if _, err := tx.Q.SetApplicationReleased(ctx, db.SetApplicationReleasedParams{ID: id, ReleasedAt: at}); err != nil {
+		return Application{}, db.Application{}, false, err
+	}
+	kind := EventUnreleased
+	if released {
+		kind = EventReleased
+	}
+	if _, err := tx.Q.CreateApplicationEvent(ctx, db.CreateApplicationEventParams{
+		OrgID: p.OrgID, ApplicationID: id, ActorKind: actorKind(p),
+		ActorID: uuid.NullUUID{UUID: p.UserID, Valid: p.UserID != uuid.Nil},
+		Kind:    kind, Payload: []byte("{}"),
+	}); err != nil {
+		return Application{}, db.Application{}, false, err
+	}
+	out, err := card(ctx, tx, id)
+	return out, app, true, err
 }
 
 // notify queues one release notice per client user of the company, inside

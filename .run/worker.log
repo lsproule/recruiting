@@ -1,0 +1,41 @@
+{"time":"2026-08-31T16:22:44.164721201Z","level":"INFO","msg":"working queue","mode":"worker","kinds":["email.send","interview.remind","assessment.invite","assessment.remind","runner.execute","attempt.finalize","signals.compute","attempt.purge_preview","snapshot.purge"],"smtp_from":"no-reply@localhost","metrics_addr":":9091"}
+{"time":"2026-08-31T16:22:44.200190202Z","level":"INFO","msg":"River client started","mode":"worker","client_id":"urmom_2026_08_31T16_22_44_164365"}
+{"time":"2026-08-31T17:22:44.201000134Z","level":"INFO","msg":"producer: Producer job counts","mode":"worker","num_completed_jobs":1,"num_jobs_running":0,"num_jobs_stuck":0,"queue":"default"}
+{"time":"2026-08-31T17:37:47.496411446Z","level":"INFO","msg":"maintenance.JobCleaner: Ran successfully","mode":"worker","num_jobs_deleted":1}
+{"time":"2026-08-31T18:22:44.2013188Z","level":"INFO","msg":"producer: Producer job counts","mode":"worker","num_completed_jobs":2,"num_jobs_running":0,"num_jobs_stuck":0,"queue":"default"}
+{"time":"2026-08-31T18:37:47.494931982Z","level":"INFO","msg":"maintenance.JobCleaner: Ran successfully","mode":"worker","num_jobs_deleted":1}
+{"time":"2026-08-31T19:22:44.200915679Z","level":"INFO","msg":"producer: Producer job counts","mode":"worker","num_completed_jobs":3,"num_jobs_running":0,"num_jobs_stuck":0,"queue":"default"}
+{"time":"2026-08-31T19:37:47.496279149Z","level":"INFO","msg":"maintenance.JobCleaner: Ran successfully","mode":"worker","num_jobs_deleted":1}
+{"time":"2026-08-31T20:22:44.200669583Z","level":"INFO","msg":"producer: Producer job counts","mode":"worker","num_completed_jobs":4,"num_jobs_running":0,"num_jobs_stuck":0,"queue":"default"}
+{"time":"2026-08-31T20:37:47.494399473Z","level":"INFO","msg":"maintenance.JobCleaner: Ran successfully","mode":"worker","num_jobs_deleted":1}
+{"time":"2026-08-31T21:12:29.200310616Z","level":"INFO","msg":"producer: Producer job counts","mode":"worker","num_completed_jobs":5,"num_jobs_running":0,"num_jobs_stuck":0,"queue":"default"}
+{"time":"2026-08-31T21:22:44.200270861Z","level":"INFO","msg":"producer: Producer job counts","mode":"worker","num_completed_jobs":6,"num_jobs_running":0,"num_jobs_stuck":0,"queue":"default"}
+{"time":"2026-08-31T21:27:47.49475933Z","level":"INFO","msg":"maintenance.JobCleaner: Ran successfully","mode":"worker","num_jobs_deleted":1}
+{"time":"2026-08-31T21:37:47.496081732Z","level":"INFO","msg":"maintenance.JobCleaner: Ran successfully","mode":"worker","num_jobs_deleted":1}
+{"time":"2026-08-31T22:22:44.200933705Z","level":"INFO","msg":"producer: Producer job counts","mode":"worker","num_completed_jobs":7,"num_jobs_running":0,"num_jobs_stuck":0,"queue":"default"}
+{"time":"2026-08-31T22:37:47.494437784Z","level":"INFO","msg":"maintenance.JobCleaner: Ran successfully","mode":"worker","num_jobs_deleted":1}
+{"time":"2026-08-31T23:22:44.200851008Z","level":"INFO","msg":"producer: Producer job counts","mode":"worker","num_completed_jobs":8,"num_jobs_running":0,"num_jobs_stuck":0,"queue":"default"}
+{"time":"2026-08-31T23:37:47.494908045Z","level":"INFO","msg":"maintenance.JobCleaner: Ran successfully","mode":"worker","num_jobs_deleted":1}
+{"time":"2026-09-01T00:00:00.006912978Z","level":"ERROR","msg":"maintenance.Reindexer: Error reindexing","mode":"worker","error":"ERROR: permission denied for index river_job_args_index (SQLSTATE 42501)","index_name":"river_job_args_index"}
+{"time":"2026-09-01T00:00:00.007749875Z","level":"ERROR","msg":"maintenance.Reindexer: Error reindexing","mode":"worker","error":"ERROR: permission denied for index river_job_kind (SQLSTATE 42501)","index_name":"river_job_kind"}
+{"time":"2026-09-01T00:00:00.008728698Z","level":"ERROR","msg":"maintenance.Reindexer: Error reindexing","mode":"worker","error":"ERROR: permission denied for index river_job_metadata_index (SQLSTATE 42501)","index_name":"river_job_metadata_index"}
+{"time":"2026-09-01T00:00:00.009511462Z","level":"ERROR","msg":"maintenance.Reindexer: Error reindexing","mode":"worker","error":"ERROR: permission denied for index river_job_pkey (SQLSTATE 42501)","index_name":"river_job_pkey"}
+{"time":"2026-09-01T00:00:00.010521552Z","level":"ERROR","msg":"maintenance.Reindexer: Error reindexing","mode":"worker","error":"ERROR: permission denied for index river_job_prioritized_fetching_index (SQLSTATE 42501)","index_name":"river_job_prioritized_fetching_index"}
+{"time":"2026-09-01T00:00:00.01132046Z","level":"ERROR","msg":"maintenance.Reindexer: Error reindexing","mode":"worker","error":"ERROR: permission denied for index river_job_state_and_finalized_at_index (SQLSTATE 42501)","index_name":"river_job_state_and_finalized_at_index"}
+{"time":"2026-09-01T00:00:00.011731658Z","level":"ERROR","msg":"maintenance.Reindexer: Error reindexing","mode":"worker","error":"ERROR: permission denied for index river_job_unique_idx (SQLSTATE 42501)","index_name":"river_job_unique_idx"}
+{"time":"2026-09-01T00:22:44.200979558Z","level":"INFO","msg":"producer: Producer job counts","mode":"worker","num_completed_jobs":9,"num_jobs_running":0,"num_jobs_stuck":0,"queue":"default"}
+{"time":"2026-09-01T00:37:47.494595061Z","level":"INFO","msg":"maintenance.JobCleaner: Ran successfully","mode":"worker","num_jobs_deleted":1}
+{"time":"2026-09-01T01:22:44.200688607Z","level":"INFO","msg":"producer: Producer job counts","mode":"worker","num_completed_jobs":10,"num_jobs_running":0,"num_jobs_stuck":0,"queue":"default"}
+{"time":"2026-09-01T01:37:47.495462883Z","level":"INFO","msg":"maintenance.JobCleaner: Ran successfully","mode":"worker","num_jobs_deleted":1}
+{"time":"2026-09-01T02:22:44.200347323Z","level":"INFO","msg":"producer: Producer job counts","mode":"worker","num_completed_jobs":11,"num_jobs_running":0,"num_jobs_stuck":0,"queue":"default"}
+{"time":"2026-09-01T02:37:47.495269255Z","level":"INFO","msg":"maintenance.JobCleaner: Ran successfully","mode":"worker","num_jobs_deleted":1}
+{"time":"2026-09-01T03:22:44.201360331Z","level":"INFO","msg":"producer: Producer job counts","mode":"worker","num_completed_jobs":12,"num_jobs_running":0,"num_jobs_stuck":0,"queue":"default"}
+{"time":"2026-09-01T03:37:47.495577678Z","level":"INFO","msg":"maintenance.JobCleaner: Ran successfully","mode":"worker","num_jobs_deleted":1}
+{"time":"2026-09-01T04:22:44.20115859Z","level":"INFO","msg":"producer: Producer job counts","mode":"worker","num_completed_jobs":13,"num_jobs_running":0,"num_jobs_stuck":0,"queue":"default"}
+{"time":"2026-09-01T04:37:47.494940116Z","level":"INFO","msg":"maintenance.JobCleaner: Ran successfully","mode":"worker","num_jobs_deleted":1}
+{"time":"2026-09-01T05:22:44.201041607Z","level":"INFO","msg":"producer: Producer job counts","mode":"worker","num_completed_jobs":14,"num_jobs_running":0,"num_jobs_stuck":0,"queue":"default"}
+{"time":"2026-09-01T05:37:47.494945028Z","level":"INFO","msg":"maintenance.JobCleaner: Ran successfully","mode":"worker","num_jobs_deleted":1}
+{"time":"2026-09-01T06:22:49.200910427Z","level":"INFO","msg":"producer: Producer job counts","mode":"worker","num_completed_jobs":15,"num_jobs_running":0,"num_jobs_stuck":0,"queue":"default"}
+{"time":"2026-09-01T06:37:47.495738836Z","level":"INFO","msg":"maintenance.JobCleaner: Ran successfully","mode":"worker","num_jobs_deleted":1}
+{"time":"2026-09-01T07:22:44.201146611Z","level":"INFO","msg":"producer: Producer job counts","mode":"worker","num_completed_jobs":16,"num_jobs_running":0,"num_jobs_stuck":0,"queue":"default"}
+{"time":"2026-09-01T07:37:47.495411892Z","level":"INFO","msg":"maintenance.JobCleaner: Ran successfully","mode":"worker","num_jobs_deleted":1}

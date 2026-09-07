@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -62,10 +63,16 @@ func SignalsComputeHandler(st *store.Store, b BlobReader, logger *slog.Logger) q
 	}
 }
 
+// errPreviewAttempt stops the computation for a recruiter's own sitting.
+var errPreviewAttempt = errors.New("preview attempt")
+
 // Compute computes and stores the attempt's signals. It is idempotent: a
 // redelivery replaces the rows and the score with the same values.
 func (s *SignalsService) Compute(ctx context.Context, p SignalsComputePayload) error {
 	in, weights, err := s.load(ctx, p)
+	if errors.Is(err, errPreviewAttempt) {
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("signals.compute: %w", err)
 	}
@@ -105,6 +112,9 @@ func (s *SignalsService) load(ctx context.Context, p SignalsComputePayload) (sig
 		if att, err = tx.Q.GetAttempt(ctx, p.AttemptID); err != nil {
 			return err
 		}
+		if att.Preview {
+			return errPreviewAttempt
+		}
 		if att.StartedAt.Valid {
 			in.StartedAt = att.StartedAt.Time.UTC()
 		}
@@ -125,6 +135,9 @@ func (s *SignalsService) load(ctx context.Context, p SignalsComputePayload) (sig
 		a, err := loadAssessment(ctx, tx, att.AssessmentID)
 		if err != nil {
 			return err
+		}
+		if a.Integrity.Webcam {
+			in.WebcamEvery = time.Duration(a.Integrity.WebcamEvery) * time.Second
 		}
 		for _, problem := range a.Problems {
 			language, final := finalSource(problem.ID, subs, sources)

@@ -1,0 +1,1344 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="_ds/nocturne-bace560e-548d-43c5-8a6d-0ae76799dba8/styles.css">
+<script src="_ds/nocturne-bace560e-548d-43c5-8a6d-0ae76799dba8/_ds_bundle.js"></script>
+<style>
+  body { margin:0; background:#161826; color:#e9e9ed; font-family:"Inter",system-ui,sans-serif; font-size:13px; }
+  a { color:#9184d9; }
+  a:hover { color:#b5abfc; }
+  ::-webkit-scrollbar { width:9px; height:9px; }
+  ::-webkit-scrollbar-thumb { background:#3f424d; border-radius:8px; }
+  ::-webkit-scrollbar-track { background:transparent; }
+</style>
+</helmet>
+
+<div style="display:grid;grid-template-columns:210px 1fr;min-height:100vh;background:#161826;color:#e9e9ed;font-family:'Inter',system-ui,sans-serif;font-size:13px">
+
+  <aside style="border-right:1px solid rgba(233,233,237,0.10);padding:14px 10px;display:flex;flex-direction:column;gap:16px;position:sticky;top:0;height:100vh">
+    <div style="display:flex;align-items:baseline;gap:7px;padding:0 8px">
+      <span style="font-size:16px;font-weight:600;letter-spacing:-0.02em">Cadre</span>
+      <span style="font-size:9.5px;letter-spacing:0.12em;text-transform:uppercase;color:#75798c">recruiter</span>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:2px">
+      <sc-for list="{{ nav }}" as="item" hint-placeholder-count="6">
+        <div onClick="{{ item.go }}" style="display:flex;align-items:center;gap:9px;padding:6px 9px;border-radius:8px;cursor:pointer;color:{{ item.color }};background:{{ item.bg }}" style-hover="background:rgba(233,233,237,0.06)">
+          <span style="width:3px;height:13px;border-radius:2px;background:{{ item.bar }}"></span>
+          <span style="font-size:13px">{{ item.label }}</span>
+          <span style="margin-left:auto;font-size:11px;color:#75798c;font-variant-numeric:tabular-nums">{{ item.count }}</span>
+        </div>
+      </sc-for>
+    </div>
+
+    <div style="margin-top:auto;display:flex;flex-direction:column;gap:8px">
+      <button class="btn btn-primary btn-block" onClick="{{ startIntake }}" style="font-size:13px">＋ New client intake</button>
+      <div style="display:flex;align-items:center;gap:8px;padding:7px 8px;border-top:1px solid rgba(233,233,237,0.10)">
+        <span style="width:24px;height:24px;border-radius:50%;background:#423a6a;color:#d2cefd;display:grid;place-items:center;font-size:10.5px;font-weight:600">LR</span>
+        <div style="line-height:1.25">
+          <div style="font-size:12px">Lucas Ruiz</div>
+          <div style="font-size:10.5px;color:#75798c">Desk: Platform / NYC</div>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <main style="min-width:1180px;display:flex;flex-direction:column">
+
+    <!-- ══ QUEUE ══ -->
+    <sc-if value="{{ isQueue }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:20px 26px 0;display:flex;align-items:flex-end;gap:18px;border-bottom:1px solid rgba(233,233,237,0.10)">
+        <div style="padding-bottom:14px">
+          <div style="font-size:10px;letter-spacing:0.11em;text-transform:uppercase;color:#75798c;margin-bottom:5px">Work queue · all desks</div>
+          <h4 style="margin:0;font-size:21px">Nothing moves without you</h4>
+          <div style="color:#9397ab;font-size:12.5px;margin-top:4px">{{ queueOpen }} actions ranked by client SLA and candidate decay. {{ breachCount }} breaching in under 4h.</div>
+        </div>
+        <div style="margin-left:auto;display:flex;gap:6px;padding-bottom:14px">
+          <sc-for list="{{ queueFilters }}" as="f" hint-placeholder-count="4">
+            <button onClick="{{ f.go }}" style="font:inherit;font-size:12px;cursor:pointer;padding:5px 11px;border-radius:8px;border:1px solid {{ f.border }};background:{{ f.bg }};color:{{ f.color }}" style-hover="border-color:#9184d9">{{ f.label }}</button>
+          </sc-for>
+        </div>
+      </div>
+
+      <div style="padding:16px 26px 40px;display:flex;flex-direction:column;gap:7px;max-width:1240px">
+        <sc-for list="{{ queueRows }}" as="row" hint-placeholder-count="7">
+          <div style="display:grid;grid-template-columns:118px minmax(0,1.5fr) minmax(0,1.4fr) 92px 128px 178px;align-items:center;gap:14px;padding:11px 14px;border-radius:8px;background:#232532;box-shadow:0 0 0 1px rgba(233,233,237,0.07);opacity:{{ row.opacity }}" style-hover="box-shadow:0 0 0 1px rgba(145,132,217,0.45)">
+            <span style="font-size:10px;letter-spacing:0.08em;text-transform:uppercase;padding:4px 8px;border-radius:6px;text-align:center;background:{{ row.kindBg }};color:{{ row.kindColor }}">{{ row.kind }}</span>
+            <div style="min-width:0">
+              <div style="font-size:13.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ row.who }}</div>
+              <div style="font-size:11.5px;color:#75798c;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ row.detail }}</div>
+            </div>
+            <div style="min-width:0">
+              <div style="font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ row.job }}</div>
+              <div style="font-size:11.5px;color:#75798c">{{ row.client }}</div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:2px;font-variant-numeric:tabular-nums">
+              <span style="font-size:12.5px;color:{{ row.scoreColor }}">{{ row.scoreLabel }}</span>
+              <span style="font-size:10.5px;color:#75798c">{{ row.scoreSub }}</span>
+            </div>
+            <div style="font-size:11.5px;color:{{ row.slaColor }};font-variant-numeric:tabular-nums">{{ row.sla }}</div>
+            <div style="display:flex;gap:6px;justify-content:flex-end">
+              <button class="btn btn-primary" onClick="{{ row.primary }}" style="font-size:12px;padding:5px 10px">{{ row.primaryLabel }}</button>
+              <button class="btn btn-secondary" onClick="{{ row.snooze }}" style="font-size:12px;padding:5px 9px">{{ row.secondaryLabel }}</button>
+            </div>
+          </div>
+        </sc-for>
+        <div style="margin-top:10px;font-size:11.5px;color:#595d6c">Showing 7 of {{ queueOpen }} · queue re-ranks on every action · 5,041 open jobs across 214 clients</div>
+      </div>
+    </sc-if>
+
+    <!-- ══ CLIENTS ══ -->
+    <sc-if value="{{ isClients }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:20px 26px 14px;border-bottom:1px solid rgba(233,233,237,0.10);display:flex;align-items:flex-end;gap:16px">
+        <div>
+          <div style="font-size:10px;letter-spacing:0.11em;text-transform:uppercase;color:#75798c;margin-bottom:5px">Book of accounts</div>
+          <h4 style="margin:0;font-size:21px">Clients</h4>
+        </div>
+        <input class="input" placeholder="Filter clients, owners, industries" style="margin-left:auto;max-width:280px;font-size:12.5px" />
+        <button class="btn btn-primary" onClick="{{ startIntake }}" style="font-size:12.5px">＋ Onboard client</button>
+      </div>
+      <div style="padding:8px 26px 40px;max-width:1240px">
+        <table class="table">
+          <thead>
+            <tr><th>Client</th><th>Owner</th><th>Open jobs</th><th>In pipeline</th><th>Awaiting client</th><th>Placed 90d</th><th>Median days to shortlist</th><th></th></tr>
+          </thead>
+          <tbody>
+            <sc-for list="{{ clientRows }}" as="c" hint-placeholder-count="6">
+              <tr style="cursor:pointer" onClick="{{ c.go }}">
+                <td>
+                  <div style="display:flex;align-items:center;gap:9px">
+                    <span style="width:22px;height:22px;border-radius:5px;background:{{ c.markBg }};color:{{ c.markColor }};display:grid;place-items:center;font-size:10px;font-weight:600">{{ c.mark }}</span>
+                    <div>
+                      <div style="font-size:13px">{{ c.name }}</div>
+                      <div style="font-size:10.5px;color:#75798c">{{ c.industry }}</div>
+                    </div>
+                  </div>
+                </td>
+                <td style="font-size:12.5px;color:#9397ab">{{ c.owner }}</td>
+                <td style="font-variant-numeric:tabular-nums">{{ c.jobs }}</td>
+                <td style="font-variant-numeric:tabular-nums">{{ c.pipeline }}</td>
+                <td><span class="tag" style="background:{{ c.waitBg }};color:{{ c.waitColor }};font-variant-numeric:tabular-nums">{{ c.waiting }}</span></td>
+                <td style="font-variant-numeric:tabular-nums">{{ c.placed }}</td>
+                <td style="font-variant-numeric:tabular-nums;color:{{ c.speedColor }}">{{ c.speed }}</td>
+                <td style="text-align:right"><span style="color:#9184d9;font-size:12px">Open board →</span></td>
+              </tr>
+            </sc-for>
+          </tbody>
+        </table>
+      </div>
+    </sc-if>
+
+    <!-- ══ CLIENT DETAIL + BOARD ══ -->
+    <sc-if value="{{ isClient }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:18px 26px 0;border-bottom:1px solid rgba(233,233,237,0.10)">
+        <div style="display:flex;align-items:flex-start;gap:16px">
+          <div>
+            <div style="font-size:11px;color:#75798c;margin-bottom:6px"><a href="#" onClick="{{ goClients }}" style="text-decoration:none">Clients</a> / {{ client.name }}</div>
+            <div style="display:flex;align-items:center;gap:10px">
+              <span style="width:30px;height:30px;border-radius:7px;background:#423a6a;color:#d2cefd;display:grid;place-items:center;font-size:12px;font-weight:600">{{ client.mark }}</span>
+              <h4 style="margin:0;font-size:21px">{{ client.name }}</h4>
+              <span class="tag tag-outline">{{ client.tier }}</span>
+            </div>
+            <div style="color:#9397ab;font-size:12.5px;margin-top:5px">{{ client.jobs }} open jobs · {{ client.pipeline }} candidates in pipeline · contract SLA {{ client.sla }}</div>
+          </div>
+          <div style="margin-left:auto;display:flex;gap:6px">
+            <button class="btn btn-secondary" onClick="{{ goShortlist }}" style="font-size:12.5px">Shortlist builder</button>
+            <button class="btn btn-primary" onClick="{{ startIntake }}" style="font-size:12.5px">＋ New job</button>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:20px;margin-top:16px">
+          <sc-for list="{{ clientTabs }}" as="t" hint-placeholder-count="3">
+            <div onClick="{{ t.go }}" style="padding:0 2px 9px;cursor:pointer;font-size:13px;color:{{ t.color }};border-bottom:2px solid {{ t.border }}">{{ t.label }}</div>
+          </sc-for>
+        </div>
+      </div>
+
+      <sc-if value="{{ tabJobs }}" hint-placeholder-val="{{ true }}">
+        <div style="padding:14px 26px 40px;max-width:1240px">
+          <table class="table">
+            <thead><tr><th>Job</th><th>Seniority</th><th>Assessment</th><th>Applicants</th><th>Scored</th><th>Shortlisted</th><th>Stage risk</th><th></th></tr></thead>
+            <tbody>
+              <sc-for list="{{ jobRows }}" as="j" hint-placeholder-count="5">
+                <tr>
+                  <td><div style="font-size:13px">{{ j.title }}</div><div style="font-size:10.5px;color:#75798c">opened {{ j.opened }} · {{ j.location }}</div></td>
+                  <td style="font-size:12.5px;color:#9397ab">{{ j.seniority }}</td>
+                  <td><span class="tag" style="background:#292b31;color:#cfd3e5">{{ j.assessment }}</span></td>
+                  <td style="font-variant-numeric:tabular-nums">{{ j.applicants }}</td>
+                  <td style="font-variant-numeric:tabular-nums">{{ j.scored }}</td>
+                  <td style="font-variant-numeric:tabular-nums">{{ j.shortlisted }}</td>
+                  <td style="font-size:12px;color:{{ j.riskColor }}">{{ j.risk }}</td>
+                  <td style="text-align:right"><button class="btn btn-ghost" onClick="{{ goBoard }}" style="font-size:12px">Board →</button></td>
+                </tr>
+              </sc-for>
+            </tbody>
+          </table>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ tabBoard }}" hint-placeholder-val="{{ true }}">
+        <div style="padding:12px 26px 8px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <span style="font-size:11.5px;color:#75798c">Scope</span>
+          <span class="tag" style="background:#292b31;color:#cfd3e5;white-space:nowrap;flex:none">{{ boardScopeLabel }}</span>
+          <span style="font-size:11.5px;color:#595d6c">Every advance and reject is yours to approve — the board suggests, it never moves a card.</span>
+          <span style="margin-left:auto;font-size:11.5px;color:#75798c">{{ moveLog }}</span>
+        </div>
+        <div style="overflow-x:auto;padding:6px 26px 40px">
+          <div style="display:flex;gap:10px;align-items:flex-start;min-width:max-content">
+            <sc-for list="{{ columns }}" as="col" hint-placeholder-count="8">
+              <div style="width:{{ colWidth }}px;flex:none;background:#1c1e2c;border-radius:10px;box-shadow:0 0 0 1px rgba(233,233,237,0.07);display:flex;flex-direction:column;max-height:74vh">
+                <div style="padding:9px 11px;display:flex;align-items:center;gap:7px;border-bottom:1px solid rgba(233,233,237,0.09)">
+                  <span style="width:6px;height:6px;border-radius:50%;background:{{ col.dot }}"></span>
+                  <span style="font-size:11.5px;font-weight:500">{{ col.label }}</span>
+                  <span style="margin-left:auto;font-size:11px;color:#75798c;font-variant-numeric:tabular-nums">{{ col.total }}</span>
+                </div>
+                <div style="padding:8px;display:flex;flex-direction:column;gap:7px;overflow-y:auto">
+                  <sc-for list="{{ col.cards }}" as="card" hint-placeholder-count="2">
+                    <div style="background:#232532;border-radius:8px;padding:9px;box-shadow:0 0 0 1px rgba(233,233,237,0.07);cursor:pointer;display:flex;flex-direction:column;gap:6px" style-hover="box-shadow:0 0 0 1px rgba(145,132,217,0.5)" onClick="{{ card.open }}">
+                      <div style="display:flex;align-items:flex-start;gap:7px">
+                        <span style="width:20px;height:20px;flex:none;border-radius:50%;background:#292b31;color:#cfd3e5;display:grid;place-items:center;font-size:9.5px;font-weight:600">{{ card.initials }}</span>
+                        <div style="min-width:0;flex:1">
+                          <div style="font-size:12.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ card.name }}</div>
+                          <div style="font-size:10.5px;color:#75798c;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ card.jobShort }}</div>
+                        </div>
+                      </div>
+                      <div style="display:flex;align-items:center;gap:5px;font-variant-numeric:tabular-nums">
+                        <span style="font-size:10.5px;padding:2px 6px;border-radius:5px;background:{{ card.fitBg }};color:{{ card.fitColor }}">Fit {{ card.fit }}</span>
+                        <span style="font-size:10.5px;padding:2px 6px;border-radius:5px;background:#292b31;color:#b2b6ca">Talent {{ card.talent }}</span>
+                      </div>
+                      <sc-if value="{{ card.showFlag }}" hint-placeholder-val="{{ false }}">
+                        <div style="font-size:10.5px;color:#b5abfc">⚑ {{ card.flag }}</div>
+                      </sc-if>
+                      <div style="display:flex;gap:5px;padding-top:2px;border-top:1px solid rgba(233,233,237,0.07)">
+                        <button onClick="{{ card.advance }}" style="font:inherit;font-size:11px;cursor:pointer;flex:1;padding:4px 0;border-radius:6px;border:1px solid rgba(145,132,217,0.5);background:transparent;color:#b5abfc" style-hover="background:rgba(145,132,217,0.14)">Approve →</button>
+                        <button onClick="{{ card.reject }}" style="font:inherit;font-size:11px;cursor:pointer;padding:4px 9px;border-radius:6px;border:1px solid rgba(233,233,237,0.16);background:transparent;color:#9397ab" style-hover="background:rgba(233,233,237,0.07)">Reject</button>
+                      </div>
+                    </div>
+                  </sc-for>
+                  <sc-if value="{{ col.hasMore }}" hint-placeholder-val="{{ true }}">
+                    <button class="btn btn-secondary" style="font-size:11.5px;padding:5px 0;width:100%">{{ col.moreLabel }}</button>
+                  </sc-if>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ tabShortlists }}" hint-placeholder-val="{{ false }}">
+        <div style="padding:16px 26px 40px;max-width:900px;display:flex;flex-direction:column;gap:9px">
+          <sc-for list="{{ sentShortlists }}" as="s" hint-placeholder-count="3">
+            <div style="background:#232532;border-radius:8px;padding:12px 14px;box-shadow:0 0 0 1px rgba(233,233,237,0.07);display:flex;align-items:center;gap:14px">
+              <div style="flex:1">
+                <div style="font-size:13.5px">{{ s.job }}</div>
+                <div style="font-size:11.5px;color:#75798c">{{ s.detail }}</div>
+              </div>
+              <span class="tag" style="background:{{ s.bg }};color:{{ s.color }}">{{ s.status }}</span>
+              <span style="font-size:11.5px;color:#75798c;font-variant-numeric:tabular-nums">{{ s.sent }}</span>
+              <button class="btn btn-ghost" style="font-size:12px">View →</button>
+            </div>
+          </sc-for>
+        </div>
+      </sc-if>
+    </sc-if>
+
+    <!-- ══ CANDIDATE DETAIL ══ -->
+    <sc-if value="{{ isCandidate }}" hint-placeholder-val="{{ false }}">
+      <div style="padding:16px 26px;border-bottom:1px solid rgba(233,233,237,0.10);display:flex;align-items:center;gap:14px">
+        <button class="btn btn-secondary" onClick="{{ goBack }}" style="font-size:12.5px">← Back</button>
+        <div>
+          <div style="display:flex;align-items:center;gap:9px">
+            <h4 style="margin:0;font-size:19px">{{ cand.name }}</h4>
+            <span class="tag" style="background:#292b31;color:#cfd3e5">{{ cand.stage }}</span>
+          </div>
+          <div style="font-size:12px;color:#75798c">{{ cand.line }}</div>
+        </div>
+        <div style="margin-left:auto;display:flex;gap:6px">
+          <button class="btn btn-secondary" onClick="{{ rejectCand }}" style="font-size:12.5px">Reject</button>
+          <button class="btn btn-secondary" onClick="{{ goShortlist }}" style="font-size:12.5px">Add to shortlist</button>
+          <button class="btn btn-primary" onClick="{{ advanceCand }}" style="font-size:12.5px">{{ cand.advanceLabel }}</button>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:minmax(0,1fr) 336px;gap:0;align-items:start">
+        <div style="padding:18px 22px 40px;min-width:0;display:flex;flex-direction:column;gap:14px">
+
+          <sc-if value="{{ noAssessment }}" hint-placeholder-val="{{ false }}">
+            <div style="background:#1c1e2c;border-radius:10px;box-shadow:0 0 0 1px rgba(233,233,237,0.08);padding:26px 22px;display:flex;flex-direction:column;gap:9px;align-items:flex-start">
+              <span class="tag" style="background:#292b31;color:#cfd3e5">No assessment yet</span>
+              <div style="font-size:15px">{{ cand.name }} hasn't sat an assessment</div>
+              <div style="font-size:12.5px;color:#9397ab;max-width:520px">Fit is provisional until there's an exam — right now it rests on résumé signal only, which is the weakest half of the model. Send the set attached to {{ cand.job }} and the recording, code and test breakdown appear here.</div>
+              <div style="display:flex;gap:7px;margin-top:4px">
+                <button class="btn btn-primary" onClick="{{ sendAssessment }}" style="font-size:12.5px">Send assessment</button>
+                <button class="btn btn-secondary" onClick="{{ goAssessments }}" style="font-size:12.5px">Invites in flight</button>
+              </div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ hasAssessment }}" hint-placeholder-val="{{ true }}">
+          <div style="background:#1c1e2c;border-radius:10px;box-shadow:0 0 0 1px rgba(233,233,237,0.08);overflow:hidden">
+            <div style="padding:10px 13px;display:flex;align-items:center;gap:10px;border-bottom:1px solid rgba(233,233,237,0.09)">
+              <span style="font-size:12.5px;font-weight:500">Assessment recording</span>
+              <span style="font-size:11.5px;color:#75798c">{{ cand.problem }} · {{ cand.language }} · {{ cand.duration }}</span>
+              <span style="margin-left:auto;display:flex;gap:5px">
+                <sc-for list="{{ speeds }}" as="s" hint-placeholder-count="3">
+                  <button onClick="{{ s.go }}" style="font:inherit;font-size:11px;cursor:pointer;padding:3px 8px;border-radius:6px;border:1px solid {{ s.border }};background:transparent;color:{{ s.color }}">{{ s.label }}</button>
+                </sc-for>
+              </span>
+            </div>
+
+            <div style="aspect-ratio:16/9;background:linear-gradient(160deg,#1a1c2a,#12141f);display:grid;place-items:center;position:relative;border-bottom:1px solid rgba(233,233,237,0.09)">
+              <div style="position:absolute;inset:0;padding:22px;display:flex;flex-direction:column;gap:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:#9397ab;opacity:0.55">
+                <div>{{ frameLine1 }}</div>
+                <div>{{ frameLine2 }}</div>
+                <div style="color:#b5abfc">{{ frameLine3 }}</div>
+              </div>
+              <button onClick="{{ togglePlay }}" style="position:relative;width:52px;height:52px;border-radius:50%;border:1px solid #9184d9;background:rgba(22,24,38,0.7);color:#b5abfc;font-size:17px;cursor:pointer" style-hover="background:rgba(145,132,217,0.2)">{{ playIcon }}</button>
+              <div style="position:absolute;left:14px;bottom:12px;font-size:11px;color:#75798c;font-variant-numeric:tabular-nums">{{ timeLabel }}</div>
+              <div style="position:absolute;right:14px;bottom:12px;font-size:11px;color:#b5abfc">{{ phaseLabel }}</div>
+            </div>
+
+            <div style="padding:12px 13px 14px">
+              <div onClick="{{ seek }}" style="position:relative;height:26px;cursor:pointer">
+                <div style="position:absolute;left:0;right:0;top:11px;height:4px;border-radius:3px;background:#292b31"></div>
+                <div style="position:absolute;left:0;top:11px;height:4px;border-radius:3px;background:#9184d9;width:{{ progressPct }}%"></div>
+                <sc-for list="{{ keyframes }}" as="k" hint-placeholder-count="6">
+                  <div title="{{ k.label }}" style="position:absolute;top:{{ k.top }}px;left:{{ k.pct }}%;width:2px;height:{{ k.h }}px;background:{{ k.color }};transform:translateX(-1px)"></div>
+                </sc-for>
+                <div style="position:absolute;top:6px;left:{{ progressPct }}%;width:2px;height:14px;background:#e9e9ed;transform:translateX(-1px)"></div>
+              </div>
+              <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:6px">
+                <span style="font-size:11px;color:#75798c;margin-right:4px">Jump to</span>
+                <sc-for list="{{ jumps }}" as="j" hint-placeholder-count="4">
+                  <button onClick="{{ j.go }}" style="font:inherit;font-size:11px;cursor:pointer;padding:4px 9px;border-radius:6px;border:1px solid rgba(233,233,237,0.16);background:transparent;color:#cfd3e5" style-hover="border-color:#9184d9;color:#b5abfc">{{ j.label }} <span style="color:#75798c;font-variant-numeric:tabular-nums">{{ j.at }}</span></button>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:12px">
+            <div style="background:#1c1e2c;border-radius:10px;box-shadow:0 0 0 1px rgba(233,233,237,0.08);overflow:hidden">
+              <div style="padding:9px 12px;border-bottom:1px solid rgba(233,233,237,0.09);display:flex;align-items:center;gap:8px">
+                <span style="font-size:12px;font-weight:500">Final submission</span>
+                <span style="font-size:11px;color:#75798c">{{ cand.language }} · {{ cand.loc }} LOC · {{ cand.complexity }}</span>
+              </div>
+              <pre style="margin:0;padding:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;line-height:1.7;color:#cfd3e5;overflow-x:auto">{{ finalCode }}</pre>
+            </div>
+            <div style="background:#1c1e2c;border-radius:10px;box-shadow:0 0 0 1px rgba(233,233,237,0.08);overflow:hidden">
+              <div style="padding:9px 12px;border-bottom:1px solid rgba(233,233,237,0.09);display:flex;align-items:center;gap:8px">
+                <span style="font-size:12px;font-weight:500">Test results</span>
+                <span style="margin-left:auto;font-size:11.5px;color:#b5abfc;font-variant-numeric:tabular-nums">{{ cand.score }} / {{ cand.scoreMax }}</span>
+              </div>
+              <div style="padding:6px 4px 10px">
+                <table class="table" style="font-size:12px">
+                  <thead><tr><th>Case</th><th>Class</th><th>Result</th><th>ms</th><th>Pts</th></tr></thead>
+                  <tbody>
+                    <sc-for list="{{ tests }}" as="t" hint-placeholder-count="6">
+                      <tr>
+                        <td style="font-size:11.5px">{{ t.name }}</td>
+                        <td style="font-size:11.5px;color:#75798c">{{ t.cls }}</td>
+                        <td style="font-size:11.5px;color:{{ t.color }}">{{ t.result }}</td>
+                        <td style="font-size:11.5px;font-variant-numeric:tabular-nums;color:#9397ab">{{ t.ms }}</td>
+                        <td style="font-size:11.5px;font-variant-numeric:tabular-nums">{{ t.pts }}</td>
+                      </tr>
+                    </sc-for>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          </sc-if>
+        </div>
+
+        <div style="padding:18px 26px 40px 0;display:flex;flex-direction:column;gap:12px;position:sticky;top:0">
+          <div style="background:#232532;border-radius:10px;padding:14px;box-shadow:0 0 0 1px rgba(233,233,237,0.08)">
+            <div style="display:flex;gap:12px">
+              <div style="flex:1">
+                <div style="font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:#75798c">Fit · this job</div>
+                <div style="font-size:32px;line-height:1.1;font-weight:500;color:#b5abfc;font-variant-numeric:tabular-nums">{{ cand.fit }}</div>
+                <div style="font-size:11px;color:#75798c">{{ cand.fitRank }}</div>
+              </div>
+              <div style="width:1px;background:rgba(233,233,237,0.12)"></div>
+              <div style="flex:1">
+                <div style="font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:#75798c">Talent · career</div>
+                <div style="font-size:32px;line-height:1.1;font-weight:500;font-variant-numeric:tabular-nums">{{ cand.talent }}</div>
+                <div style="font-size:11px;color:#75798c">{{ cand.talentTrend }}</div>
+              </div>
+            </div>
+          </div>
+
+          <div style="background:#232532;border-radius:10px;padding:14px;box-shadow:0 0 0 1px rgba(233,233,237,0.08);display:flex;flex-direction:column;gap:9px">
+            <div style="font-size:12px;font-weight:500">Score breakdown</div>
+            <sc-for list="{{ factors }}" as="f" hint-placeholder-count="8">
+              <div style="display:flex;flex-direction:column;gap:3px">
+                <div style="display:flex;align-items:baseline;gap:6px">
+                  <span style="font-size:11.5px;color:#cfd3e5">{{ f.label }}</span>
+                  <span style="font-size:10.5px;color:#595d6c">w{{ f.weight }}</span>
+                  <span style="margin-left:auto;font-size:11.5px;color:{{ f.color }};font-variant-numeric:tabular-nums">{{ f.value }}</span>
+                </div>
+                <div style="height:3px;border-radius:2px;background:#292b31">
+                  <div style="height:3px;border-radius:2px;background:{{ f.color }};width:{{ f.pct }}%"></div>
+                </div>
+                <div style="font-size:10.5px;color:#75798c">{{ f.note }}</div>
+              </div>
+            </sc-for>
+          </div>
+
+          <div style="background:#232532;border-radius:10px;padding:14px;box-shadow:0 0 0 1px rgba(233,233,237,0.08);display:flex;flex-direction:column;gap:8px">
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="font-size:12px;font-weight:500">Résumé</span>
+              <a href="#" style="margin-left:auto;font-size:11.5px">Open PDF</a>
+            </div>
+            <sc-for list="{{ resume }}" as="r" hint-placeholder-count="4">
+              <div style="display:flex;gap:9px;font-size:11.5px">
+                <span style="color:#595d6c;font-variant-numeric:tabular-nums;flex:none;width:74px">{{ r.when }}</span>
+                <span style="color:#cfd3e5">{{ r.what }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ══ SHORTLIST BUILDER ══ -->
+    <sc-if value="{{ isShortlist }}" hint-placeholder-val="{{ false }}">
+      <div style="padding:18px 26px 14px;border-bottom:1px solid rgba(233,233,237,0.10);display:flex;align-items:flex-end;gap:14px">
+        <div>
+          <div style="font-size:10px;letter-spacing:0.11em;text-transform:uppercase;color:#75798c;margin-bottom:5px">{{ client.name }} · Staff Backend Engineer</div>
+          <h4 style="margin:0;font-size:21px">Shortlist builder</h4>
+          <div style="font-size:12.5px;color:#9397ab;margin-top:4px">The client sees only what you put in the right-hand column: your ranking, the recordings, your recommendation.</div>
+        </div>
+        <div style="margin-left:auto"><button class="btn btn-secondary" onClick="{{ goClient }}" style="font-size:12.5px">{{ backToClientLabel }}</button></div>
+      </div>
+      <div style="display:grid;grid-template-columns:minmax(0,1fr) 400px;gap:18px;padding:16px 26px 40px">
+        <div style="display:flex;flex-direction:column;gap:7px;min-width:0">
+          <div style="display:flex;align-items:center;gap:9px;margin-bottom:2px">
+            <span style="font-size:12px;color:#9397ab">Qualified pool — {{ poolCount }} scored, ranked by Fit</span>
+            <span class="tag" style="background:#292b31;color:#b2b6ca">Assessment scored ≥ 70</span>
+          </div>
+          <sc-for list="{{ pool }}" as="p" hint-placeholder-count="6">
+            <div style="display:grid;grid-template-columns:26px minmax(140px,1fr) 84px 92px 100px 92px;align-items:center;gap:12px;min-width:620px;padding:9px 12px;border-radius:8px;background:#232532;box-shadow:0 0 0 1px rgba(233,233,237,0.07)">
+              <span style="width:22px;height:22px;border-radius:50%;background:#292b31;color:#cfd3e5;display:grid;place-items:center;font-size:9.5px;font-weight:600">{{ p.initials }}</span>
+              <div style="min-width:0">
+                <div style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ p.name }}</div>
+                <div style="font-size:11px;color:#75798c;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ p.line }}</div>
+              </div>
+              <div style="font-size:11.5px;font-variant-numeric:tabular-nums"><span style="color:#75798c">Fit</span> <span style="color:#b5abfc">{{ p.fit }}</span></div>
+              <div style="font-size:11.5px;font-variant-numeric:tabular-nums"><span style="color:#75798c">Talent</span> {{ p.talent }}</div>
+              <div style="font-size:11.5px;font-variant-numeric:tabular-nums;color:#9397ab">{{ p.exam }}</div>
+              <button onClick="{{ p.toggle }}" style="font:inherit;font-size:11.5px;cursor:pointer;padding:5px 0;border-radius:6px;border:1px solid {{ p.btnBorder }};background:transparent;color:{{ p.btnColor }}" style-hover="background:rgba(145,132,217,0.14)">{{ p.btnLabel }}</button>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="background:#1c1e2c;border-radius:10px;box-shadow:0 0 0 1px rgba(233,233,237,0.08);padding:14px;display:flex;flex-direction:column;gap:11px;align-self:start;position:sticky;top:14px">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="font-size:12.5px;font-weight:500">Recommendation to client</span>
+            <span style="margin-left:auto;font-size:11px;color:#75798c">{{ picksCount }} of 5</span>
+          </div>
+          <sc-if value="{{ hasPicks }}" hint-placeholder-val="{{ true }}">
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <sc-for list="{{ picks }}" as="pk" hint-placeholder-count="3">
+                <div style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:8px;background:#232532;box-shadow:0 0 0 1px rgba(233,233,237,0.07)">
+                  <span style="font-size:13px;color:#b5abfc;font-variant-numeric:tabular-nums;width:14px">{{ pk.rank }}</span>
+                  <div style="min-width:0;flex:1">
+                    <div style="font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ pk.name }}</div>
+                    <div style="font-size:10.5px;color:#75798c">Fit {{ pk.fit }} · exam {{ pk.exam }} · video {{ pk.video }}</div>
+                  </div>
+                  <button onClick="{{ pk.up }}" style="font:inherit;font-size:11px;cursor:pointer;width:22px;height:22px;border-radius:5px;border:1px solid rgba(233,233,237,0.16);background:transparent;color:#9397ab">↑</button>
+                  <button onClick="{{ pk.down }}" style="font:inherit;font-size:11px;cursor:pointer;width:22px;height:22px;border-radius:5px;border:1px solid rgba(233,233,237,0.16);background:transparent;color:#9397ab">↓</button>
+                  <button onClick="{{ pk.remove }}" style="font:inherit;font-size:11px;cursor:pointer;width:22px;height:22px;border-radius:5px;border:1px solid rgba(233,233,237,0.16);background:transparent;color:#9397ab">✕</button>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+          <sc-if value="{{ noPicks }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:18px 12px;text-align:center;border:1px dashed rgba(233,233,237,0.16);border-radius:8px;font-size:11.5px;color:#75798c">Add candidates from the pool. Ranking is what the client reads first.</div>
+          </sc-if>
+
+          <div class="field">
+            <label>Why these, in your words</label>
+            <textarea class="input" onChange="{{ setNote }}" value="{{ note }}" placeholder="Three engineers who all cleared the concurrency case. Ranked on debugging behaviour in the recording, not just score." style="font-size:12.5px;min-height:76px"></textarea>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:5px;font-size:11.5px;color:#9397ab">
+            <div style="display:flex;gap:8px"><span style="color:#595d6c;width:96px">Client sees</span><span>Ranking · recordings · résumés · your note</span></div>
+            <div style="display:flex;gap:8px"><span style="color:#595d6c;width:96px">Hidden</span><span>Talent score · other applicants · internal notes</span></div>
+          </div>
+          <button class="btn btn-primary btn-block" onClick="{{ sendShortlist }}" style="font-size:13px">{{ sendLabel }}</button>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ══ PROBLEM BANK ══ -->
+    <sc-if value="{{ isProblems }}" hint-placeholder-val="{{ false }}">
+      <div style="padding:18px 26px 14px;border-bottom:1px solid rgba(233,233,237,0.10);display:flex;align-items:flex-end;gap:14px">
+        <div>
+          <div style="font-size:10px;letter-spacing:0.11em;text-transform:uppercase;color:#75798c;margin-bottom:5px">Library</div>
+          <h4 style="margin:0;font-size:21px">Problem bank</h4>
+          <div style="font-size:12.5px;color:#9397ab;margin-top:4px">Your org's problems plus the shared platform seed. Platform problems can be used, cloned, never edited.</div>
+        </div>
+        <div style="margin-left:auto;display:flex;gap:6px">
+          <button class="btn btn-secondary" style="font-size:12.5px">Import JSON batch</button>
+          <button class="btn btn-primary" onClick="{{ newProblem }}" style="font-size:12.5px">＋ New problem</button>
+        </div>
+      </div>
+      <div style="padding:12px 26px 40px;max-width:1240px">
+        <div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:6px">
+          <div class="field" style="width:220px"><label>Title</label><input class="input" placeholder="meeting rooms" style="font-size:12.5px" /></div>
+          <div class="field" style="width:170px"><label>Skill tag</label><input class="input" placeholder="concurrency" style="font-size:12.5px" /></div>
+          <div class="field" style="width:130px"><label>Difficulty</label><select class="input" style="font-size:12.5px"><option>any</option><option>easy</option><option>medium</option><option>hard</option></select></div>
+          <div class="field" style="width:130px"><label>Kind</label><select class="input" style="font-size:12.5px"><option>any</option><option>code</option><option>sql</option><option>frontend</option></select></div>
+          <button class="btn btn-secondary" style="font-size:12.5px">Filter</button>
+        </div>
+        <table class="table">
+          <thead><tr><th>Problem</th><th>Kind</th><th>Difficulty</th><th>Skills</th><th>Used in</th><th>Median score</th><th>Signal</th><th>Owner</th></tr></thead>
+          <tbody>
+            <sc-for list="{{ problems }}" as="p" hint-placeholder-count="7">
+              <tr>
+                <td><div style="font-size:13px">{{ p.title }}</div><div style="font-size:10.5px;color:#75798c">{{ p.cases }} cases · {{ p.time }} min recommended</div></td>
+                <td style="font-size:12px;color:#9397ab">{{ p.kind }}</td>
+                <td><span class="tag" style="background:{{ p.diffBg }};color:{{ p.diffColor }}">{{ p.difficulty }}</span></td>
+                <td style="font-size:11.5px;color:#b2b6ca">{{ p.skills }}</td>
+                <td style="font-variant-numeric:tabular-nums">{{ p.used }}</td>
+                <td style="font-variant-numeric:tabular-nums">{{ p.median }}</td>
+                <td style="font-size:12px;color:{{ p.signalColor }}">{{ p.signal }}</td>
+                <td style="font-size:11.5px;color:#75798c">{{ p.owner }}</td>
+              </tr>
+            </sc-for>
+          </tbody>
+        </table>
+      </div>
+    </sc-if>
+
+    <!-- ══ PROBLEM AUTHORING ══ -->
+    <sc-if value="{{ isProblemNew }}" hint-placeholder-val="{{ false }}">
+      <div style="padding:18px 26px 0;border-bottom:1px solid rgba(233,233,237,0.10)">
+        <div style="display:flex;align-items:center;gap:14px">
+          <div>
+            <div style="font-size:11px;color:#75798c;margin-bottom:5px"><a href="#" onClick="{{ goProblems }}" style="text-decoration:none">Problem bank</a> / New</div>
+            <h4 style="margin:0;font-size:20px">Author a coding problem</h4>
+          </div>
+          <div style="margin-left:auto;display:flex;gap:6px">
+            <button class="btn btn-secondary" onClick="{{ goProblems }}" style="font-size:12.5px">Discard</button>
+            <button class="btn btn-primary" onClick="{{ nextProbStep }}" style="font-size:12.5px">{{ probNextLabel }}</button>
+          </div>
+        </div>
+        <div style="display:flex;gap:18px;margin-top:14px">
+          <sc-for list="{{ probSteps }}" as="s" hint-placeholder-count="4">
+            <div onClick="{{ s.go }}" style="display:flex;align-items:center;gap:7px;padding:0 2px 9px;cursor:pointer;border-bottom:2px solid {{ s.border }}">
+              <span style="width:17px;height:17px;border-radius:50%;display:grid;place-items:center;font-size:10px;background:{{ s.numBg }};color:{{ s.numColor }}">{{ s.num }}</span>
+              <span style="font-size:12.5px;color:{{ s.color }}">{{ s.label }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:18px;padding:16px 26px 40px">
+        <div style="min-width:0;display:flex;flex-direction:column;gap:12px">
+
+          <sc-if value="{{ probStep0 }}" hint-placeholder-val="{{ true }}">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+              <div class="field"><label>Problem name</label><input class="input" onInput="{{ setProbTitle }}" value="{{ probTitle }}" style="font-size:13px" /></div>
+              <div class="field"><label>Recommended time (min)</label><input class="input" value="45" style="font-size:13px" /></div>
+            </div>
+            <div class="field"><label>Statement (Markdown)</label><textarea class="input" style="min-height:190px;font-family:ui-monospace,Menlo,monospace;font-size:12px">A rate limiter guards a payment API. Implement `allow(key, now)` returning whether the request may proceed under a sliding window of `W` seconds and `N` requests per key.
+
+Constraints
+- 1 ≤ N ≤ 10^5, keys are opaque strings
+- calls arrive with non-decreasing `now`
+- memory must not grow with total request count</textarea></div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+              <div class="field"><label>Difficulty</label><select class="input" style="font-size:13px"><option>easy</option><option selected="selected">medium</option><option>hard</option></select></div>
+              <div class="field"><label>Skill tags</label><input class="input" value="concurrency, data structures" style="font-size:13px" /></div>
+              <div class="field"><label>Kind</label><select class="input" style="font-size:13px"><option selected="selected">code</option><option>sql</option><option>frontend</option></select></div>
+            </div>
+            <div class="field"><label>Interviewer guidelines (internal — never shown to candidate or client)</label><textarea class="input" style="min-height:70px;font-size:12.5px">Watch for the eviction step. Strong candidates cap memory before the deadline; weak ones keep a full timestamp list per key.</textarea></div>
+          </sc-if>
+
+          <sc-if value="{{ probStep1 }}" hint-placeholder-val="{{ false }}">
+            <div style="font-size:12.5px;color:#9397ab">Languages a candidate may answer in. Stubs are generated for the popular set; anything else you write by hand.</div>
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:7px">
+              <sc-for list="{{ languages }}" as="l" hint-placeholder-count="12">
+                <div onClick="{{ l.toggle }}" style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;cursor:pointer;background:{{ l.bg }};box-shadow:0 0 0 1px {{ l.ring }}">
+                  <span style="width:13px;height:13px;border-radius:4px;border:1.5px solid {{ l.boxBorder }};background:{{ l.boxBg }};display:grid;place-items:center;font-size:9px;color:#161826">{{ l.check }}</span>
+                  <span style="font-size:12.5px;color:{{ l.color }}">{{ l.label }}</span>
+                  <span style="margin-left:auto;font-size:10px;color:#595d6c">{{ l.note }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ probStep2 }}" hint-placeholder-val="{{ false }}">
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+              <div class="field"><label>Function name</label><input class="input" value="allow" style="font-size:13px" /></div>
+              <div class="field"><label>Return type</label><select class="input" style="font-size:13px"><option>boolean</option><option>int</option><option>string</option></select></div>
+              <div class="field"><label>Parameters</label><input class="input" value="key: string, now: int" style="font-size:13px" /></div>
+            </div>
+            <div style="background:#1c1e2c;border-radius:10px;box-shadow:0 0 0 1px rgba(233,233,237,0.08);overflow:hidden">
+              <div style="padding:9px 12px;border-bottom:1px solid rgba(233,233,237,0.09);display:flex;align-items:center;gap:8px">
+                <span style="font-size:12px;font-weight:500">Generated stub — Python 3</span>
+                <span style="margin-left:auto;font-size:11px;color:#75798c">stubs editable by candidate: on</span>
+              </div>
+              <pre style="margin:0;padding:12px;font-family:ui-monospace,Menlo,monospace;font-size:11.5px;line-height:1.7;color:#cfd3e5">class RateLimiter:
+    def __init__(self, n: int, w: int):
+        # write your code here
+        pass
+
+    def allow(self, key: str, now: int) -> bool:
+        # write your code here
+        pass</pre>
+            </div>
+            <button class="btn btn-secondary" style="font-size:12.5px;align-self:flex-start">Regenerate for 6 selected languages</button>
+          </sc-if>
+
+          <sc-if value="{{ probStep3 }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;align-items:center;gap:9px">
+              <span style="font-size:12.5px;color:#9397ab">Reference solution runs against every case before the problem can be saved.</span>
+              <button class="btn btn-secondary" style="font-size:12px;margin-left:auto">Upload solution</button>
+              <button class="btn btn-primary" onClick="{{ addCase }}" style="font-size:12px">＋ Add case</button>
+            </div>
+            <table class="table">
+              <thead><tr><th>Name</th><th>Class</th><th>Points</th><th>Sample</th><th>Reference run</th><th></th></tr></thead>
+              <tbody>
+                <sc-for list="{{ probCases }}" as="c" hint-placeholder-count="6">
+                  <tr>
+                    <td style="font-size:12.5px">{{ c.name }}</td>
+                    <td style="font-size:12px;color:#9397ab">{{ c.cls }}</td>
+                    <td style="font-variant-numeric:tabular-nums">{{ c.pts }}</td>
+                    <td style="font-size:12px;color:#75798c">{{ c.sample }}</td>
+                    <td style="font-size:12px;color:#b5abfc">{{ c.run }}</td>
+                    <td style="text-align:right"><span style="font-size:11.5px;color:#75798c">edit</span></td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+            <div style="font-size:11.5px;color:#75798c">Total possible {{ probTotalPts }} points · no partial credit within a case</div>
+          </sc-if>
+        </div>
+
+        <div style="background:#232532;border-radius:10px;padding:14px;box-shadow:0 0 0 1px rgba(233,233,237,0.08);display:flex;flex-direction:column;gap:10px;align-self:start;position:sticky;top:14px">
+          <div style="display:flex;align-items:baseline;gap:8px">
+            <span style="font-size:12.5px;font-weight:500">Quality review</span>
+            <span style="margin-left:auto;font-size:20px;color:{{ qualityColor }};font-variant-numeric:tabular-nums">{{ qualityScore }}</span>
+          </div>
+          <sc-for list="{{ quality }}" as="q" hint-placeholder-count="4">
+            <div style="display:flex;gap:8px;align-items:flex-start">
+              <span style="font-size:12px;color:{{ q.color }};flex:none;width:12px">{{ q.icon }}</span>
+              <div>
+                <div style="font-size:11.5px;color:#cfd3e5">{{ q.label }}</div>
+                <div style="font-size:10.5px;color:#75798c">{{ q.note }}</div>
+              </div>
+            </div>
+          </sc-for>
+          <div style="font-size:10.5px;color:#595d6c;border-top:1px solid rgba(233,233,237,0.10);padding-top:8px">A problem below 60 can be saved but not attached to a client assessment.</div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ══ ASSESSMENTS ══ -->
+    <sc-if value="{{ isAssessments }}" hint-placeholder-val="{{ false }}">
+      <div style="padding:18px 26px 14px;border-bottom:1px solid rgba(233,233,237,0.10);display:flex;align-items:flex-end;gap:14px">
+        <div>
+          <div style="font-size:10px;letter-spacing:0.11em;text-transform:uppercase;color:#75798c;margin-bottom:5px">Invites in flight</div>
+          <h4 style="margin:0;font-size:21px">Assessments</h4>
+          <div style="font-size:12.5px;color:#9397ab;margin-top:4px">{{ assessSummary }}</div>
+        </div>
+        <div style="margin-left:auto;display:flex;gap:6px">
+          <button class="btn btn-secondary" style="font-size:12.5px">Export CSV</button>
+          <button class="btn btn-primary" style="font-size:12.5px">＋ Send assessment</button>
+        </div>
+      </div>
+      <div style="padding:12px 26px 40px;max-width:1300px">
+        <table class="table">
+          <thead><tr><th>Candidate</th><th>Job / client</th><th>Problem set</th><th>Status</th><th>Progress</th><th>Integrity</th><th>Expires</th><th></th></tr></thead>
+          <tbody>
+            <sc-for list="{{ invites }}" as="i" hint-placeholder-count="8">
+              <tr>
+                <td><div style="font-size:13px">{{ i.name }}</div><div style="font-size:10.5px;color:#75798c">invited {{ i.invited }}</div></td>
+                <td><div style="font-size:12.5px">{{ i.job }}</div><div style="font-size:10.5px;color:#75798c">{{ i.client }}</div></td>
+                <td style="font-size:11.5px;color:#b2b6ca">{{ i.set }}</td>
+                <td><span class="tag" style="background:{{ i.statusBg }};color:{{ i.statusColor }}">{{ i.status }}</span></td>
+                <td>
+                  <div style="display:flex;align-items:center;gap:7px">
+                    <div style="width:64px;height:3px;border-radius:2px;background:#292b31"><div style="height:3px;border-radius:2px;background:#9184d9;width:{{ i.pct }}%"></div></div>
+                    <span style="font-size:11px;color:#75798c;font-variant-numeric:tabular-nums">{{ i.progress }}</span>
+                  </div>
+                </td>
+                <td style="font-size:11.5px;color:{{ i.flagColor }}">{{ i.flags }}</td>
+                <td style="font-size:11.5px;color:{{ i.expColor }};font-variant-numeric:tabular-nums">{{ i.expires }}</td>
+                <td style="text-align:right"><button class="btn btn-ghost" onClick="{{ i.act }}" style="font-size:12px">{{ i.action }}</button></td>
+              </tr>
+            </sc-for>
+          </tbody>
+        </table>
+      </div>
+    </sc-if>
+
+    <!-- ══ CANDIDATES (talent pool) ══ -->
+    <sc-if value="{{ isPool }}" hint-placeholder-val="{{ false }}">
+      <div style="padding:18px 26px 14px;border-bottom:1px solid rgba(233,233,237,0.10);display:flex;align-items:flex-end;gap:14px">
+        <div>
+          <div style="font-size:10px;letter-spacing:0.11em;text-transform:uppercase;color:#75798c;margin-bottom:5px">Talent pool · 148,220 profiles</div>
+          <h4 style="margin:0;font-size:21px">Candidates</h4>
+          <div style="font-size:12.5px;color:#9397ab;margin-top:4px">Talent score is portable across every job and every client. A placement moves it hard.</div>
+        </div>
+        <input class="input" placeholder="rust, distributed systems, Berlin, talent&gt;80" style="margin-left:auto;max-width:320px;font-size:12.5px" />
+      </div>
+      <div style="padding:12px 26px 40px;max-width:1300px">
+        <table class="table">
+          <thead><tr><th>Candidate</th><th>Now</th><th>Education</th><th>Exp</th><th>Best exam</th><th>Placements</th><th>Talent</th><th>Last touch</th></tr></thead>
+          <tbody>
+            <sc-for list="{{ poolAll }}" as="p" hint-placeholder-count="9">
+              <tr style="cursor:pointer" onClick="{{ p.open }}">
+                <td><div style="font-size:13px">{{ p.name }}</div><div style="font-size:10.5px;color:#75798c">{{ p.loc }}</div></td>
+                <td style="font-size:12px;color:#b2b6ca">{{ p.current }}</td>
+                <td style="font-size:12px;color:#b2b6ca">{{ p.school }}</td>
+                <td style="font-variant-numeric:tabular-nums">{{ p.years }}</td>
+                <td style="font-variant-numeric:tabular-nums;color:#9397ab">{{ p.exam }}</td>
+                <td style="font-size:12px;color:{{ p.placedColor }}">{{ p.placements }}</td>
+                <td><span style="font-size:12.5px;color:#b5abfc;font-variant-numeric:tabular-nums">{{ p.talent }}</span></td>
+                <td style="font-size:11.5px;color:#75798c">{{ p.touch }}</td>
+              </tr>
+            </sc-for>
+          </tbody>
+        </table>
+      </div>
+    </sc-if>
+
+    <!-- ══ INTAKE WIZARD ══ -->
+    <sc-if value="{{ isIntake }}" hint-placeholder-val="{{ false }}">
+      <div style="padding:18px 26px 0;border-bottom:1px solid rgba(233,233,237,0.10)">
+        <div style="display:flex;align-items:center;gap:14px">
+          <div>
+            <div style="font-size:10px;letter-spacing:0.11em;text-transform:uppercase;color:#75798c;margin-bottom:5px">Intake</div>
+            <h4 style="margin:0;font-size:20px">{{ intakeTitle }}</h4>
+          </div>
+          <div style="margin-left:auto;display:flex;gap:6px">
+            <button class="btn btn-secondary" onClick="{{ goQueue }}" style="font-size:12.5px">Save draft</button>
+            <button class="btn btn-primary" onClick="{{ nextIntake }}" style="font-size:12.5px">{{ intakeNextLabel }}</button>
+          </div>
+        </div>
+        <div style="display:flex;gap:18px;margin-top:14px">
+          <sc-for list="{{ intakeSteps }}" as="s" hint-placeholder-count="5">
+            <div onClick="{{ s.go }}" style="display:flex;align-items:center;gap:7px;padding:0 2px 9px;cursor:pointer;border-bottom:2px solid {{ s.border }}">
+              <span style="width:17px;height:17px;border-radius:50%;display:grid;place-items:center;font-size:10px;background:{{ s.numBg }};color:{{ s.numColor }}">{{ s.num }}</span>
+              <span style="font-size:12.5px;color:{{ s.color }}">{{ s.label }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+
+      <div style="padding:18px 26px 40px;max-width:900px;display:flex;flex-direction:column;gap:14px">
+        <sc-if value="{{ intake0 }}" hint-placeholder-val="{{ true }}">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div class="field"><label>Company</label><input class="input" placeholder="Northwind Systems" style="font-size:13px" /></div>
+            <div class="field"><label>Industry</label><input class="input" placeholder="Payments infrastructure" style="font-size:13px" /></div>
+            <div class="field"><label>Hiring contact</label><input class="input" placeholder="Priya Raman · VP Engineering" style="font-size:13px" /></div>
+            <div class="field"><label>Contact email</label><input class="input" placeholder="priya@northwind.io" style="font-size:13px" /></div>
+            <div class="field"><label>Fee model</label><select class="input" style="font-size:13px"><option>20% of first-year base</option><option>Flat 28k per placement</option><option>Retained — 3 tranches</option></select></div>
+            <div class="field"><label>Shortlist SLA</label><select class="input" style="font-size:13px"><option>5 business days</option><option>3 business days</option><option>10 business days</option></select></div>
+          </div>
+          <div class="field"><label>What the client actually said (verbatim — feeds the brief)</label><textarea class="input" style="min-height:88px;font-size:12.5px">"We lose people at the systems-design round. Send us fewer, but only ones who can reason about backpressure. We don't care where they studied."</textarea></div>
+        </sc-if>
+
+        <sc-if value="{{ intake1 }}" hint-placeholder-val="{{ false }}">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div class="field"><label>Job title</label><input class="input" placeholder="Staff Backend Engineer" style="font-size:13px" /></div>
+            <div class="field"><label>Seniority</label><select class="input" style="font-size:13px"><option>senior</option><option selected="selected">staff</option><option>mid</option><option>principal</option></select></div>
+            <div class="field"><label>Location / mode</label><input class="input" placeholder="NYC — hybrid 2 days" style="font-size:13px" /></div>
+            <div class="field"><label>Base range</label><input class="input" placeholder="$210k – $255k" style="font-size:13px" /></div>
+            <div class="field"><label>Headcount</label><input class="input" value="2" style="font-size:13px" /></div>
+            <div class="field"><label>Pipeline template</label><select class="input" style="font-size:13px"><option>Standard 9-stage (default)</option><option>Lean 5-stage</option><option>Clone from another job</option></select></div>
+          </div>
+          <div style="background:#1c1e2c;border-radius:10px;padding:12px 14px;box-shadow:0 0 0 1px rgba(233,233,237,0.08)">
+            <div style="font-size:12px;font-weight:500;margin-bottom:8px">Pipeline this job will run</div>
+            <div style="display:flex;flex-wrap:wrap;gap:6px">
+              <sc-for list="{{ stageChips }}" as="s" hint-placeholder-count="10">
+                <span class="tag" style="background:{{ s.bg }};color:{{ s.color }}">{{ s.label }}</span>
+              </sc-for>
+            </div>
+            <div style="font-size:11px;color:#75798c;margin-top:8px">No stage advances itself. Each move waits for your approval — that's the contract you sold.</div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ intake2 }}" hint-placeholder-val="{{ false }}">
+          <div style="font-size:12.5px;color:#9397ab">Pick the skills the assessment has to prove. Ordering matters — the first two drive the Fit weighting.</div>
+          <div style="display:flex;flex-wrap:wrap;gap:7px">
+            <sc-for list="{{ skills }}" as="s" hint-placeholder-count="12">
+              <button onClick="{{ s.toggle }}" style="font:inherit;font-size:12.5px;cursor:pointer;padding:6px 12px;border-radius:8px;border:1px solid {{ s.border }};background:{{ s.bg }};color:{{ s.color }}" style-hover="border-color:#9184d9">{{ s.label }}</button>
+            </sc-for>
+          </div>
+          <div style="background:#1c1e2c;border-radius:10px;padding:12px 14px;box-shadow:0 0 0 1px rgba(233,233,237,0.08);font-size:12px;color:#b2b6ca">
+            Fit weighting derived from your picks: <span style="color:#b5abfc">{{ fitWeighting }}</span>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ intake3 }}" hint-placeholder-val="{{ false }}">
+          <div style="font-size:12.5px;color:#9397ab">How should this job get its coding question?</div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <sc-for list="{{ questionOptions }}" as="o" hint-placeholder-count="3">
+              <div onClick="{{ o.go }}" style="padding:13px 15px;border-radius:10px;cursor:pointer;background:{{ o.bg }};box-shadow:0 0 0 1px {{ o.ring }};display:flex;gap:12px;align-items:flex-start">
+                <span style="width:15px;height:15px;flex:none;margin-top:2px;border-radius:50%;border:1.5px solid {{ o.dotBorder }};box-shadow:{{ o.dotInner }}"></span>
+                <div style="flex:1">
+                  <div style="font-size:13.5px;font-weight:500;color:{{ o.titleColor }}">{{ o.title }}</div>
+                  <div style="font-size:12px;color:#9397ab;margin-top:2px">{{ o.body }}</div>
+                  <div style="font-size:11px;color:#75798c;margin-top:5px">{{ o.meta }}</div>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+          <sc-if value="{{ showDefaultSet }}" hint-placeholder-val="{{ true }}">
+            <div style="background:#1c1e2c;border-radius:10px;box-shadow:0 0 0 1px rgba(233,233,237,0.08);overflow:hidden">
+              <div style="padding:10px 13px;border-bottom:1px solid rgba(233,233,237,0.09);display:flex;align-items:center;gap:9px">
+                <span style="font-size:12px;font-weight:500">Recommended set — 68 min</span>
+                <span style="font-size:11px;color:#75798c">matched to your skill picks, 412 prior sittings, median 45/95</span>
+                <button class="btn btn-ghost" onClick="{{ newProblem }}" style="font-size:11.5px;margin-left:auto">Swap a problem</button>
+              </div>
+              <table class="table" style="font-size:12.5px">
+                <thead><tr><th>Problem</th><th>Skill</th><th>Difficulty</th><th>Points</th><th>Signal</th></tr></thead>
+                <tbody>
+                  <sc-for list="{{ defaultSet }}" as="d" hint-placeholder-count="3">
+                    <tr>
+                      <td>{{ d.title }}</td>
+                      <td style="color:#b2b6ca">{{ d.skill }}</td>
+                      <td style="color:#9397ab">{{ d.difficulty }}</td>
+                      <td style="font-variant-numeric:tabular-nums">{{ d.pts }}</td>
+                      <td style="color:#b5abfc">{{ d.signal }}</td>
+                    </tr>
+                  </sc-for>
+                </tbody>
+              </table>
+            </div>
+          </sc-if>
+        </sc-if>
+
+        <sc-if value="{{ intake4 }}" hint-placeholder-val="{{ false }}">
+          <div style="background:#1c1e2c;border-radius:10px;box-shadow:0 0 0 1px rgba(233,233,237,0.08);padding:16px;display:flex;flex-direction:column;gap:10px">
+            <div style="font-size:13px;font-weight:500">Ready to open</div>
+            <sc-for list="{{ intakeReview }}" as="r" hint-placeholder-count="6">
+              <div style="display:flex;gap:12px;font-size:12.5px;padding-bottom:7px;border-bottom:1px solid rgba(233,233,237,0.07)">
+                <span style="color:#75798c;width:150px;flex:none">{{ r.k }}</span>
+                <span style="color:#e9e9ed">{{ r.v }}</span>
+              </div>
+            </sc-for>
+            <div style="font-size:11.5px;color:#75798c">Opening the job publishes it to the candidate app for one-click apply and starts scoring applicants against this Fit model. Nothing is sent to the client until you approve a shortlist.</div>
+            <button class="btn btn-primary" onClick="{{ finishIntake }}" style="font-size:13px;align-self:flex-start">Open job & start sourcing</button>
+          </div>
+        </sc-if>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ toast }}" hint-placeholder-val="{{ false }}">
+      <div style="position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#232532;box-shadow:0 0 0 1px rgba(145,132,217,0.5),0 16px 40px rgba(0,0,0,0.6);border-radius:9px;padding:10px 16px;font-size:12.5px;color:#e9e9ed;z-index:40">{{ toast }}</div>
+    </sc-if>
+
+  </main>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;boardColumnWidth&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:216,&quot;min&quot;:180,&quot;max&quot;:320,&quot;step&quot;:4,&quot;unit&quot;:&quot;px&quot;,&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;Pipeline board&quot;},&quot;showRiskFlags&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Pipeline board&quot;},&quot;defaultScreen&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;queue&quot;,&quot;clients&quot;,&quot;client&quot;,&quot;candidate&quot;,&quot;shortlist&quot;,&quot;problems&quot;,&quot;assessments&quot;,&quot;pool&quot;,&quot;intake&quot;],&quot;default&quot;:&quot;queue&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Prototype&quot;}}">
+const STAGES = ["Applied","Screened","Assessment sent","Assessment scored","Shortlisted","Client review","Interview","Offer","Hired","Rejected"];
+const DOTS = ["#595d6c","#75798c","#7972a9","#796cbf","#9184d9","#b5abfc","#a7a1db","#d2cefd","#8fd0a8","#3f424d"];
+const HIDDEN = [1841,612,388,204,46,17,6,3,29,2210];
+
+class Component extends DCLogic {
+  state = {
+    screen: "queue", tab: "board", cand: "c1", toast: "",
+    intakeStep: 0, probStep: 0,
+    picks: ["c1","c3","c5"], note: "", sent: false,
+    speed: 1, t: 412, playing: false,
+    qFilter: "All",
+    skills: ["Concurrency","Distributed systems","API design"],
+    langs: ["Python","Go","Java","TypeScript","Rust","C++"],
+    qOption: "default",
+    cands: [
+      {id:"c1",name:"Amara Osei",stage:"Assessment scored",job:"Staff Backend Engineer",jobShort:"Staff Backend",fit:94,talent:88,exam:"95/95",school:"Georgia Tech",current:"Sr. Engineer, Stripe",years:9,loc:"Brooklyn, NY",placements:"1 placed",video:"4.5",flag:"Solved concurrency case in 11 min"},
+      {id:"c2",name:"Dmitri Vasiliev",stage:"Assessment sent",job:"Staff Backend Engineer",jobShort:"Staff Backend",fit:71,talent:64,exam:"—",school:"ITMO",current:"Engineer, Datadog",years:6,loc:"Remote — Lisbon",placements:"—",video:"—",flag:""},
+      {id:"c3",name:"Priya Nair",stage:"Assessment scored",job:"Staff Backend Engineer",jobShort:"Staff Backend",fit:91,talent:82,exam:"70/95",school:"IIT Bombay",current:"Tech Lead, Plaid",years:8,loc:"Jersey City, NJ",placements:"—",video:"4.0",flag:"Rewrote eviction after first fail"},
+      {id:"c4",name:"Marcus Bell",stage:"Screened",job:"Platform Engineer",jobShort:"Platform",fit:66,talent:59,exam:"—",school:"Rutgers",current:"SRE, Peloton",years:5,loc:"Newark, NJ",placements:"—",video:"—",flag:""},
+      {id:"c5",name:"Yuki Tanaka",stage:"Shortlisted",job:"Staff Backend Engineer",jobShort:"Staff Backend",fit:89,talent:91,exam:"70/95",school:"U Tokyo",current:"Staff Eng, Figma",years:11,loc:"NYC",placements:"2 placed",video:"4.5",flag:"Placed by us in 2024 — client renewed"},
+      {id:"c6",name:"Sofia Marquez",stage:"Client review",job:"Payments Engineer",jobShort:"Payments",fit:85,talent:77,exam:"50/95",school:"UNAM",current:"Engineer, Nubank",years:7,loc:"Remote — CDMX",placements:"—",video:"3.5",flag:""},
+      {id:"c7",name:"Ethan Cole",stage:"Applied",job:"Platform Engineer",jobShort:"Platform",fit:58,talent:51,exam:"—",school:"Bootcamp — Hack Reactor",current:"Engineer, Series-A",years:3,loc:"Austin, TX",placements:"—",video:"—",flag:""},
+      {id:"c8",name:"Leila Haddad",stage:"Interview",job:"Payments Engineer",jobShort:"Payments",fit:87,talent:80,exam:"70/95",school:"École Polytechnique",current:"Engineer, Adyen",years:8,loc:"NYC",placements:"—",video:"4.0",flag:"Client asked for a second slot"},
+      {id:"c9",name:"Tomás Ferreira",stage:"Assessment scored",job:"Payments Engineer",jobShort:"Payments",fit:78,talent:70,exam:"35/95",school:"USP",current:"Engineer, Wise",years:6,loc:"Remote — SP",placements:"—",video:"3.0",flag:""},
+      {id:"c10",name:"Hannah Wu",stage:"Offer",job:"Staff Backend Engineer",jobShort:"Staff Backend",fit:92,talent:86,exam:"95/95",school:"Waterloo",current:"Staff Eng, Ramp",years:10,loc:"NYC",placements:"1 placed",video:"5.0",flag:"Verbal accepted — paperwork out"},
+      {id:"c11",name:"Ravi Shankar",stage:"Applied",job:"Staff Backend Engineer",jobShort:"Staff Backend",fit:74,talent:68,exam:"—",school:"BITS Pilani",current:"Engineer, Razorpay",years:7,loc:"Remote — Bengaluru",placements:"—",video:"—",flag:""},
+      {id:"c12",name:"Nora Lindqvist",stage:"Screened",job:"Payments Engineer",jobShort:"Payments",fit:81,talent:73,exam:"—",school:"KTH",current:"Engineer, Klarna",years:6,loc:"NYC",placements:"—",video:"—",flag:""},
+      {id:"c13",name:"Jordan Pike",stage:"Hired",job:"Platform Engineer",jobShort:"Platform",fit:90,talent:95,exam:"95/95",school:"Michigan",current:"Placed — Northwind",years:12,loc:"NYC",placements:"3 placed",video:"5.0",flag:"Talent score +14 on placement"},
+      {id:"c14",name:"Chen Li",stage:"Assessment sent",job:"Payments Engineer",jobShort:"Payments",fit:76,talent:71,exam:"—",school:"Tsinghua",current:"Engineer, Airwallex",years:5,loc:"Remote — SG",placements:"—",video:"",flag:""}
+    ],
+    queue: [
+      {id:"q1",kind:"Review video",who:"Amara Osei",detail:"95/95 · recording 30m 47s · unreviewed",job:"Staff Backend Engineer",client:"Northwind Systems",scoreLabel:"Fit 94",scoreSub:"Talent 88",sla:"3h 10m left",breach:true,primaryLabel:"Open player",secondaryLabel:"Snooze",go:"cand:c1"},
+      {id:"q2",kind:"Send shortlist",who:"3 candidates ready",detail:"Osei · Nair · Tanaka — all cleared concurrency",job:"Staff Backend Engineer",client:"Northwind Systems",scoreLabel:"Avg 91",scoreSub:"exam avg 78",sla:"Due today",breach:true,primaryLabel:"Build & send",secondaryLabel:"Preview",go:"shortlist"},
+      {id:"q3",kind:"Chase",who:"Dmitri Vasiliev",detail:"Invited 4d ago · never opened the link",job:"Staff Backend Engineer",client:"Northwind Systems",scoreLabel:"Fit 71",scoreSub:"Talent 64",sla:"Expires in 2d",breach:false,primaryLabel:"Send nudge",secondaryLabel:"Withdraw",go:"assessments"},
+      {id:"q4",kind:"Approve move",who:"Priya Nair",detail:"70/95 · suggested: advance to Shortlisted",job:"Staff Backend Engineer",client:"Northwind Systems",scoreLabel:"Fit 91",scoreSub:"Talent 82",sla:"1d 4h",breach:false,primaryLabel:"Approve",secondaryLabel:"Review",go:"cand:c3"},
+      {id:"q5",kind:"Client waiting",who:"Leila Haddad",detail:"Client feedback overdue since Tue",job:"Payments Engineer",client:"Halcyon Bank",scoreLabel:"Fit 87",scoreSub:"in interview",sla:"Overdue 2d",breach:true,primaryLabel:"Ping client",secondaryLabel:"Log call",go:"cand:c8"},
+      {id:"q6",kind:"Intake",who:"Northwind Systems",detail:"2 new reqs verbally agreed — no assessment attached yet",job:"Data Platform Engineer",client:"Northwind Systems",scoreLabel:"—",scoreSub:"new req",sla:"2d",breach:false,primaryLabel:"Start intake",secondaryLabel:"Later",go:"intake"},
+      {id:"q7",kind:"Review video",who:"Tomás Ferreira",detail:"35/95 · 2 paste events flagged at 18:40",job:"Payments Engineer",client:"Halcyon Bank",scoreLabel:"Fit 78",scoreSub:"Talent 70",sla:"2d 6h",breach:false,primaryLabel:"Open player",secondaryLabel:"Snooze",go:"cand:c9"}
+    ]
+  };
+
+  componentDidMount() {
+    this._iv = setInterval(() => {
+      if (this.state.playing) {
+        this.setState(s => ({ t: Math.min(1847, s.t + s.speed) }));
+      }
+    }, 250);
+  }
+  componentWillUnmount() { clearInterval(this._iv); }
+
+  flash(msg) {
+    this.setState({ toast: msg });
+    clearTimeout(this._tt);
+    this._tt = setTimeout(() => this.setState({ toast: "" }), 2600);
+  }
+  nav(screen, extra) { this.setState(Object.assign({ screen: screen }, extra || {})); }
+  initials(n) { return n.split(" ").map(w => w[0]).join("").slice(0, 2); }
+  fmt(sec) {
+    const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
+    return m + ":" + String(s).padStart(2, "0");
+  }
+  move(id, dir) {
+    this.setState(s => ({
+      cands: s.cands.map(c => {
+        if (c.id !== id) return c;
+        const i = STAGES.indexOf(c.stage);
+        return Object.assign({}, c, { stage: dir === "reject" ? "Rejected" : STAGES[Math.min(7, i + 1)] });
+      })
+    }));
+    const c = this.state.cands.find(x => x.id === id);
+    this.flash(dir === "reject" ? c.name + " rejected — candidate notified, Talent score unaffected" : c.name + " advanced. You approved this move.");
+  }
+
+  componentDidUpdate(prev) {
+    if (prev.defaultScreen !== this.props.defaultScreen && this.props.defaultScreen) {
+      this.setState({ screen: this.props.defaultScreen });
+    }
+  }
+
+  renderVals() {
+    const S = this.state, P = this.props;
+    const cands = S.cands;
+    const client = { name: "Northwind Systems", mark: "NW", tier: "Tier 1 · retained", jobs: 9, pipeline: 412, sla: "5 business days" };
+    const cand = cands.find(c => c.id === S.cand) || cands[0];
+    const navCounts = { queue: 7, clients: 214, pool: "148k", problems: 96, assessments: 38 };
+    const items = [["queue","Work queue"],["clients","Clients"],["pool","Candidates"],["problems","Problem bank"],["assessments","Assessments"]];
+    const active = S.screen === "client" || S.screen === "shortlist" ? "clients" : (S.screen === "candidate" ? "pool" : (S.screen === "problem_new" ? "problems" : S.screen));
+
+    const nav = items.map(([k, label]) => ({
+      label, count: navCounts[k],
+      color: active === k ? "#e9e9ed" : "#9397ab",
+      bg: active === k ? "rgba(145,132,217,0.14)" : "transparent",
+      bar: active === k ? "#9184d9" : "transparent",
+      go: () => this.nav(k)
+    }));
+
+    const kindStyle = k => ({
+      "Review video": ["#423a6a", "#d2cefd"], "Send shortlist": ["#2b2741", "#b5abfc"],
+      "Chase": ["#292b31", "#cfd3e5"], "Approve move": ["#3f424d", "#e4e7f5"],
+      "Client waiting": ["#4c3a3a", "#f0cfcf"], "Intake": ["#292b31", "#b2b6ca"]
+    }[k] || ["#292b31", "#cfd3e5"]);
+
+    const filters = ["All", "Video review", "Client waiting", "Expiring"].map(f => ({
+      label: f, go: () => this.setState({ qFilter: f }),
+      border: S.qFilter === f ? "#9184d9" : "rgba(233,233,237,0.16)",
+      bg: S.qFilter === f ? "rgba(145,132,217,0.14)" : "transparent",
+      color: S.qFilter === f ? "#b5abfc" : "#9397ab"
+    }));
+
+    const queueRows = S.queue.map(q => {
+      const [kb, kc] = kindStyle(q.kind);
+      return {
+        kind: q.kind, kindBg: kb, kindColor: kc, who: q.who, detail: q.detail, job: q.job, client: q.client,
+        scoreLabel: q.scoreLabel, scoreSub: q.scoreSub, scoreColor: q.scoreLabel.indexOf("9") === 4 ? "#b5abfc" : "#cfd3e5",
+        sla: q.sla, slaColor: q.breach ? "#e8a3a3" : "#75798c", opacity: 1,
+        primaryLabel: q.primaryLabel, secondaryLabel: q.secondaryLabel,
+        primary: () => {
+          if (q.go.startsWith("cand:")) this.nav("candidate", { cand: q.go.slice(5), t: 412, playing: false });
+          else if (q.go === "shortlist") this.nav("shortlist");
+          else if (q.go === "intake") this.nav("intake", { intakeStep: 0 });
+          else this.nav(q.go);
+        },
+        snooze: () => this.flash(q.kind + " · " + q.who + " — snoozed 4h, queue re-ranked")
+      };
+    });
+
+    const clientRows = [
+      ["Northwind Systems","Payments infrastructure","Lucas R.",9,412,7,3,"6.2 d",false],
+      ["Halcyon Bank","Banking","Lucas R.",14,880,12,5,"8.9 d",true],
+      ["Vector Robotics","Robotics","Dana K.",4,151,2,1,"5.1 d",false],
+      ["Corvid Health","Health tech","Lucas R.",6,233,9,2,"11.4 d",true],
+      ["Ostara Labs","AI infrastructure","Sam P.",11,604,4,6,"4.8 d",false],
+      ["Ferrous Grid","Energy","Dana K.",3,98,1,0,"7.7 d",false]
+    ].map(r => ({
+      name: r[0], industry: r[1], owner: r[2], jobs: r[3], pipeline: r[4], waiting: r[6], placed: r[7], speed: r[8],
+      mark: r[0].split(" ").map(w => w[0]).join(""),
+      markBg: r[0] === "Northwind Systems" ? "#423a6a" : "#292b31",
+      markColor: r[0] === "Northwind Systems" ? "#d2cefd" : "#cfd3e5",
+      waitBg: r[6] > 8 ? "#4c3a3a" : "#292b31", waitColor: r[6] > 8 ? "#f0cfcf" : "#cfd3e5",
+      speedColor: r[8] === true ? "#e8a3a3" : (r[8] === "11.4 d" ? "#e8a3a3" : "#cfd3e5"),
+      go: () => this.nav("client", { tab: "board" })
+    }));
+
+    const jobRows = [
+      ["Staff Backend Engineer","staff","Rate limiter + systems design","6 Aug","NYC hybrid",1841,214,3,"On track","ok"],
+      ["Payments Engineer","senior","Ledger reconciliation set","28 Jul","NYC hybrid",1204,180,2,"Client sitting 6d","warn"],
+      ["Platform Engineer","senior","Default: platform seed","19 Aug","Remote US",733,52,0,"No shortlist yet","warn"],
+      ["Data Platform Engineer","staff","Not attached","29 Aug","NYC",41,0,0,"Needs intake","bad"],
+      ["Security Engineer","senior","Custom: threat model review","2 Aug","NYC",512,96,1,"On track","ok"]
+    ].map(j => ({
+      title: j[0], seniority: j[1], assessment: j[2], opened: j[3], location: j[4],
+      applicants: j[5].toLocaleString(), scored: j[6], shortlisted: j[7], risk: j[8],
+      riskColor: j[9] === "ok" ? "#9dd3b0" : (j[9] === "warn" ? "#e0c98f" : "#e8a3a3")
+    }));
+
+    const columns = STAGES.slice(0, 9).map((label, i) => {
+      const cs = cands.filter(c => c.stage === label);
+      return {
+        label, dot: DOTS[i], total: (HIDDEN[i] + cs.length).toLocaleString(),
+        hasMore: HIDDEN[i] > 0, moreLabel: "+" + HIDDEN[i].toLocaleString() + " more",
+        cards: cs.map(c => ({
+          name: c.name, initials: this.initials(c.name), jobShort: c.jobShort, fit: c.fit, talent: c.talent,
+          fitBg: c.fit >= 85 ? "#423a6a" : "#292b31", fitColor: c.fit >= 85 ? "#d2cefd" : "#b2b6ca",
+          showFlag: !!c.flag && (P.showRiskFlags ?? true), flag: c.flag,
+          open: () => this.nav("candidate", { cand: c.id, t: 412, playing: false }),
+          advance: e => { if (e) e.stopPropagation(); this.move(c.id, "advance"); },
+          reject: e => { if (e) e.stopPropagation(); this.move(c.id, "reject"); }
+        }))
+      };
+    });
+
+    const TIERS = {"Georgia Tech":78,"ITMO":72,"IIT Bombay":86,"Rutgers":58,"U Tokyo":88,"UNAM":62,"Bootcamp — Hack Reactor":34,"École Polytechnique":90,"USP":64,"Waterloo":92,"BITS Pilani":74,"KTH":76,"Michigan":80,"Tsinghua":90};
+    const hasA = cand.exam !== "—" && cand.exam !== "";
+    const examPts = hasA ? parseInt(cand.exam, 10) : 0;
+    const examPct = hasA ? Math.round((examPts / 95) * 100) : 0;
+    const hasVideo = hasA && cand.video !== "—" && cand.video !== "";
+    const stageIdx = STAGES.indexOf(cand.stage);
+    const placedCount = cand.placements === "—" ? 0 : parseInt(cand.placements, 10);
+    const tier = TIERS[cand.school] || 60;
+    const pedigree = Math.min(100, cand.years * 7 + 30);
+    const clientFb = stageIdx >= 5 && stageIdx <= 8 ? 80 : 0;
+    const speedScore = 55 + (cand.talent % 45);
+    const jobPool = cands.filter(c => c.job === cand.job);
+    const rank = jobPool.filter(c => c.fit > cand.fit).length + 1;
+
+    const factorDefs = [
+      ["Assessment score", 30, examPct, hasA ? cand.exam + " — " + (examPct >= 90 ? "cleared every case incl. adversarial churn" : (examPct >= 70 ? "stopped at the hard tier — above the 45/95 median" : "stopped in the medium tier")) : "Not sat yet — Fit is provisional"],
+      ["Skill match to job", 20, Math.min(100, cand.fit + 3), S.skills.slice(0, 2).join(", ") + (cand.fit >= 85 ? ": both proven" : ": partial evidence")],
+      ["Years + company pedigree", 14, pedigree, cand.years + "y · " + cand.current],
+      ["Video review rating", 12, hasVideo ? Math.round((parseFloat(cand.video) / 5) * 100) : 0, hasVideo ? cand.video + "/5 by you — " + (parseFloat(cand.video) >= 4.5 ? "debugged without hints" : "reached the answer, needed a reread") : "No recording to review"],
+      ["Was hired previously", 10, placedCount ? Math.min(95, 60 + placedCount * 12) : 0, placedCount ? cand.placements + " by us — the single strongest signal we hold" : "Never placed by us"],
+      ["School / education tier", 6, tier, cand.school + " — low weight by client request"],
+      ["Client interview feedback", 5, clientFb, clientFb ? "Client rated 4/5 on the systems round" : "No client round yet"],
+      ["Response speed", 3, speedScore, speedScore >= 85 ? "Replies inside 3h, took exam same day" : "Replies within a day"]
+    ];
+    const factors = factorDefs.map(f => ({
+      label: f[0], weight: f[1], value: f[2] === 0 ? "—" : f[2], pct: f[2], note: f[3],
+      color: f[2] === 0 ? "#595d6c" : (f[2] >= 88 ? "#b5abfc" : (f[2] >= 70 ? "#9690c9" : "#75798c"))
+    }));
+
+    const keyframeDefs = [
+      [96, "First compile", "#e0c98f"], [214, "Reads constraints again", "#75798c"], [412, "Rewrites eviction", "#b5abfc"],
+      [688, "First sample passes", "#9dd3b0"], [954, "Adds per-key deque", "#75798c"], [1188, "All samples pass", "#9dd3b0"],
+      [1402, "Big-input timeout", "#e8a3a3"], [1600, "Final submit", "#b5abfc"]
+    ];
+    const keyframes = keyframeDefs.map(k => ({
+      label: k[1], pct: (k[0] / 1847) * 100, color: k[2], h: 10, top: 8
+    }));
+    const jumps = [["First compile", 96], ["First sample pass", 688], ["All samples pass", 1188], ["Timeout", 1402]].map(j => ({
+      label: j[0], at: this.fmt(j[1]), go: () => this.setState({ t: j[1], playing: true })
+    }));
+    const speeds = [1, 1.5, 2, 4].map(v => ({
+      label: v + "×", go: () => this.setState({ speed: v }),
+      border: S.speed === v ? "#9184d9" : "rgba(233,233,237,0.16)",
+      color: S.speed === v ? "#b5abfc" : "#9397ab"
+    }));
+    const phase = S.t < 96 ? "reading" : (S.t < 688 ? "first attempt" : (S.t < 1188 ? "fixing eviction" : (S.t < 1402 ? "scaling" : "submitting")));
+
+    // Cases in the order the candidate sees them; the pass set is chosen so its
+    // points sum EXACTLY to the headline score (all values are multiples of 5).
+    // Cases run in ascending difficulty. A candidate climbs the ladder until a
+    // case defeats them, so pass points sum exactly to the headline score and the
+    // profile stays monotone: nobody fails a 5-pointer and clears the 25-pointer.
+    const CASES = [
+      ["sample_1","sample",0,"12","wrong answer"],["sample_2","sample",0,"14","wrong answer"],
+      ["single_key_burst","easy",5,"31","wrong answer"],["window_boundary","easy",5,"28","wrong answer"],
+      ["clock_jump","easy",5,"44","wrong answer"],["many_keys","medium",10,"148","wrong answer"],
+      ["eviction_pressure","medium",10,"190","timeout"],["memory_cap","medium",15,"260","timeout"],
+      ["10^5_keys","hard",20,"812","timeout"],["adversarial_churn","hard",25,"1140","timeout"]
+    ];
+    let climbed = 0, stopped = false;
+    const tests = CASES.map(t => {
+      if (t[2] === 0) {
+        return { name: t[0], cls: t[1], pts: 0, ms: hasA ? t[3] : "—",
+          result: hasA ? "pass" : "not run", color: hasA ? "#9dd3b0" : "#595d6c" };
+      }
+      const passed = hasA && !stopped && climbed + t[2] <= examPts;
+      if (passed) climbed += t[2]; else stopped = true;
+      return {
+        name: t[0], cls: t[1], pts: passed ? t[2] : 0,
+        ms: passed ? t[3] : (hasA ? (t[4] === "timeout" ? "2000" : t[3]) : "—"),
+        result: passed ? "pass" : (hasA ? t[4] : "not run"),
+        color: passed ? "#9dd3b0" : (hasA ? "#e8a3a3" : "#595d6c")
+      };
+    });
+
+    const curStart = 2026 - Math.max(1, Math.round(cand.years / 2));
+    const resumeRows = [[curStart + " — now", cand.current]];
+    if (cand.years > 3) resumeRows.push([(curStart - 3) + " — " + curStart, "Engineer — earlier role, same stack"]);
+    if (placedCount) resumeRows.push(["placement", "Placed by us · " + cand.placements + " — still in seat"]);
+    resumeRows.push([(2026 - cand.years - 4) + " — " + (2026 - cand.years), cand.school + " — computer science"]);
+    const resume = resumeRows.map(r => ({ when: r[0], what: r[1] }));
+
+    const scored = cands.filter(c => c.exam !== "—" && c.exam !== "" && c.job === "Staff Backend Engineer");
+    const pool = cands.filter(c => c.job === "Staff Backend Engineer" && c.exam !== "—").sort((a, b) => b.fit - a.fit).map(c => {
+      const picked = S.picks.indexOf(c.id) >= 0;
+      return {
+        name: c.name, initials: this.initials(c.name), line: c.current + " · " + c.years + "y · " + c.school,
+        fit: c.fit, talent: c.talent, exam: c.exam,
+        btnLabel: picked ? "✓ In list" : "Add",
+        btnBorder: picked ? "#9184d9" : "rgba(233,233,237,0.16)",
+        btnColor: picked ? "#b5abfc" : "#cfd3e5",
+        toggle: () => this.setState(s => ({ picks: picked ? s.picks.filter(p => p !== c.id) : s.picks.concat([c.id]) }))
+      };
+    });
+    const picks = S.picks.map((id, i) => {
+      const c = cands.find(x => x.id === id);
+      return {
+        rank: i + 1, name: c.name, fit: c.fit, exam: c.exam, video: c.video,
+        up: () => this.setState(s => { const a = s.picks.slice(); if (i > 0) { const t = a[i - 1]; a[i - 1] = a[i]; a[i] = t; } return { picks: a }; }),
+        down: () => this.setState(s => { const a = s.picks.slice(); if (i < a.length - 1) { const t = a[i + 1]; a[i + 1] = a[i]; a[i] = t; } return { picks: a }; }),
+        remove: () => this.setState(s => ({ picks: s.picks.filter(p => p !== id) }))
+      };
+    });
+
+    const problems = [
+      ["Sliding-window rate limiter","code","medium","concurrency, data structures",214,"45/95","Strong","Your org",11,45],
+      ["Ledger reconciliation","sql","hard","sql, correctness",96,"48/80","Strong","Your org",14,50],
+      ["Meeting rooms III","code","medium","heaps, intervals",1841,"70/95","Weak — over-farmed","Platform seed",9,35],
+      ["Backpressure queue","code","hard","concurrency, systems",41,"39/90","Very strong","Your org",13,60],
+      ["Flaky retry harness","code","medium","testing, reliability",128,"66/95","Good","Your org",10,40],
+      ["Idempotent webhook receiver","code","medium","api design",302,"63/95","Good","Platform seed",12,45],
+      ["Grid pathfinding","code","easy","graphs",4102,"81/95","Weak — no signal","Platform seed",8,25]
+    ].map(p => ({
+      title: p[0], kind: p[1], difficulty: p[2], skills: p[3], used: p[4].toLocaleString(), median: p[5],
+      signal: p[6], owner: p[7], cases: p[8], time: p[9],
+      diffBg: p[2] === "hard" ? "#423a6a" : (p[2] === "medium" ? "#292b31" : "#2b293a"),
+      diffColor: p[2] === "hard" ? "#d2cefd" : "#cfd3e5",
+      signalColor: p[6].indexOf("Weak") === 0 ? "#e8a3a3" : (p[6].indexOf("Good") === 0 ? "#e0c98f" : "#9dd3b0")
+    }));
+
+    const probStepNames = ["Details", "Languages", "Stubs", "Test cases"];
+    const probSteps = probStepNames.map((label, i) => ({
+      label, num: i + 1, go: () => this.setState({ probStep: i }),
+      border: S.probStep === i ? "#9184d9" : "transparent",
+      color: S.probStep === i ? "#e9e9ed" : "#75798c",
+      numBg: S.probStep >= i ? "#423a6a" : "#292b31",
+      numColor: S.probStep >= i ? "#d2cefd" : "#75798c"
+    }));
+    const languages = ["Python 3","Go","Java 17","TypeScript","Rust","C++20","Ruby","C#","Kotlin","Elixir","Scala","Haskell"].map(l => {
+      const on = S.langs.indexOf(l.split(" ")[0]) >= 0;
+      return {
+        label: l, note: ["Ruby","Elixir","Scala","Haskell"].indexOf(l) >= 0 ? "manual stub" : "auto stub",
+        toggle: () => this.setState(s => ({ langs: on ? s.langs.filter(x => x !== l.split(" ")[0]) : s.langs.concat([l.split(" ")[0]]) })),
+        bg: on ? "rgba(145,132,217,0.12)" : "#1c1e2c", ring: on ? "rgba(145,132,217,0.5)" : "rgba(233,233,237,0.07)",
+        boxBorder: on ? "#9184d9" : "rgba(233,233,237,0.24)", boxBg: on ? "#9184d9" : "transparent",
+        check: on ? "✓" : "", color: on ? "#e9e9ed" : "#9397ab"
+      };
+    });
+    const probCases = [
+      ["sample_window","sample",0,"visible","pass 11ms"],["sample_two_keys","sample",0,"visible","pass 9ms"],
+      ["single_key_burst","easy",5,"hidden","pass 31ms"],["window_boundary","easy",5,"hidden","pass 22ms"],
+      ["many_keys","medium",10,"hidden","pass 148ms"],["eviction_pressure","medium",10,"hidden","pass 190ms"],
+      ["10^5_keys","hard",20,"hidden","pass 730ms"]
+    ].map(c => ({ name: c[0], cls: c[1], pts: c[2], sample: c[3], run: c[4] }));
+    const quality = [
+      ["✓", "#9dd3b0", "7 test cases across 3 difficulty classes", "Inside the 3–15 band"],
+      ["✓", "#9dd3b0", "2 sample cases with visible output", "Candidates can self-check format"],
+      ["✓", "#9dd3b0", "Auto-generated stubs for 6 of 6 languages", "STDIN/STDOUT handled for you"],
+      ["!", "#e0c98f", "2 skill tags", "Add one concept tag — helps default-set matching"]
+    ].map(q => ({ icon: q[0], color: q[1], label: q[2], note: q[3] }));
+
+    const invites = [
+      ["Dmitri Vasiliev","Staff Backend Engineer","Northwind Systems","Rate limiter + design","Not opened",0,"—","2d 4h","4d ago","Nudge"],
+      ["Chen Li","Payments Engineer","Halcyon Bank","Ledger set","In progress",42,"clean","19h","2d ago","Watch"],
+      ["Ravi Shankar","Staff Backend Engineer","Northwind Systems","Rate limiter + design","In progress",78,"1 tab-away","6h","2d ago","Watch"],
+      ["Tomás Ferreira","Payments Engineer","Halcyon Bank","Ledger set","Scored",100,"2 paste events","—","5d ago","Review"],
+      ["Nora Lindqvist","Payments Engineer","Halcyon Bank","Ledger set","Not started",0,"—","3d","1d ago","Nudge"],
+      ["Amara Osei","Staff Backend Engineer","Northwind Systems","Rate limiter + design","Scored",100,"clean","—","6d ago","Review"],
+      ["Marcus Bell","Platform Engineer","Northwind Systems","Platform seed","Expired",31,"—","expired","9d ago","Reissue"],
+      ["Sofia Marquez","Payments Engineer","Halcyon Bank","Ledger set","Scored",100,"clean","—","8d ago","Review"]
+    ].map(i => ({
+      name: i[0], job: i[1], client: i[2], set: i[3], status: i[4], pct: i[5], progress: i[5] + "%",
+      flags: i[6], expires: i[7], invited: i[8], action: i[9],
+      statusBg: i[4] === "Scored" ? "#2b2741" : (i[4] === "Expired" ? "#4c3a3a" : "#292b31"),
+      statusColor: i[4] === "Scored" ? "#b5abfc" : (i[4] === "Expired" ? "#f0cfcf" : "#cfd3e5"),
+      flagColor: i[6] === "clean" || i[6] === "—" ? "#75798c" : "#e0c98f",
+      expColor: i[7] === "6h" || i[7] === "expired" ? "#e8a3a3" : "#9397ab",
+      act: () => i[9] === "Review" ? this.nav("candidate", { cand: (cands.find(c => c.name === i[0]) || cands[0]).id }) : this.flash(i[9] + " sent to " + i[0])
+    }));
+
+    const poolAll = cands.slice().sort((a, b) => b.talent - a.talent).map(c => ({
+      name: c.name, loc: c.loc, current: c.current, school: c.school, years: c.years,
+      exam: c.exam, placements: c.placements, talent: c.talent,
+      placedColor: c.placements === "—" ? "#75798c" : "#9dd3b0",
+      touch: c.stage,
+      open: () => this.nav("candidate", { cand: c.id, t: 412, playing: false })
+    }));
+
+    const intakeNames = ["Client", "Job", "Skills to test", "Coding question", "Review"];
+    const intakeSteps = intakeNames.map((label, i) => ({
+      label, num: i + 1, go: () => this.setState({ intakeStep: i }),
+      border: S.intakeStep === i ? "#9184d9" : "transparent",
+      color: S.intakeStep === i ? "#e9e9ed" : "#75798c",
+      numBg: S.intakeStep >= i ? "#423a6a" : "#292b31",
+      numColor: S.intakeStep >= i ? "#d2cefd" : "#75798c"
+    }));
+    const skillList = ["Concurrency","Distributed systems","API design","SQL / data modelling","Debugging under pressure","Systems design","Testing discipline","Performance tuning","Security","Frontend","Kafka / streaming","Kubernetes"];
+    const skills = skillList.map(sk => {
+      const on = S.skills.indexOf(sk) >= 0;
+      return {
+        label: on ? sk + " · " + (S.skills.indexOf(sk) + 1) : sk,
+        toggle: () => this.setState(s => ({ skills: on ? s.skills.filter(x => x !== sk) : s.skills.concat([sk]) })),
+        border: on ? "#9184d9" : "rgba(233,233,237,0.16)",
+        bg: on ? "rgba(145,132,217,0.14)" : "transparent",
+        color: on ? "#b5abfc" : "#9397ab"
+      };
+    });
+    const qOpts = [
+      ["default", "Use our recommended set", "We pick from the bank using your skill order and this client's past sittings. Highest signal, zero work.", "3 problems · 68 min · used on 412 prior candidates"],
+      ["pick", "Choose from the problem bank", "Browse 96 problems, filter by skill and difficulty, assemble the set yourself.", "You control points, order and time limit"],
+      ["author", "Author a new problem", "Write the statement, generate stubs, define cases. Runs a reference solution before it can be attached.", "Roughly 25 min · goes through quality review"]
+    ].map(o => ({
+      title: o[1], body: o[2], meta: o[3],
+      go: () => this.setState({ qOption: o[0] }),
+      bg: S.qOption === o[0] ? "rgba(145,132,217,0.10)" : "#1c1e2c",
+      ring: S.qOption === o[0] ? "rgba(145,132,217,0.5)" : "rgba(233,233,237,0.07)",
+      dotBorder: S.qOption === o[0] ? "#9184d9" : "rgba(233,233,237,0.28)",
+      dotInner: S.qOption === o[0] ? "inset 0 0 0 3.5px #9184d9" : "none",
+      titleColor: S.qOption === o[0] ? "#e9e9ed" : "#cfd3e5"
+    }));
+    const defaultSet = [
+      ["Sliding-window rate limiter", "Concurrency", "medium", 40, "Strong"],
+      ["Backpressure queue", "Distributed systems", "hard", 35, "Very strong"],
+      ["Idempotent webhook receiver", "API design", "medium", 20, "Good"]
+    ].map(d => ({ title: d[0], skill: d[1], difficulty: d[2], pts: d[3], signal: d[4] }));
+
+    const stageChips = STAGES.map((label, i) => ({
+      label, bg: i >= 8 ? "#2b293a" : "#292b31", color: i >= 8 ? "#b2b6ca" : "#cfd3e5"
+    }));
+    const intakeReview = [
+      ["Client", "Northwind Systems · Tier 1 retained · 20% of first-year base"],
+      ["Job", "Staff Backend Engineer · 2 heads · NYC hybrid · $210–255k"],
+      ["Pipeline", "Standard 9-stage, every move recruiter-approved"],
+      ["Skills tested", S.skills.join(", ") || "none picked yet"],
+      ["Assessment", S.qOption === "default" ? "Recommended set — 3 problems, 68 min, 95 pts" : (S.qOption === "pick" ? "Hand-assembled set (not yet chosen)" : "New problem — pending quality review")],
+      ["Shortlist SLA", "5 business days from first scored candidate"]
+    ].map(r => ({ k: r[0], v: r[1] }));
+
+    return {
+      nav, colWidth: P.boardColumnWidth ?? 216,
+      isQueue: S.screen === "queue", isClients: S.screen === "clients", isClient: S.screen === "client",
+      isCandidate: S.screen === "candidate", isShortlist: S.screen === "shortlist",
+      isProblems: S.screen === "problems", isProblemNew: S.screen === "problem_new",
+      isAssessments: S.screen === "assessments", isPool: S.screen === "pool", isIntake: S.screen === "intake",
+      toast: S.toast,
+
+      queueOpen: 38, breachCount: 3, queueFilters: filters, queueRows,
+      clientRows, client, jobRows, columns, moveLog: "14 moves approved today · 0 automatic",
+      boardScopeLabel: "All " + client.jobs + " jobs at " + client.name,
+      backToClientLabel: "← " + client.name,
+      clientTabs: [["jobs","Jobs"],["board","Pipeline board"],["shortlists","Shortlists sent"]].map(t => ({
+        label: t[1], go: () => this.setState({ tab: t[0] }),
+        color: S.tab === t[0] ? "#e9e9ed" : "#75798c",
+        border: S.tab === t[0] ? "#9184d9" : "transparent"
+      })),
+      tabJobs: S.tab === "jobs", tabBoard: S.tab === "board", tabShortlists: S.tab === "shortlists",
+      sentShortlists: [
+        ["Staff Backend Engineer","3 candidates · Osei, Nair, Tanaka · your note attached","Client reviewing","#292b31","#cfd3e5","2d ago"],
+        ["Payments Engineer","2 candidates · Haddad, Marquez","1 interview booked","#2b2741","#b5abfc","6d ago"],
+        ["Security Engineer","4 candidates","Passed — 1 offer","#2b3a2f","#9dd3b0","3w ago"]
+      ].map(s => ({ job: s[0], detail: s[1], status: s[2], bg: s[3], color: s[4], sent: s[5] })),
+
+      cand: {
+        name: cand.name, stage: cand.stage, next: STAGES[Math.min(7, STAGES.indexOf(cand.stage) + 1)],
+        line: cand.current + " · " + cand.years + "y · " + cand.school + " · " + cand.loc,
+        fit: cand.fit, talent: cand.talent, job: cand.job,
+        advanceLabel: "Approve → " + STAGES[Math.min(7, STAGES.indexOf(cand.stage) + 1)],
+        fitRank: hasA ? "#" + rank + " of 214 scored for this job" : "provisional · résumé only",
+        talentTrend: placedCount ? "+9 after last placement" : "no placement yet",
+        problem: "Sliding-window rate limiter", language: "Python 3", duration: "30:47",
+        score: examPts, scoreMax: 95, loc: examPct >= 70 ? 41 : 63,
+        complexity: examPct >= 70 ? "O(1) amortised per call" : "O(n) per call — no eviction"
+      },
+      hasAssessment: hasA, noAssessment: !hasA,
+      sendAssessment: () => this.flash("Assessment sent to " + cand.name + " · expires in 5 days"),
+      goAssessments: () => this.nav("assessments"),
+      factors, resume, tests, keyframes, jumps, speeds,
+      progressPct: (S.t / 1847) * 100, timeLabel: this.fmt(S.t) + " / 30:47",
+      playIcon: S.playing ? "❚❚" : "▶", phaseLabel: phase + " · " + S.speed + "×",
+      frameLine1: "for key, hits in self.buckets.items():",
+      frameLine2: "    while hits and hits[0] <= now - self.w:",
+      frameLine3: "        hits.popleft()   # ← rewrite at " + this.fmt(S.t),
+      finalCode: examPct >= 70
+        ? "from collections import deque, defaultdict\n\nclass RateLimiter:\n    def __init__(self, n: int, w: int):\n        self.n, self.w = n, w\n        self.buckets = defaultdict(deque)\n\n    def allow(self, key: str, now: int) -> bool:\n        hits = self.buckets[key]\n        while hits and hits[0] <= now - self.w:\n            hits.popleft()\n        if len(hits) >= self.n:\n            if not hits:\n                del self.buckets[key]\n            return False\n        hits.append(now)\n        return True"
+        : "class RateLimiter:\n    def __init__(self, n: int, w: int):\n        self.n, self.w = n, w\n        self.log = {}\n\n    def allow(self, key: str, now: int) -> bool:\n        # keeps every timestamp ever seen — memory grows\n        hits = self.log.setdefault(key, [])\n        recent = [t for t in hits if t > now - self.w]\n        self.log[key] = recent\n        if len(recent) >= self.n:\n            return False\n        recent.append(now)\n        return True",
+      togglePlay: () => this.setState(s => ({ playing: !s.playing })),
+      seek: e => {
+        const r = e.currentTarget.getBoundingClientRect();
+        this.setState({ t: Math.max(0, Math.min(1847, ((e.clientX - r.left) / r.width) * 1847)) });
+      },
+      advanceCand: () => this.move(cand.id, "advance"),
+      rejectCand: () => this.move(cand.id, "reject"),
+
+      pool, poolCount: 214, picks, picksCount: S.picks.length,
+      hasPicks: S.picks.length > 0, noPicks: S.picks.length === 0,
+      note: S.note, setNote: e => this.setState({ note: e.target.value }),
+      sendLabel: S.sent ? "✓ Sent to Priya at Northwind" : "Send " + S.picks.length + " to client",
+      sendShortlist: () => { this.setState({ sent: true }); this.flash("Shortlist sent · client sees ranking, recordings, résumés and your note"); },
+
+      problems, probSteps, probStep0: S.probStep === 0, probStep1: S.probStep === 1,
+      probStep2: S.probStep === 2, probStep3: S.probStep === 3,
+      probTitle: "Sliding-window rate limiter", setProbTitle: () => {},
+      languages, probCases, probTotalPts: 50, quality, qualityScore: 82, qualityColor: "#9dd3b0",
+      probNextLabel: S.probStep === 3 ? "Save problem" : "Next: " + probStepNames[S.probStep + 1],
+      nextProbStep: () => S.probStep === 3
+        ? (this.nav("problems"), this.flash("Problem saved · reference solution passed 7 of 7 cases"))
+        : this.setState({ probStep: S.probStep + 1 }),
+      addCase: () => this.flash("Case added — reference solution re-run queued"),
+      newProblem: () => this.nav("problem_new", { probStep: 0 }),
+      goProblems: () => this.nav("problems"),
+
+      invites, poolAll,
+      assessSummary: "38 invites in flight · 11 not started · 4 expire inside 24h · 3 carry integrity flags",
+
+      intakeSteps, intake0: S.intakeStep === 0, intake1: S.intakeStep === 1, intake2: S.intakeStep === 2,
+      intake3: S.intakeStep === 3, intake4: S.intakeStep === 4,
+      intakeTitle: "New client & job — " + intakeNames[S.intakeStep],
+      intakeNextLabel: S.intakeStep === 4 ? "Open job" : "Next: " + intakeNames[S.intakeStep + 1],
+      nextIntake: () => S.intakeStep === 4
+        ? (this.nav("client", { tab: "board" }), this.flash("Job opened · published for one-click apply"))
+        : this.setState({ intakeStep: S.intakeStep + 1 }),
+      finishIntake: () => { this.nav("client", { tab: "board" }); this.flash("Job opened · published for one-click apply"); },
+      skills, questionOptions: qOpts, defaultSet, showDefaultSet: S.qOption === "default",
+      fitWeighting: S.skills.length ? S.skills.slice(0, 2).join(" 30% · ") + " 20% · remainder split across " + Math.max(0, S.skills.length - 2) + " skills" : "pick at least two skills",
+      stageChips, intakeReview,
+
+      startIntake: () => this.nav("intake", { intakeStep: 0 }),
+      goQueue: () => this.nav("queue"), goClients: () => this.nav("clients"),
+      goClient: () => this.nav("client", { tab: "board" }), goBoard: () => this.nav("client", { tab: "board" }),
+      goShortlist: () => this.nav("shortlist"), goBack: () => this.nav("client", { tab: "board" })
+    };
+  }
+}
+
+</script>
+</body>
+</html>

@@ -150,6 +150,7 @@ func (s *SQLExecutor) runTest(ctx context.Context, dsn string, req *Request, t T
 	stdout := strings.TrimSpace(strings.Join(lines, "\n"))
 	h := sha256.Sum256([]byte(stdout))
 	res.StdoutHash = hex.EncodeToString(h[:])
+	res.StdoutTail = stdout
 	res.Status = TestFail
 	if equalLines(got, want) {
 		res.Status = TestPass

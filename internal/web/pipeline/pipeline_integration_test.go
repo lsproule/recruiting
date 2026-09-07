@@ -116,11 +116,16 @@ func newFixture(t *testing.T) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	poolService := service.NewPoolService(st)
 	pipeline.Mount(mux, pipeline.Deps{
 		Applications: service.NewApplicationService(st, nil, "https://example.test"),
 		Release:      service.NewReleaseService(st, q, "https://example.test"),
 		Schedule:     service.NewScheduleService(st, nil, "https://example.test"),
 		Org:          service.NewOrgService(st),
+		Reviews:      service.NewReviewService(st, poolService, nil),
+		Attempts:     service.NewAttemptService(st, nil, "https://example.test"),
+		Pool:         poolService,
+		Candidates:   service.NewCandidateService(st, service.NewResumeService(st, nil), nil),
 	})
 	f.srv = httptest.NewServer(mux)
 	t.Cleanup(f.srv.Close)
@@ -378,5 +383,82 @@ func TestBoardDragShowsARefusedMove(t *testing.T) {
 	res, body := s.post(f.movePath(), url.Values{"to_stage_id": {f.interview.String()}, "view": {"board"}}, true)
 	if res.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(body, "not permitted") || strings.Contains(body, `name="reason"`) {
 		t.Fatalf("refused drag = %d, want 422 with the message and no retry form; body %q", res.StatusCode, body)
+	}
+}
+
+// TestCandidateDetailWithoutAnAssessment is the screen for someone who has
+// not sat one: the card that says so and offers to send it, the fit panel
+// that admits it is resting on the résumé alone, and the header's three
+// decisions.
+func TestCandidateDetailWithoutAnAssessment(t *testing.T) {
+	f := newFixture(t)
+	s := f.browser(t)
+	s.login(f.recruiterEmail)
+
+	res, body := s.get("/app/applications/" + f.appID.String())
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("candidate detail = %d", res.StatusCode)
+	}
+	for _, want := range []string{
+		"No assessment yet", "Send assessment", "Add to shortlist", "Reject",
+		"Fit · this job", "Skills overlap", "no assessment sat yet", "Résumé",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("candidate detail lacks %q", want)
+		}
+	}
+	// Nothing to replay, so the island's script never loads.
+	if strings.Contains(body, layout.ReplayPath) {
+		t.Error("the replay island is loaded for an application with no attempt")
+	}
+}
+
+// TestCandidateDetailWithAnAssessment seeds a scored sitting on the
+// application and reads the screen it produces: the replay island with its
+// boot JSON, the code that was scored, and how each case went.
+func TestCandidateDetailWithAnAssessment(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := f.sys.Exec(ctx, sql, args...); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	assessmentID, problemID, caseID, attemptID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	exec(`insert into assessment (id, org_id, name, duration_minutes) values ($1, $2, 'Take-home', 60)`, assessmentID, f.orgID)
+	exec(`insert into problem (id, org_id, kind, title, statement, allowed_languages) values ($1, $2, 'code', 'Adder', 'Add them.', '{python}')`, problemID, f.orgID)
+	exec(`insert into test_case (id, org_id, problem_id, position, name, class, input, expected_output, visibility, weight)
+	      values ($1, $2, $3, 1, 'two positives', 'sample', '1 2', '3', 'public', 1)`, caseID, f.orgID, problemID)
+	exec(`insert into assessment_problem (assessment_id, org_id, problem_id, position) values ($1, $2, $3, 1)`, assessmentID, f.orgID, problemID)
+	scores := `[{"problem_id":"` + problemID.String() + `","score":1,"passed_weight":1,"total_weight":1,"status":"ok"}]`
+	exec(`insert into attempt (id, org_id, application_id, assessment_id, stage_id, status, started_at, finished_at, score,
+	          problem_scores, recording_status, last_event_seq)
+	      values ($1, $2, $3, $4, $5, 'scored', now() - interval '1 hour', now(), 88, $6, 'complete', 2)`,
+		attemptID, f.orgID, f.appID, assessmentID, f.assess, scores)
+	result := `{"id":"r","status":"ok","results":[{"test_id":"` + caseID.String() + `","status":"pass","time_ms":12}]}`
+	exec(`insert into submission (id, org_id, attempt_id, problem_id, kind, language, source, status, score, result)
+	      values ($1, $2, $3, $4, 'submit', 'python', 'print(a + b)', 'done', 1, $5)`,
+		uuid.New(), f.orgID, attemptID, problemID, result)
+
+	s := f.browser(t)
+	s.login(f.recruiterEmail)
+	res, body := s.get("/app/applications/" + f.appID.String())
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("candidate detail = %d", res.StatusCode)
+	}
+	for _, want := range []string{
+		layout.ReplayPath, `id="replay"`, `id="replay-config"`,
+		reviews.SnapshotsPath(attemptID), "Assessment recording",
+		"Final submission", "print(a + b)", "Test results", "two positives", "sample",
+		// The chips are derived from the submission's outcome, server-side.
+		"All cases passed",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("candidate detail lacks %q", want)
+		}
+	}
+	if strings.Contains(body, "No assessment yet") {
+		t.Error("the no-assessment card is shown for an application that has one")
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"testing"
 	"time"
@@ -24,8 +25,9 @@ import (
 const seedRunTimeout = 15 * time.Minute
 
 // TestPlatformSeedRunsOnTheRunner is the seed bank's real check: every
-// reference solution — Python, Node, Go, Java, and the SQL problems' queries —
-// is executed by the sandboxed runner and must solve every test case.
+// reference solution the bank ships, in each of its languages, and every SQL
+// problem's query, is executed by the sandboxed runner and must solve every
+// test case.
 func TestPlatformSeedRunsOnTheRunner(t *testing.T) {
 	f := newProblemFixture(t)
 	url := startRunner(t)
@@ -40,8 +42,15 @@ func TestPlatformSeedRunsOnTheRunner(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the seed bank does not pass its own reference solutions: %v", err)
 	}
-	if len(seeded) < 8 {
-		t.Fatalf("seeded %d problems, want the whole bank", len(seeded))
+	bank, err := service.SeedProblems()
+	if err != nil {
+		t.Fatalf("the seed bank does not parse: %v", err)
+	}
+	if len(seeded) != len(bank) {
+		t.Fatalf("seeded %d problems, want the whole bank of %d", len(seeded), len(bank))
+	}
+	if len(seeded) < 12 {
+		t.Fatalf("seeded %d problems, want at least 12", len(seeded))
 	}
 	var sql int
 	for _, p := range seeded {
@@ -76,7 +85,7 @@ func startRunner(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, lang := range []string{"python", "node", "go", "java"} {
+	for _, lang := range seedReferenceLanguages(t) {
 		if err := exec.Command("docker", "image", "inspect", "recruiting-runner-"+lang).Run(); err == nil {
 			continue
 		}
@@ -118,6 +127,30 @@ func startRunner(t *testing.T) string {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+}
+
+// seedReferenceLanguages is every language the bank ships a reference solution
+// in, so the images the seed actually needs are the images that get built. SQL
+// is left out: it runs against Postgres rather than a sandbox image.
+func seedReferenceLanguages(t *testing.T) []string {
+	t.Helper()
+	problems, err := service.SeedProblems()
+	if err != nil {
+		t.Fatalf("the seed bank does not parse: %v", err)
+	}
+	seen := map[string]bool{}
+	var langs []string
+	for _, p := range problems {
+		for _, ref := range p.References {
+			if ref.Language == "sql" || seen[ref.Language] {
+				continue
+			}
+			seen[ref.Language] = true
+			langs = append(langs, ref.Language)
+		}
+	}
+	sort.Strings(langs)
+	return langs
 }
 
 // freeAddr reserves a loopback port and hands it back, which is how the

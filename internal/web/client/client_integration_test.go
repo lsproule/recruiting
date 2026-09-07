@@ -47,7 +47,9 @@ type fixture struct {
 	sys                    *pgxpool.Pool
 	st                     *store.Store
 	release                *service.ReleaseService
+	shortlists             *service.ShortlistService
 	orgID, jobID           uuid.UUID
+	companyID              uuid.UUID
 	draftJobID             uuid.UUID
 	appID, hiddenAppID     uuid.UUID
 	review, final, reject  uuid.UUID
@@ -105,6 +107,7 @@ func newFixture(t *testing.T) *fixture {
 	exec(`insert into org_user_role (org_user_id, org_id, role) values ($1, $2, 'vetter')`, vetterID, f.orgID)
 
 	companyID, rivalID := uuid.New(), uuid.New()
+	f.companyID = companyID
 	exec(`insert into client_company (id, org_id, name) values ($1, $2, 'Globex')`, companyID, f.orgID)
 	exec(`insert into client_company (id, org_id, name) values ($1, $2, 'Initech')`, rivalID, f.orgID)
 	for _, cu := range []struct {
@@ -142,13 +145,15 @@ func newFixture(t *testing.T) *fixture {
 	f.release = service.NewReleaseService(st, q, "https://example.test")
 	resumes := service.NewResumeService(st, fakeBlobs{})
 	portal := service.NewClientPortalService(st, apps, resumes, q, "https://example.test")
+	f.shortlists = service.NewShortlistService(st, f.release,
+		service.NewReviewService(st, nil, nil), service.NewPoolService(st), q, "https://example.test")
 
 	mux := chi.NewMux()
 	if _, err := auth.Mount(mux, auth.Deps{Auth: service.NewAuthService(st), CookieSecret: []byte("test-secret")}); err != nil {
 		t.Fatal(err)
 	}
 	layout.MountStatic(mux)
-	client.Mount(mux, client.Deps{Portal: portal})
+	client.Mount(mux, client.Deps{Portal: portal, Shortlists: f.shortlists})
 	f.srv = httptest.NewServer(mux)
 	t.Cleanup(f.srv.Close)
 	return f

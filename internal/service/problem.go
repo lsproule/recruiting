@@ -47,6 +47,9 @@ var (
 	ErrPlatformProblem = errors.New("service: platform problems are read-only")
 	// ErrProblemTitleTaken names the real cause of a unique-title violation.
 	ErrProblemTitleTaken = errors.New("service: a problem with that title already exists")
+	// ErrProblemInvalid refuses a request the problem itself cannot answer —
+	// a language it does not allow, a run with nothing to run against.
+	ErrProblemInvalid = errors.New("service: invalid problem request")
 )
 
 // Problem is one bank entry with everything needed to run it.
@@ -63,11 +66,29 @@ type Problem struct {
 	MemoryLimitKB    int
 	SQLSchema        string
 	SQLSeed          string
-	References       []ProblemReference
-	TestCases        []ProblemTestCase
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	// RecommendedMinutes sizes an assessment built from the problem.
+	RecommendedMinutes int
+	// Guidelines are what an interviewer watches for; internal only.
+	Guidelines string
+	// OriginProblemID names the problem this one was cloned from, if any.
+	OriginProblemID uuid.UUID
+	// Quality is domain.ProblemQuality at the last save; a draft is 0.
+	Quality int
+	// ProvenLanguages are the languages a reference solution passed every
+	// case in at the last verified save. A draft has none.
+	ProvenLanguages []string
+	// CaseCount is how many test cases the problem has. A listing carries it
+	// without the cases themselves, which it does not load.
+	CaseCount  int
+	References []ProblemReference
+	TestCases  []ProblemTestCase
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
+
+// Attachable reports whether the problem scores well enough to be attached to
+// an assessment.
+func (p Problem) Attachable() bool { return p.Quality >= domain.ProblemQualityFloor }
 
 // Platform reports whether the problem belongs to the shared seed bank, which
 // every org reads and none edits.
@@ -83,6 +104,8 @@ type ProblemReference struct {
 type ProblemTestCase struct {
 	ID         uuid.UUID
 	Position   int
+	Name       string
+	Class      string
 	Input      string
 	Expected   string
 	Visibility string
@@ -150,7 +173,18 @@ func (s *ProblemService) List(ctx context.Context, p Principal, f ProblemFilter)
 		}
 		out = make([]Problem, 0, len(rows))
 		for _, r := range rows {
-			out = append(out, toProblem(r))
+			p := toProblem(db.Problem{
+				ID: r.ID, OrgID: r.OrgID, Kind: r.Kind, Title: r.Title, Statement: r.Statement,
+				Difficulty: r.Difficulty, Tags: r.Tags, AllowedLanguages: r.AllowedLanguages,
+				TimeLimitMs: r.TimeLimitMs, MemoryLimitKb: r.MemoryLimitKb,
+				SqlSchema: r.SqlSchema, SqlSeed: r.SqlSeed,
+				RecommendedMinutes: r.RecommendedMinutes, Guidelines: r.Guidelines,
+				OriginProblemID: r.OriginProblemID, Quality: r.Quality,
+				ProvenLanguages: r.ProvenLanguages,
+				CreatedAt:       r.CreatedAt, UpdatedAt: r.UpdatedAt,
+			})
+			p.CaseCount = int(r.CaseCount)
+			out = append(out, p)
 		}
 		return nil
 	})
@@ -192,7 +226,7 @@ func (s *ProblemService) Create(ctx context.Context, p Principal, in domain.Impo
 	var out Problem
 	err := s.st.WithTx(ctx, p, func(ctx context.Context, tx *store.Tx) error {
 		var err error
-		out, err = writeProblem(ctx, tx, p.OrgID, uuid.Nil, in)
+		out, err = writeProblem(ctx, tx, p.OrgID, uuid.Nil, in, verifiedSpec(in))
 		return err
 	})
 	if err != nil {
@@ -224,7 +258,7 @@ func (s *ProblemService) Update(ctx context.Context, p Principal, id uuid.UUID, 
 		if existing.OrgID != p.OrgID {
 			return ErrPlatformProblem
 		}
-		out, err = writeProblem(ctx, tx, p.OrgID, id, in)
+		out, err = writeProblem(ctx, tx, p.OrgID, id, in, verifiedSpec(in))
 		return err
 	})
 	switch {
@@ -517,7 +551,7 @@ func replaceProblems(ctx context.Context, tx *store.Tx, orgID uuid.UUID, problem
 		case !errors.Is(err, pgx.ErrNoRows):
 			return nil, err
 		}
-		stored, err := writeProblem(ctx, tx, orgID, id, in)
+		stored, err := writeProblem(ctx, tx, orgID, id, in, verifiedSpec(in))
 		if err != nil {
 			return nil, err
 		}
@@ -526,14 +560,40 @@ func replaceProblems(ctx context.Context, tx *store.Tx, orgID uuid.UUID, problem
 	return out, nil
 }
 
+// writeSpec is what a write knows beyond the problem document: where a clone
+// came from, and the verdict of the reference run. A draft carries no proven
+// language and scores zero, so a half-finished problem can never be attached
+// to an assessment.
+type writeSpec struct {
+	Origin  uuid.UUID
+	Proven  []string
+	Quality int
+}
+
+// verifiedSpec is the verdict of a save whose references have all just passed:
+// every language with a solution is proven, and the score follows from that.
+func verifiedSpec(in domain.ImportProblem) writeSpec {
+	proven := make([]string, 0, len(in.References))
+	for _, ref := range in.References {
+		proven = append(proven, ref.Language)
+	}
+	sort.Strings(proven)
+	return writeSpec{Proven: proven, Quality: domain.ProblemQuality(in.Quality(proven))}
+}
+
 // writeProblem inserts or replaces one problem with its reference solutions
 // and test cases. A zero id inserts.
-func writeProblem(ctx context.Context, tx *store.Tx, orgID, id uuid.UUID, in domain.ImportProblem) (Problem, error) {
+func writeProblem(ctx context.Context, tx *store.Tx, orgID, id uuid.UUID, in domain.ImportProblem, w writeSpec) (Problem, error) {
 	params := db.CreateProblemParams{
 		OrgID: orgID, Kind: in.Kind, Title: in.Title, Statement: in.Statement,
 		Difficulty: in.Difficulty, Tags: in.Tags, AllowedLanguages: in.AllowedLanguages,
 		TimeLimitMs: int32(in.TimeLimitMs), MemoryLimitKb: int32(in.MemoryLimitKB),
 		SqlSchema: nullText(in.SQLSchema), SqlSeed: nullText(in.SQLSeed),
+		RecommendedMinutes: int32(in.RecommendedMinutes), Guidelines: in.Guidelines,
+		OriginProblemID: nullUUID(w.Origin), Quality: int32(w.Quality),
+		// The column is not null: a problem proven in nothing stores the
+		// empty array, never NULL.
+		ProvenLanguages: append([]string{}, w.Proven...),
 	}
 	var row db.Problem
 	var err error
@@ -545,6 +605,8 @@ func writeProblem(ctx context.Context, tx *store.Tx, orgID, id uuid.UUID, in dom
 			Difficulty: params.Difficulty, Tags: params.Tags, AllowedLanguages: params.AllowedLanguages,
 			TimeLimitMs: params.TimeLimitMs, MemoryLimitKb: params.MemoryLimitKb,
 			SqlSchema: params.SqlSchema, SqlSeed: params.SqlSeed,
+			RecommendedMinutes: params.RecommendedMinutes, Guidelines: params.Guidelines,
+			Quality: params.Quality, ProvenLanguages: params.ProvenLanguages,
 		})
 		if err == nil {
 			if err = tx.Q.DeleteProblemReferences(ctx, row.ID); err == nil {
@@ -567,6 +629,7 @@ func writeProblem(ctx context.Context, tx *store.Tx, orgID, id uuid.UUID, in dom
 			OrgID: orgID, ProblemID: row.ID, Position: int32(i + 1),
 			Input: tc.Input, ExpectedOutput: tc.Expected, Visibility: tc.Visibility,
 			Weight: numeric(tc.WeightValue()), Unordered: tc.Unordered,
+			Name: tc.Name, Class: tc.Class,
 		}); err != nil {
 			return Problem{}, err
 		}
@@ -591,13 +654,15 @@ func loadProblem(ctx context.Context, tx *store.Tx, id uuid.UUID) (Problem, erro
 	if err != nil {
 		return Problem{}, err
 	}
+	out.CaseCount = len(cases)
 	for _, c := range cases {
 		weight := 1.0
 		if f, err := c.Weight.Float64Value(); err == nil && f.Valid {
 			weight = f.Float64
 		}
 		out.TestCases = append(out.TestCases, ProblemTestCase{
-			ID: c.ID, Position: int(c.Position), Input: c.Input, Expected: c.ExpectedOutput,
+			ID: c.ID, Position: int(c.Position), Name: c.Name, Class: c.Class,
+			Input: c.Input, Expected: c.ExpectedOutput,
 			Visibility: c.Visibility, Weight: weight, Unordered: c.Unordered,
 		})
 	}
@@ -612,6 +677,7 @@ func (p Problem) AsImport() domain.ImportProblem {
 		Tags: p.Tags, AllowedLanguages: p.AllowedLanguages,
 		TimeLimitMs: p.TimeLimitMs, MemoryLimitKB: p.MemoryLimitKB,
 		SQLSchema: p.SQLSchema, SQLSeed: p.SQLSeed,
+		RecommendedMinutes: p.RecommendedMinutes, Guidelines: p.Guidelines,
 	}
 	for _, r := range p.References {
 		out.References = append(out.References, domain.ImportReference{Language: r.Language, Source: r.Source})
@@ -619,6 +685,7 @@ func (p Problem) AsImport() domain.ImportProblem {
 	for _, c := range p.TestCases {
 		weight := c.Weight
 		out.TestCases = append(out.TestCases, domain.ImportTestCase{
+			Name: c.Name, Class: c.Class,
 			Input: c.Input, Expected: c.Expected, Visibility: c.Visibility,
 			Weight: &weight, Unordered: c.Unordered,
 		})
@@ -632,8 +699,15 @@ func toProblem(r db.Problem) Problem {
 		Difficulty: r.Difficulty, Tags: r.Tags, AllowedLanguages: r.AllowedLanguages,
 		TimeLimitMs: int(r.TimeLimitMs), MemoryLimitKB: int(r.MemoryLimitKb),
 		SQLSchema: text(r.SqlSchema), SQLSeed: text(r.SqlSeed),
-		CreatedAt: r.CreatedAt.Time.UTC(), UpdatedAt: r.UpdatedAt.Time.UTC(),
+		RecommendedMinutes: int(r.RecommendedMinutes), Guidelines: r.Guidelines,
+		OriginProblemID: r.OriginProblemID.UUID, Quality: int(r.Quality),
+		ProvenLanguages: r.ProvenLanguages,
+		CreatedAt:       r.CreatedAt.Time.UTC(), UpdatedAt: r.UpdatedAt.Time.UTC(),
 	}
+}
+
+func nullUUID(id uuid.UUID) uuid.NullUUID {
+	return uuid.NullUUID{UUID: id, Valid: id != uuid.Nil}
 }
 
 func nullText(s string) *string {

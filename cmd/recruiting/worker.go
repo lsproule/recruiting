@@ -21,12 +21,22 @@ import (
 // load.
 const expireDuePeriod = time.Minute
 
+// previewPurgePeriod is how often the worker queues the sweep that clears
+// recruiters' preview sittings. They expire after a day, so an hour's
+// granularity is as precise as the retention needs.
+const previewPurgePeriod = time.Hour
+
+// snapshotPurgePeriod is how often the worker queues the sweep that clears
+// webcam frames past their org's retention. Retention is set in days, so a
+// daily sweep is as precise as it needs to be.
+const snapshotPurgePeriod = 24 * time.Hour
+
 // worker runs the queue consumer until ctx is cancelled. Like serve it
 // connects as app_rw: the queue's own tables carry no tenant data, and every
 // handler that touches domain tables opens a transaction scoped to the org
 // its payload names.
 func worker(ctx context.Context, logger *slog.Logger, cfg *config.Config) error {
-	st, err := store.Open(ctx, cfg.DatabaseURL)
+	st, err := store.Open(ctx, cfg.DatabaseURLApp)
 	if err != nil {
 		return fmt.Errorf("worker: %w", err)
 	}
@@ -70,6 +80,8 @@ func worker(ctx context.Context, logger *slog.Logger, cfg *config.Config) error 
 
 	go observe.PollQueueDepth(ctx, st.Pool(), queueDepthPollInterval, logger)
 	go expireDueAttempts(ctx, service.NewAttemptService(st, q, cfg.BaseURL), logger)
+	go queuePreviewPurge(ctx, q, logger)
+	go queueSnapshotPurge(ctx, q, logger)
 
 	metricsErrc := make(chan error, 1)
 	go func() { metricsErrc <- serveMetrics(ctx, logger, metricsAddr()) }()
@@ -106,6 +118,42 @@ func expireDueAttempts(ctx context.Context, attempts *service.AttemptService, lo
 	}
 }
 
+// queuePreviewPurge enqueues the preview sweep every previewPurgePeriod
+// until ctx is cancelled, so the work runs as a job with the queue's retries
+// behind it rather than in this goroutine.
+func queuePreviewPurge(ctx context.Context, q *queue.Client, logger *slog.Logger) {
+	ticker := time.NewTicker(previewPurgePeriod)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if _, err := q.Enqueue(ctx, nil, queue.KindAttemptPurgePreview, service.AttemptPurgePreviewPayload{}); err != nil {
+				logger.Warn("queueing the preview purge failed", "error", err)
+			}
+		}
+	}
+}
+
+// queueSnapshotPurge enqueues the snapshot retention sweep every
+// snapshotPurgePeriod until ctx is cancelled, so the work runs as a job with
+// the queue's retries behind it rather than in this goroutine.
+func queueSnapshotPurge(ctx context.Context, q *queue.Client, logger *slog.Logger) {
+	ticker := time.NewTicker(snapshotPurgePeriod)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if _, err := q.Enqueue(ctx, nil, queue.KindSnapshotPurge, service.SnapshotPurgePayload{}); err != nil {
+				logger.Warn("queueing the snapshot purge failed", "error", err)
+			}
+		}
+	}
+}
+
 // handlers is the one table binding every job kind to the code that works
 // it. A kind with no entry here stops the worker at startup, so a new kind
 // cannot be enqueued into a worker that would silently ignore it.
@@ -116,13 +164,15 @@ func expireDueAttempts(ctx context.Context, attempts *service.AttemptService, lo
 // concerns.
 func handlers(logger *slog.Logger, st *store.Store, q *queue.Client, r *mail.Renderer, sender mail.Sender, exec *runnerclient.Client, blobStore service.BlobStore, blobReader service.BlobReader, baseURL string) map[string]queue.Handler {
 	return map[string]queue.Handler{
-		queue.KindEmailSend:        instrumentEmail(queue.EmailHandler(st, r, sender, logger)),
-		queue.KindInterviewRemind:  service.RemindHandler(st, q, baseURL),
-		queue.KindAssessmentInvite: service.AssessmentInviteHandler(st, q, baseURL),
-		queue.KindAssessmentRemind: service.AssessmentRemindHandler(st, q, baseURL),
-		queue.KindRunnerExecute:    instrumentRunnerExecute(service.RunnerExecuteHandler(st, exec, logger)),
-		queue.KindAttemptFinalize:  service.AttemptFinalizeHandler(st, q, blobStore, logger),
-		queue.KindSignalsCompute:   service.SignalsComputeHandler(st, blobReader, logger),
+		queue.KindEmailSend:           instrumentEmail(queue.EmailHandler(st, r, sender, logger)),
+		queue.KindInterviewRemind:     service.RemindHandler(st, q, baseURL),
+		queue.KindAssessmentInvite:    service.AssessmentInviteHandler(st, q, baseURL),
+		queue.KindAssessmentRemind:    service.AssessmentRemindHandler(st, q, baseURL),
+		queue.KindRunnerExecute:       instrumentRunnerExecute(service.RunnerExecuteHandler(st, exec, logger)),
+		queue.KindAttemptFinalize:     service.AttemptFinalizeHandler(st, q, blobStore, logger),
+		queue.KindSignalsCompute:      service.SignalsComputeHandler(st, blobReader, logger),
+		queue.KindAttemptPurgePreview: service.AttemptPurgePreviewHandler(st, blobStore, logger),
+		queue.KindSnapshotPurge:       service.SnapshotPurgeHandler(st, blobStore, logger),
 	}
 }
 

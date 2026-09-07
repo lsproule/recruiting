@@ -163,6 +163,7 @@ func writeSettings(ctx context.Context, tx *store.Tx, orgID uuid.UUID, s Setting
 	}{
 		{SettingPoolScoreThreshold, []byte(fmt.Sprint(s.PoolScoreThreshold))},
 		{SettingAssessmentInviteDays, []byte(fmt.Sprint(s.AssessmentInviteDays))},
+		{SettingSnapshotRetentionDays, []byte(fmt.Sprint(s.SnapshotRetentionDays))},
 		{SettingIntegrityWeights, weights},
 	} {
 		err := tx.Q.UpsertOrgSetting(ctx, db.UpsertOrgSettingParams{OrgID: orgID, Key: kv.key, Value: kv.value})

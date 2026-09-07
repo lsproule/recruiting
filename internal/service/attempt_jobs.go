@@ -81,7 +81,7 @@ func (s *AttemptService) Remind(ctx context.Context, p AssessmentRemindPayload) 
 		if att.Status != AttemptInvited || !att.InviteExpiresAt.Time.After(s.Now()) || s.q == nil {
 			return nil
 		}
-		card, err := tx.Q.GetApplicationCard(ctx, att.ApplicationID)
+		card, err := tx.Q.GetApplicationCard(ctx, att.ApplicationID.UUID)
 		if err != nil {
 			return err
 		}

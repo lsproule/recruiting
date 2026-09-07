@@ -70,7 +70,7 @@ var specResources = []resource{
 	},
 	{
 		Name: "problems", List: "list-problems", Get: "get-problem", Create: "create-problem",
-		Extra: []string{"update-problem", "delete-problem", "import-problems"},
+		Extra: []string{"update-problem", "delete-problem", "import-problems", "try-problem", "clone-problem"},
 	},
 	{
 		Name: "assessments", List: "list-assessments", Get: "get-assessment", Create: "create-assessment",
@@ -78,8 +78,9 @@ var specResources = []resource{
 	},
 	{
 		Name: "attempts", Get: "get-attempt",
-		Extra: []string{"record-attempt-events", "run-attempt-problem", "submit-attempt-problem", "get-attempt-submission", "save-attempt-source", "finish-attempt", "get-attempt-replay"},
-		Why:   "an attempt is created when an application enters an assessment stage; the candidate never lists or creates one",
+		Extra: []string{"record-attempt-events", "run-attempt-problem", "submit-attempt-problem", "get-attempt-submission", "save-attempt-source", "finish-attempt", "get-attempt-replay",
+			"upload-attempt-snapshot", "upload-attempt-identity"},
+		Why: "an attempt is created when an application enters an assessment stage; the candidate never lists or creates one",
 	},
 	{
 		Name: "reviews", List: "list-review-assignments", Get: "get-review", Create: "create-review",
@@ -88,6 +89,11 @@ var specResources = []resource{
 	{
 		Name: "pool", List: "list-pool-entries", Get: "get-pool-entry", Create: "create-pool-entry",
 		Extra: []string{"update-pool-entry", "delete-pool-entry", "list-pool-suggestions", "add-pool-entry-to-job"},
+	},
+	{
+		Name: "shortlists", Get: "get-shortlist", Create: "create-shortlist",
+		Extra: []string{"send-shortlist"},
+		Why:   "packets are read per job on the builder screen; the API addresses one packet at a time",
 	},
 	{
 		Name: "client-portal", List: "list-portal-jobs", Get: "get-portal-job",

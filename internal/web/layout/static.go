@@ -12,12 +12,15 @@ import (
 	"recruiting/web/static"
 )
 
-// StaticPrefix is where the vendored htmx and Alpine bundles are served.
-// Assets are local so pages keep working on networks that block CDNs.
+// StaticPrefix is where the vendored stylesheets and script bundles are
+// served. Assets are local so pages keep working on networks that block CDNs.
 const StaticPrefix = "/static"
 
 // Asset paths the layout references.
 const (
+	NocturnePath = StaticPrefix + "/nocturne.css"
+	AppCSSPath   = StaticPrefix + "/app.css"
+
 	HTMXPath   = StaticPrefix + "/htmx.min.js"
 	AlpinePath = StaticPrefix + "/alpine.min.js"
 	AssessPath = StaticPrefix + "/assess/assess.js"

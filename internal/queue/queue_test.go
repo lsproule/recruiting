@@ -18,10 +18,12 @@ func TestKindsAreTheAgreedSet(t *testing.T) {
 		"assessment.invite",
 		"assessment.remind",
 		"attempt.finalize",
+		"attempt.purge_preview",
 		"email.send",
 		"interview.remind",
 		"runner.execute",
 		"signals.compute",
+		"snapshot.purge",
 	}
 	got := slices.Clone(queue.Kinds())
 	slices.Sort(got)

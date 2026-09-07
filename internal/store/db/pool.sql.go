@@ -19,7 +19,7 @@ join application app on app.id = a.application_id
 join assessment_problem ap on ap.assessment_id = a.assessment_id
 join problem p on p.id = ap.problem_id
 cross join lateral unnest(p.tags) as tag
-where app.candidate_id = $1 and a.score is not null
+where app.candidate_id = $1 and a.score is not null and not a.preview
 group by tag
 `
 

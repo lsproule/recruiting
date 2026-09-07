@@ -6,6 +6,7 @@
 package client
 
 import (
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -39,6 +40,21 @@ func ApplicationPath(id uuid.UUID) string { return ApplicationPrefix + "/" + id.
 // ResumePath redirects to a short-lived resume download.
 func ResumePath(id uuid.UUID) string { return ApplicationPath(id) + "/resume" }
 
+// ShortlistPath is the ranked shortlist the recruiter sent for a job.
+func ShortlistPath(jobID uuid.UUID) string { return JobPath(jobID) + "/shortlist" }
+
+// ShortlistPickPath is one candidate of that shortlist: their code, how it
+// tested, and the recording.
+func ShortlistPickPath(jobID, applicationID uuid.UUID) string {
+	return ShortlistPath(jobID) + "/" + applicationID.String()
+}
+
+// ShortlistReplayPath is the manifest the read-only replay island reads. It
+// carries only the event kinds a client may see.
+func ShortlistReplayPath(jobID, applicationID uuid.UUID) string {
+	return ShortlistPickPath(jobID, applicationID) + "/replay"
+}
+
 // AdvancePath, RejectPath, and RequestInfoPath are the client's actions.
 func AdvancePath(id uuid.UUID) string     { return ApplicationPath(id) + "/advance" }
 func RejectPath(id uuid.UUID) string      { return ApplicationPath(id) + "/reject" }
@@ -47,6 +63,10 @@ func RequestInfoPath(id uuid.UUID) string { return ApplicationPath(id) + "/reque
 // Deps is what Mount needs.
 type Deps struct {
 	Portal *service.ClientPortalService
+	// Shortlists serves the packets the recruiter sent. Nil leaves the
+	// shortlist screens off the portal rather than failing the pages that
+	// link to them.
+	Shortlists *service.ShortlistService
 	// Logger records the errors behind a 500; nil disables that logging.
 	Logger *slog.Logger
 }
@@ -61,6 +81,11 @@ func Mount(r chi.Router, d Deps) {
 		r.Get(Prefix+"/", h.home)
 		r.Get(JobsPath, h.jobs)
 		r.Get(JobsPath+"/{jobID}", h.job)
+		if d.Shortlists != nil {
+			r.Get(JobsPath+"/{jobID}/shortlist", h.shortlist)
+			r.Get(JobsPath+"/{jobID}/shortlist/{id}", h.shortlistPick)
+			r.Get(JobsPath+"/{jobID}/shortlist/{id}/replay", h.shortlistReplay)
+		}
 		r.Get(ApplicationPrefix+"/{id}", h.application)
 		r.Get(ApplicationPrefix+"/{id}/resume", h.resume)
 		r.Post(ApplicationPrefix+"/{id}/advance", h.advance)
@@ -117,7 +142,82 @@ func (h *handlers) job(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	render(w, r, http.StatusOK, jobPage(h.page(r, job.Title), job, apps))
+	render(w, r, http.StatusOK, jobPage(h.page(r, job.Title), job, apps, h.hasShortlist(r, id)))
+}
+
+// hasShortlist reports whether a packet has been sent for the job, so the
+// job page links to it only when there is one to read.
+func (h *handlers) hasShortlist(r *http.Request, jobID uuid.UUID) bool {
+	if h.d.Shortlists == nil {
+		return false
+	}
+	p, _ := middleware.PrincipalFrom(r.Context())
+	_, err := h.d.Shortlists.ClientShortlist(r.Context(), p, jobID)
+	return err == nil
+}
+
+// shortlist is the ranked packet: the recruiter's order and their note.
+func (h *handlers) shortlist(w http.ResponseWriter, r *http.Request) {
+	p, _ := middleware.PrincipalFrom(r.Context())
+	jobID, ok := param(w, r, "jobID")
+	if !ok {
+		return
+	}
+	packet, err := h.d.Shortlists.ClientShortlist(r.Context(), p, jobID)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	render(w, r, http.StatusOK, shortlistPage(h.page(r, "Shortlist"), packet))
+}
+
+// shortlistPick is one candidate of the packet: their résumé, the code they
+// wrote, how it tested, and the replay of them writing it.
+func (h *handlers) shortlistPick(w http.ResponseWriter, r *http.Request) {
+	p, _ := middleware.PrincipalFrom(r.Context())
+	jobID, ok := param(w, r, "jobID")
+	if !ok {
+		return
+	}
+	id, ok := param(w, r, "id")
+	if !ok {
+		return
+	}
+	detail, err := h.d.Shortlists.ClientPick(r.Context(), p, jobID, id)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	config, err := replayConfig(jobID, detail)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	render(w, r, http.StatusOK, shortlistPickPage(h.page(r, detail.Pick.Label), detail, config))
+}
+
+// shortlistReplay serves the manifest the island reads. The service strips
+// every event kind a client may not see, so what this writes cannot carry
+// one however the island asks for it.
+func (h *handlers) shortlistReplay(w http.ResponseWriter, r *http.Request) {
+	p, _ := middleware.PrincipalFrom(r.Context())
+	jobID, ok := param(w, r, "jobID")
+	if !ok {
+		return
+	}
+	id, ok := param(w, r, "id")
+	if !ok {
+		return
+	}
+	replay, err := h.d.Shortlists.ClientReplay(r.Context(), p, jobID, id, replayQuery(r))
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	if err := json.NewEncoder(w).Encode(replayManifest(replay)); err != nil && h.d.Logger != nil {
+		h.d.Logger.ErrorContext(r.Context(), "client replay manifest failed", "path", r.URL.Path, "error", err)
+	}
 }
 
 func (h *handlers) application(w http.ResponseWriter, r *http.Request) {

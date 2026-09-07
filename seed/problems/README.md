@@ -19,19 +19,21 @@ the batch is executed before anything is stored.
 | `statement` | string (Markdown) | yes | What the candidate reads |
 | `difficulty` | `"easy"` \| `"medium"` \| `"hard"` | no | Defaults to `medium` |
 | `tags` | string array | no | Lower-cased, de-duplicated, sorted; the bank is filtered by them |
-| `allowed_languages` | string array | yes | Any of `python`, `node`, `go`, `java`, `sql`. A `sql` problem allows only `sql`; a `code` problem must not allow `sql` |
+| `allowed_languages` | string array | yes | Any of the platform language ids (`python`, `javascript`, `typescript`, `go`, `java`, `c`, `cpp`, `rust`, `php`, `ruby`, `haskell`, `lua`, `kotlin`, `csharp`, `sql`), or `any` for every language the kind allows. `node` is accepted and stored as `javascript`. A `sql` problem allows only `sql`; a `code` problem must not allow `sql` |
 | `time_limit_ms` | integer | no | Per test case. Defaults to 2000, capped at 60000 |
 | `memory_limit_kb` | integer | no | Defaults to 262144, capped at 2097152 |
 | `sql_schema` | string | `sql` only | DDL creating the tables. Required for a `sql` problem, forbidden on a `code` one |
 | `sql_seed` | string | `sql` only | Rows inserted after the schema |
-| `reference_solutions` | array | yes | One per allowed language — every language a candidate may pick must be proven solvable; see below |
+| `recommended_minutes` | integer | no | How long the problem should take, which sizes an assessment built from it. Defaults to 45, capped at 480 |
+| `guidelines` | string | no | What an interviewer watches for. Internal: no candidate and no client ever sees it |
+| `reference_solutions` | array | yes | At least one, in an allowed language, proving the problem solvable; see below |
 | `test_cases` | array | yes | At least one, at most 100; see below |
 
 ## `reference_solutions[]`
 
 | Field | Type | Notes |
 | ----- | ---- | ----- |
-| `language` | string | Must be one of the problem's `allowed_languages`; exactly one solution per allowed language |
+| `language` | string | Must be one of the problem's `allowed_languages`; at most one solution per language |
 | `source` | string | A complete program (or, for `sql`, a single query) |
 
 Every reference solution is executed against every test case when the import
@@ -43,6 +45,8 @@ passes.
 
 | Field | Type | Notes |
 | ----- | ---- | ----- |
+| `name` | string | What the case is called, up to 80 characters. A result table names the case rather than numbering it |
+| `class` | `"sample"` \| `"edge"` \| `"perf"` \| `"core"` | What the case is for. Defaults to `sample` for a public case and `core` for a hidden one |
 | `input` | string | Fed to the program on stdin. For a `sql` problem it is extra SQL run after the schema and seed, so a case can add or change rows |
 | `expected` | string | Compared after trimming surrounding whitespace. May be empty: a query returning no rows, or a program printing nothing |
 | `visibility` | `"public"` \| `"hidden"` | Defaults to `public`; at least one case must be public so the candidate sees an example |
@@ -51,6 +55,16 @@ passes.
 
 A `sql` result set is compared as text: one line per row, columns separated by
 tabs, `NULL` for a null cell, `t`/`f` for booleans.
+
+## Quality review
+
+Every stored problem is scored out of 100 against six rules: at least six test
+cases, at least one public case, at least three hidden ones, at least one tag,
+a statement of at least 200 characters, and reference solutions proving at
+least two languages. A problem scoring below 60 is stored and editable but
+cannot be attached to an assessment, because the scores it would produce say
+little about a candidate. A draft saved from the authoring wizard has proven
+nothing and scores zero until it is saved for real and its solutions pass.
 
 ## Example
 
@@ -62,13 +76,15 @@ tabs, `NULL` for a null cell, `t`/`f` for booleans.
     "statement": "Read two integers and print their sum.",
     "difficulty": "easy",
     "tags": ["arithmetic"],
+    "recommended_minutes": 10,
+    "guidelines": "Watch whether they read the whole line before splitting it.",
     "allowed_languages": ["python"],
     "reference_solutions": [
       {"language": "python", "source": "print(sum(map(int, input().split())))\n"}
     ],
     "test_cases": [
-      {"input": "1 2\n", "expected": "3", "visibility": "public", "weight": 1},
-      {"input": "-1 1\n", "expected": "0", "visibility": "hidden", "weight": 1}
+      {"name": "worked example", "class": "sample", "input": "1 2\n", "expected": "3", "visibility": "public", "weight": 1},
+      {"name": "signs cancel", "class": "edge", "input": "-1 1\n", "expected": "0", "visibility": "hidden", "weight": 1}
     ]
   }
 ]

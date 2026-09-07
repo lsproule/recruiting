@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -52,17 +53,26 @@ func dockerExecutor(t *testing.T) *DockerExecutor {
 		t.Logf("gVisor (runsc) not installed: hardening tests run under %s", rt)
 	}
 	d := &DockerExecutor{Runtime: rt, ImagePrefix: "recruiting-runner-"}
-	for _, lang := range []string{"python", "node", "go", "java"} {
-		if err := exec.Command("docker", "image", "inspect", d.ImagePrefix+lang).Run(); err != nil {
-			t.Logf("building missing image %s%s", d.ImagePrefix, lang)
-			cmd := exec.Command(filepath.Join(repoRoot(t), "runner", "images", "build.sh"), lang)
-			cmd.Dir = repoRoot(t)
-			if out, err := cmd.CombinedOutput(); err != nil {
-				t.Fatalf("build image %s: %v\n%s", lang, err, out)
-			}
+	// python carries the hardening tests, so build it when it is missing; every
+	// other language skips instead (see requireImage).
+	if err := exec.Command("docker", "image", "inspect", d.ImagePrefix+"python").Run(); err != nil {
+		t.Logf("building missing image %spython", d.ImagePrefix)
+		cmd := exec.Command(filepath.Join(repoRoot(t), "runner", "images", "build.sh"), "python")
+		cmd.Dir = repoRoot(t)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("build image python: %v\n%s", err, out)
 		}
 	}
 	return d
+}
+
+// requireImage skips rather than fails when a language image has not been
+// built: the full set is large and `make runner-images` is a separate step.
+func requireImage(t *testing.T, d *DockerExecutor, lang string) {
+	t.Helper()
+	if err := exec.Command("docker", "image", "inspect", d.ImagePrefix+lang).Run(); err != nil {
+		t.Skipf("image %s%s not built; run `RUNNER_LANGUAGES=%s make runner-images`", d.ImagePrefix, lang, lang)
+	}
 }
 
 func TestGVisorRuntimeSelected(t *testing.T) {
@@ -94,22 +104,60 @@ func one(input, expected string) []Test {
 	return []Test{{ID: uuid.NewString(), Input: input, Expected: expected, Weight: 1}}
 }
 
-var hello = map[string]string{
-	"python": "import sys\nprint(sys.stdin.read().strip() + ' world')\n",
-	"node":   "const s=require('fs').readFileSync(0,'utf8');console.log(s.trim()+' world');\n",
-	"go":     "package main\nimport (\"bufio\";\"fmt\";\"os\")\nfunc main(){s,_:=bufio.NewReader(os.Stdin).ReadString('\\n');fmt.Println(strings(s)+\" world\")}\nfunc strings(s string) string { for len(s)>0 && (s[len(s)-1]=='\\n'||s[len(s)-1]==' ') { s=s[:len(s)-1] }; return s }\n",
-	"java":   "import java.util.*;public class Main{public static void main(String[] a){Scanner s=new Scanner(System.in);System.out.println(s.nextLine().trim()+\" world\");}}\n",
+// helloWorlds echoes one stdin line back with " world" appended, once per code
+// language in the registry (internal/domain/languages.go), in registry order.
+var helloWorlds = []struct{ lang, source string }{
+	{"python", "import sys\nprint(sys.stdin.readline().strip() + ' world')\n"},
+	{"javascript", "const s=require('fs').readFileSync(0,'utf8');console.log(s.split('\\n')[0].trim()+' world');\n"},
+	{"typescript", "const s: string = require('fs').readFileSync(0,'utf8');const line: string = s.split('\\n')[0];console.log(line.trim()+' world');\n"},
+	{"go", "package main\n\nimport (\n\t\"bufio\"\n\t\"fmt\"\n\t\"os\"\n\t\"strings\"\n)\n\nfunc main() {\n\tline, _ := bufio.NewReader(os.Stdin).ReadString('\\n')\n\tfmt.Println(strings.TrimSpace(line) + \" world\")\n}\n"},
+	{"java", "import java.util.*;\npublic class Main{public static void main(String[] a){Scanner s=new Scanner(System.in);System.out.println(s.nextLine().trim()+\" world\");}}\n"},
+	{"c", "#include <stdio.h>\n#include <string.h>\nint main(void){char b[256];if(!fgets(b,sizeof b,stdin))return 1;b[strcspn(b,\"\\r\\n\")]=0;printf(\"%s world\\n\",b);return 0;}\n"},
+	{"cpp", "#include <iostream>\n#include <string>\nint main(){std::string s;std::getline(std::cin,s);while(!s.empty()&&(s.back()=='\\r'||s.back()==' '))s.pop_back();std::cout<<s<<\" world\"<<std::endl;}\n"},
+	{"rust", "use std::io::BufRead;\nfn main(){let mut s=String::new();std::io::stdin().lock().read_line(&mut s).unwrap();println!(\"{} world\", s.trim());}\n"},
+	{"php", "<?php\n$s = trim(fgets(STDIN));\necho $s . \" world\\n\";\n"},
+	{"ruby", "puts \"#{$stdin.gets.strip} world\"\n"},
+	{"haskell", "main :: IO ()\nmain = do\n  l <- getLine\n  putStrLn (l ++ \" world\")\n"},
+	{"lua", "print(io.read(\"l\") .. \" world\")\n"},
+	{"kotlin", "fun main() {\n    println(readLine()!!.trim() + \" world\")\n}\n"},
+	{"csharp", "class Program { static void Main() { System.Console.WriteLine(System.Console.ReadLine().Trim() + \" world\"); } }\n"},
+}
+
+// The hello-world table, the images on disk, and build.sh's default set must
+// name the same languages, or a language silently stops being exercised.
+func TestEveryLanguageHasAnImageDefinition(t *testing.T) {
+	root := repoRoot(t)
+	var want []string
+	for _, hw := range helloWorlds {
+		want = append(want, hw.lang)
+		if _, err := os.Stat(filepath.Join(root, "runner", "images", hw.lang, "Dockerfile")); err != nil {
+			t.Errorf("no image for %s: %v", hw.lang, err)
+		}
+	}
+	script, err := os.ReadFile(filepath.Join(root, "runner", "images", "build.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, rest, ok := strings.Cut(string(script), "\nall=(")
+	if !ok {
+		t.Fatal("build.sh has no all=() default set")
+	}
+	list, _, _ := strings.Cut(rest, ")")
+	if got := strings.Fields(list); !slices.Equal(got, want) {
+		t.Errorf("build.sh builds %v, hello-world table covers %v", got, want)
+	}
 }
 
 func TestHelloWorldAndFailingTestPerLanguage(t *testing.T) {
 	d := dockerExecutor(t)
-	for lang, src := range hello {
-		t.Run(lang, func(t *testing.T) {
+	for _, hw := range helloWorlds {
+		t.Run(hw.lang, func(t *testing.T) {
+			requireImage(t, d, hw.lang)
 			tests := []Test{
 				{ID: uuid.NewString(), Input: "hello\n", Expected: "hello world", Weight: 1},
 				{ID: uuid.NewString(), Input: "bye\n", Expected: "not this", Weight: 1},
 			}
-			resp := run(t, d, lang, src, tests, DefaultLimits)
+			resp := run(t, d, hw.lang, hw.source, tests, DefaultLimits)
 			if resp.Status != StatusOK {
 				t.Fatalf("status %s: compile=%q results=%+v", resp.Status, resp.CompileOutput, resp.Results)
 			}
@@ -133,9 +181,51 @@ func sha(s string) string {
 
 func TestCompileErrorReported(t *testing.T) {
 	d := dockerExecutor(t)
-	resp := run(t, d, "go", "package main\nfunc main() { undefined() }\n", one("", ""), DefaultLimits)
-	if resp.Status != StatusCompileError || !strings.Contains(resp.CompileOutput, "undefined") {
-		t.Fatalf("status %s output %q", resp.Status, resp.CompileOutput)
+	// want is a fragment of the toolchain's own diagnostic, so the candidate
+	// sees the compiler's message and not a generic failure.
+	cases := []struct{ lang, source, want string }{
+		{"go", "package main\nfunc main() { undefined() }\n", "undefined"},
+		{"c", "int main(void){ return nope(); }\n", "nope"},
+		{"rust", "fn main(){ nope(); }\n", "nope"},
+		{"java", "public class Main{public static void main(String[] a){nope();}}\n", "nope"},
+	}
+	for _, c := range cases {
+		t.Run(c.lang, func(t *testing.T) {
+			requireImage(t, d, c.lang)
+			resp := run(t, d, c.lang, c.source, one("", ""), DefaultLimits)
+			if resp.Status != StatusCompileError || !strings.Contains(resp.CompileOutput, c.want) {
+				t.Fatalf("status %s output %q", resp.Status, resp.CompileOutput)
+			}
+		})
+	}
+}
+
+// busyLoops spin forever without allocating, so only the wall clock can end
+// them. The compiled languages are the ones where a stuck child could outlive
+// the harness, so they are the ones asserted.
+var busyLoops = []struct{ lang, source string }{
+	{"c", "int main(void){ for(;;){} }\n"},
+	{"rust", "fn main(){ loop { std::hint::spin_loop(); } }\n"},
+	{"haskell", "main :: IO ()\nmain = let go n = if n > (0 :: Int) then go n else go n in go 1\n"},
+	{"kotlin", "fun main() { while (true) { } }\n"},
+}
+
+func TestCompiledLanguageBusyLoopKilled(t *testing.T) {
+	d := dockerExecutor(t)
+	for _, bl := range busyLoops {
+		t.Run(bl.lang, func(t *testing.T) {
+			requireImage(t, d, bl.lang)
+			limits := DefaultLimits
+			limits.WallMs = 1000
+			start := time.Now()
+			resp := run(t, d, bl.lang, bl.source, one("", ""), limits)
+			if resp.Status != StatusTimeout && resp.Results[0].Status != TestTimeout {
+				t.Fatalf("not timed out: %+v", resp)
+			}
+			if time.Since(start) > 3*time.Minute {
+				t.Fatalf("wall kill took %s", time.Since(start))
+			}
+		})
 	}
 }
 
@@ -191,7 +281,18 @@ print("done")
 	limits := DefaultLimits
 	limits.PIDs = 32
 	limits.WallMs = 3000
-	resp := run(t, d, "python", src, one("", "capped True\ndone"), limits)
+	// The request id is chosen here so the reaping check names this run's own
+	// container: any other runner container on the host belongs to someone else.
+	id := uuid.NewString()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	resp := d.Execute(ctx, &Request{
+		ID:       id,
+		Language: "python",
+		Source:   src,
+		Tests:    one("", "capped True\ndone"),
+		Limits:   limits,
+	})
 	if resp.Status == StatusError {
 		t.Fatalf("runner errored: %+v", resp)
 	}
@@ -201,8 +302,9 @@ print("done")
 	if st != TestPass && st != TestTimeout && st != TestError {
 		t.Fatalf("unexpected %+v", resp.Results[0])
 	}
-	if out, _ := exec.Command("docker", "ps", "-q", "--filter", "name=runner-").Output(); strings.TrimSpace(string(out)) != "" {
-		t.Fatalf("containers left running: %s", out)
+	name := containerName(id)
+	if out, _ := exec.Command("docker", "ps", "-q", "--filter", "name="+name).Output(); strings.TrimSpace(string(out)) != "" {
+		t.Fatalf("container %s left running: %s", name, out)
 	}
 }
 

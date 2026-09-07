@@ -56,18 +56,18 @@ templ suggestionsPanel(jobID uuid.UUID, list []service.PoolSuggestion, note pane
 	</section>
 }
 
-// FlagButton is the "mark high quality" action a pipeline or application
-// screen embeds: one click files the candidate in the talent pool. It
-// replaces itself with what the flag did.
+// FlagButton is the shortlist action the candidate detail screen embeds: one
+// click files the candidate in the talent pool, which is the qualified set a
+// shortlist is built from. It replaces itself with what the flag did.
 templ FlagButton(applicationID uuid.UUID) {
 	<span id="pool-flag">
-		<button type="button" hx-post={ FlagPath(applicationID) } hx-target="#pool-flag" hx-swap="outerHTML">Mark high quality</button>
+		<button type="button" hx-post={ FlagPath(applicationID) } hx-target="#pool-flag" hx-swap="outerHTML">Add to shortlist</button>
 	</span>
 }
 
 templ flagged(e service.PoolEntry) {
 	<span id="pool-flag" class="muted">
-		In the talent pool ·
+		On the shortlist ·
 		<a href={ templ.SafeURL(entryPath(e)) }>edit the entry</a>
 	</span>
 }

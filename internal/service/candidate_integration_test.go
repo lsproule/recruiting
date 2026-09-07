@@ -29,6 +29,7 @@ type fakeBlob struct {
 	mu      sync.Mutex
 	objects map[string][]byte
 	putErr  error
+	delErr  error
 }
 
 func newFakeBlob() *fakeBlob { return &fakeBlob{objects: map[string][]byte{}} }
@@ -48,6 +49,9 @@ func (b *fakeBlob) Put(_ context.Context, key string, r io.Reader, _ int64, _ st
 }
 
 func (b *fakeBlob) Delete(_ context.Context, key string) error {
+	if b.delErr != nil {
+		return b.delErr
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	delete(b.objects, key)

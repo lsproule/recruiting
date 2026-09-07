@@ -72,7 +72,7 @@ type handlers struct{ d Deps }
 func (h *handlers) page(r *http.Request, title, current string, flashes ...layout.Flash) layout.Page {
 	p, _ := middleware.PrincipalFrom(r.Context())
 	return layout.Page{
-		Title: title, Surface: layout.SurfaceApp, Nav: layout.AppNav(p, current),
+		Title: title, Surface: layout.SurfaceApp, Nav: layout.AppNav(p, current), UserRole: layout.RoleLabel(p), Menu: layout.AppMenu(p, current),
 		Flashes: flashes, CSRF: middleware.CSRFToken(r), UserName: h.displayName(r, p),
 	}
 }
@@ -287,6 +287,7 @@ func settingsFromForm(r *http.Request) (service.Settings, error) {
 	}
 	intField(service.SettingPoolScoreThreshold, &s.PoolScoreThreshold)
 	intField(service.SettingAssessmentInviteDays, &s.AssessmentInviteDays)
+	intField(service.SettingSnapshotRetentionDays, &s.SnapshotRetentionDays)
 	for _, name := range service.IntegritySignalNames {
 		v := strings.TrimSpace(r.PostFormValue("weight." + name))
 		if v == "" {

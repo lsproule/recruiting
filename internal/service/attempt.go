@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 	"time"
@@ -43,7 +44,12 @@ const (
 // Event kinds the recording accepts.
 var attemptEventKinds = map[string]bool{
 	"edit": true, "paste": true, "focus": true, "blur": true, "run": true, "submit": true, "lang_change": true,
+	"keymap": true, "fullscreen_enter": true, "fullscreen_exit": true, "snapshot": true, "consent": true,
 }
+
+// AttemptKeymaps are the editor keymaps a candidate may choose between; the
+// island's control offers exactly these.
+var AttemptKeymaps = []string{"default", "vim", "emacs"}
 
 // MaxEventBatch bounds one ingest call.
 const MaxEventBatch = 500
@@ -98,6 +104,9 @@ type Attempt struct {
 	ExpiresAt       time.Time
 	FinishedAt      time.Time
 	LastEventSeq    int64
+	// Preview marks a recruiter's own sitting: it belongs to no application
+	// and nothing downstream reads it.
+	Preview bool
 }
 
 // Closed reports whether the candidate can no longer work on the attempt.
@@ -177,6 +186,11 @@ type AttemptService struct {
 	baseURL string
 	// Now is the clock the timer is enforced on; tests replace it.
 	Now func() time.Time
+	// Blobs is object storage the preview purge clears; nil leaves stored
+	// objects alone.
+	Blobs BlobStore
+	// Logger notes what a sweep could not clear. Nil disables it.
+	Logger *slog.Logger
 }
 
 // NewAttemptService wires the store, the queue runs and finalization go to,
@@ -245,6 +259,10 @@ func (s *AttemptService) Start(ctx context.Context, p Principal) (AttemptSession
 		if err != nil {
 			return err
 		}
+		integrity := toAssessment(a).Integrity
+		if ConsentRequired(integrity) && !att.ConsentAt.Valid {
+			return ErrConsentRequired
+		}
 		now := s.Now()
 		deadline := now.Add(time.Duration(a.DurationMinutes) * time.Minute)
 		row, err := tx.Q.StartAttempt(ctx, db.StartAttemptParams{ID: id, StartedAt: ts(now), ExpiresAt: ts(deadline)})
@@ -257,6 +275,17 @@ func (s *AttemptService) Start(ctx context.Context, p Principal) (AttemptSession
 			Purpose: LinkAssessment, SubjectID: id, ExpiresAt: ts(deadline.Add(LinkGrace)),
 		}); err != nil {
 			return err
+		}
+		if ConsentRequired(integrity) {
+			// The recording opens with what was agreed to, so a reviewer
+			// reads the terms before the session they produced.
+			if err := s.appendConsentEvent(ctx, tx, row, integrity); err != nil {
+				return err
+			}
+			row, err = tx.Q.GetAttempt(ctx, id)
+			if err != nil {
+				return err
+			}
 		}
 		out, err = s.session(ctx, tx, row)
 		return err
@@ -553,6 +582,34 @@ func validateEvent(ev AttemptEvent, a Assessment, now time.Time) error {
 		if err := json.Unmarshal(ev.Data, &d); err != nil || !containsString(sessionLanguages(a, *problem), d.Language) {
 			problems = "lang_change language is not allowed for the problem"
 		}
+	case "keymap":
+		var d struct {
+			Keymap string `json:"keymap"`
+		}
+		if err := json.Unmarshal(ev.Data, &d); err != nil || !containsString(AttemptKeymaps, d.Keymap) {
+			problems = "keymap must be one of " + strings.Join(AttemptKeymaps, ", ")
+		}
+	case "snapshot":
+		var d struct {
+			Seq *int  `json:"seq"`
+			OK  *bool `json:"ok"`
+		}
+		switch err := json.Unmarshal(ev.Data, &d); {
+		case err != nil:
+			problems = "snapshot data is not an object"
+		case d.Seq == nil || *d.Seq < 0:
+			problems = "snapshot seq must be a non-negative integer"
+		case d.OK == nil:
+			problems = "snapshot ok must be a boolean"
+		}
+	case "consent":
+		var d struct {
+			Webcam  *bool `json:"webcam"`
+			PhotoID *bool `json:"photo_id"`
+		}
+		if err := json.Unmarshal(ev.Data, &d); err != nil || d.Webcam == nil || d.PhotoID == nil {
+			problems = "consent needs webcam and photo_id booleans"
+		}
 	}
 	if problems != "" {
 		return fmt.Errorf("%w: seq %d: %s", ErrEventInvalid, ev.Seq, problems)
@@ -720,14 +777,15 @@ func (s *AttemptService) checkLanguage(ctx context.Context, tx *store.Tx, att db
 	return Problem{}, ErrProblemNotInSet
 }
 
-// sessionLanguages narrows a problem's languages by the assessment's
-// override. An override the problem does not support is ignored rather than
-// leaving the candidate with nothing.
+// sessionLanguages narrows a problem's languages to the assessment's allowed
+// set and then to its override. An override outside that intersection is
+// ignored rather than leaving the candidate with nothing.
 func sessionLanguages(a Assessment, p Problem) []string {
-	if a.LanguageOverride != "" && containsString(p.AllowedLanguages, a.LanguageOverride) {
+	langs := intersectLanguages(a.AllowedLanguages, p.AllowedLanguages)
+	if a.LanguageOverride != "" && containsString(langs, a.LanguageOverride) {
 		return []string{a.LanguageOverride}
 	}
-	return p.AllowedLanguages
+	return langs
 }
 
 func (s *AttemptService) session(ctx context.Context, tx *store.Tx, att db.Attempt) (AttemptSession, error) {
@@ -743,11 +801,16 @@ func (s *AttemptService) session(ctx context.Context, tx *store.Tx, att db.Attem
 	for _, src := range sources {
 		synced[src.ProblemID] = src
 	}
-	card, err := tx.Q.GetApplicationCard(ctx, att.ApplicationID)
-	if err != nil {
-		return AttemptSession{}, err
+	out := AttemptSession{Attempt: toAttempt(att), Assessment: a}
+	if att.ApplicationID.Valid {
+		card, err := tx.Q.GetApplicationCard(ctx, att.ApplicationID.UUID)
+		if err != nil {
+			return AttemptSession{}, err
+		}
+		out.CandidateName, out.JobTitle = card.CandidateName, card.JobTitle
+	} else {
+		out.CandidateName, out.JobTitle = PreviewCandidateName, a.Name
 	}
-	out := AttemptSession{Attempt: toAttempt(att), Assessment: a, CandidateName: card.CandidateName, JobTitle: card.JobTitle}
 	out.Assessment.Problems = nil
 	for _, p := range a.Problems {
 		sp := SessionProblem{
@@ -772,8 +835,9 @@ func (s *AttemptService) session(ctx context.Context, tx *store.Tx, att db.Attem
 
 func toAttempt(r db.Attempt) Attempt {
 	return Attempt{
-		ID: r.ID, OrgID: r.OrgID, ApplicationID: r.ApplicationID, AssessmentID: r.AssessmentID, StageID: r.StageID,
-		Status: r.Status, InvitedAt: r.InvitedAt.Time.UTC(), InviteExpiresAt: r.InviteExpiresAt.Time.UTC(),
+		ID: r.ID, OrgID: r.OrgID, ApplicationID: r.ApplicationID.UUID, AssessmentID: r.AssessmentID, StageID: r.StageID.UUID,
+		Preview: r.Preview,
+		Status:  r.Status, InvitedAt: r.InvitedAt.Time.UTC(), InviteExpiresAt: r.InviteExpiresAt.Time.UTC(),
 		StartedAt: r.StartedAt.Time.UTC(), ExpiresAt: r.ExpiresAt.Time.UTC(), FinishedAt: r.FinishedAt.Time.UTC(),
 		LastEventSeq: r.LastEventSeq,
 	}

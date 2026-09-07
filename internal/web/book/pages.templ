@@ -61,14 +61,6 @@ templ bookingPage(page layout.Page, b service.Booking, action string, tz string,
 			</div>
 		}
 		@pickerScript()
-		<style>
-			.current { border: 1px solid var(--line); padding: .5rem 1rem; margin-top: 1rem; }
-			.days { display: grid; grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr)); gap: .75rem; margin-top: 1rem; }
-			.day h3 { font-size: 1rem; margin: 0 0 .5rem; }
-			.pick { display: block; width: 100%; margin-bottom: .3rem; }
-			.pick.on { outline: 2px solid #1a1a1a; font-weight: 600; }
-			select { width: auto; }
-		</style>
 	}
 }
 

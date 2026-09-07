@@ -22,12 +22,26 @@ const (
 	VisibilityHidden = "hidden"
 )
 
-// Difficulties and languages a problem may declare, in the order screens list
-// them. Languages match the runner's wire protocol.
-var (
-	ProblemDifficulties = []string{"easy", "medium", "hard"}
-	ProblemLanguages    = []string{"python", "node", "go", "java", "sql"}
+// Test case classes, in the order the authoring table offers them. The class
+// says what a case is for — the worked example, a boundary, a load test, or
+// the body of the problem — so a failing case names a weakness rather than a
+// row number.
+const (
+	CaseClassSample = "sample"
+	CaseClassEdge   = "edge"
+	CaseClassPerf   = "perf"
+	CaseClassCore   = "core"
 )
+
+// TestCaseClasses is every class a case may declare, in authoring order.
+var TestCaseClasses = []string{CaseClassSample, CaseClassEdge, CaseClassPerf, CaseClassCore}
+
+// Difficulties a problem may declare, in the order screens list them.
+var ProblemDifficulties = []string{"easy", "medium", "hard"}
+
+// ProblemLanguages is the language registry flattened to ids; the runner's
+// wire protocol derives from the same list so the two cannot drift.
+var ProblemLanguages = languageIDs()
 
 // Limits a problem falls back to and the bounds an import may ask for.
 const (
@@ -42,27 +56,43 @@ const (
 	// executed before anything is stored, so the batch is also a bound on how
 	// long an import holds the runner.
 	MaxImportProblems = 50
+	// DefaultRecommendedMinutes is how long a problem is expected to take
+	// when the author does not say.
+	DefaultRecommendedMinutes = 45
+	// MaxRecommendedMinutes matches the column's own bound; a problem longer
+	// than a working day is a mistake.
+	MaxRecommendedMinutes = 480
+	// MaxCaseNameLength keeps a case name to something a results table can
+	// show in one column.
+	MaxCaseNameLength = 80
 )
 
 // ImportProblem is one problem as it appears in an import document. The JSON
 // names are the documented import format; see seed/problems/README.md.
 type ImportProblem struct {
-	Kind             string            `json:"kind"`
-	Title            string            `json:"title"`
-	Statement        string            `json:"statement"`
-	Difficulty       string            `json:"difficulty"`
-	Tags             []string          `json:"tags"`
-	AllowedLanguages []string          `json:"allowed_languages"`
-	TimeLimitMs      int               `json:"time_limit_ms"`
-	MemoryLimitKB    int               `json:"memory_limit_kb"`
-	SQLSchema        string            `json:"sql_schema"`
-	SQLSeed          string            `json:"sql_seed"`
-	References       []ImportReference `json:"reference_solutions"`
-	TestCases        []ImportTestCase  `json:"test_cases"`
+	Kind             string   `json:"kind"`
+	Title            string   `json:"title"`
+	Statement        string   `json:"statement"`
+	Difficulty       string   `json:"difficulty"`
+	Tags             []string `json:"tags"`
+	AllowedLanguages []string `json:"allowed_languages"`
+	TimeLimitMs      int      `json:"time_limit_ms"`
+	MemoryLimitKB    int      `json:"memory_limit_kb"`
+	SQLSchema        string   `json:"sql_schema"`
+	SQLSeed          string   `json:"sql_seed"`
+	// RecommendedMinutes is how long the problem should take; it sizes an
+	// assessment rather than limiting one attempt.
+	RecommendedMinutes int `json:"recommended_minutes"`
+	// Guidelines are what an interviewer watches for. They are internal: no
+	// candidate and no client ever sees them.
+	Guidelines string            `json:"guidelines"`
+	References []ImportReference `json:"reference_solutions"`
+	TestCases  []ImportTestCase  `json:"test_cases"`
 }
 
-// ImportReference is a solution that must pass every test case; the import
-// proves the problem is solvable in each language it offers.
+// ImportReference is a solution that must pass every test case; one is enough
+// to prove a problem solvable, since 15 languages make one per allowed
+// language unauthorable.
 type ImportReference struct {
 	Language string `json:"language"`
 	Source   string `json:"source"`
@@ -72,6 +102,8 @@ type ImportReference struct {
 // pointer so an omitted weight (which defaults to 1) is told apart from an
 // explicit zero, which is refused.
 type ImportTestCase struct {
+	Name       string   `json:"name"`
+	Class      string   `json:"class"`
 	Input      string   `json:"input"`
 	Expected   string   `json:"expected"`
 	Visibility string   `json:"visibility"`
@@ -185,7 +217,8 @@ func (p *ImportProblem) Normalize() {
 		p.Difficulty = "medium"
 	}
 	p.Tags = normalizeList(p.Tags)
-	p.AllowedLanguages = normalizeList(p.AllowedLanguages)
+	p.AllowedLanguages = normalizeList(mapList(p.AllowedLanguages, NormalizeLanguageID))
+	p.AllowedLanguages = normalizeList(expandLanguageAny(p.Kind, p.AllowedLanguages))
 	if p.Kind == ProblemKindSQL && len(p.AllowedLanguages) == 0 {
 		p.AllowedLanguages = []string{"sql"}
 	}
@@ -195,16 +228,30 @@ func (p *ImportProblem) Normalize() {
 	if p.MemoryLimitKB <= 0 {
 		p.MemoryLimitKB = DefaultProblemMemoryLimitKB
 	}
+	if p.RecommendedMinutes <= 0 {
+		p.RecommendedMinutes = DefaultRecommendedMinutes
+	}
+	p.Guidelines = strings.TrimSpace(p.Guidelines)
 	p.SQLSchema = strings.TrimSpace(p.SQLSchema)
 	p.SQLSeed = strings.TrimSpace(p.SQLSeed)
 	for i := range p.References {
-		p.References[i].Language = strings.ToLower(strings.TrimSpace(p.References[i].Language))
+		p.References[i].Language = NormalizeLanguageID(p.References[i].Language)
 	}
 	for i := range p.TestCases {
 		tc := &p.TestCases[i]
 		tc.Visibility = strings.ToLower(strings.TrimSpace(tc.Visibility))
 		if tc.Visibility == "" {
 			tc.Visibility = VisibilityPublic
+		}
+		tc.Name = strings.TrimSpace(tc.Name)
+		tc.Class = strings.ToLower(strings.TrimSpace(tc.Class))
+		if tc.Class == "" {
+			// A case the author did not class is a sample when the candidate
+			// can see it and part of the body of the problem otherwise.
+			tc.Class = CaseClassCore
+			if tc.Visibility == VisibilityPublic {
+				tc.Class = CaseClassSample
+			}
 		}
 		if tc.Weight == nil {
 			one := 1.0
@@ -241,6 +288,9 @@ func (p ImportProblem) Validate() []string {
 	}
 	if p.MemoryLimitKB > MaxProblemMemoryLimitKB {
 		add("memory_limit_kb %d exceeds the %d kB cap", p.MemoryLimitKB, MaxProblemMemoryLimitKB)
+	}
+	if p.RecommendedMinutes > MaxRecommendedMinutes {
+		add("recommended_minutes %d exceeds the %d minute cap", p.RecommendedMinutes, MaxRecommendedMinutes)
 	}
 
 	if len(p.AllowedLanguages) == 0 {
@@ -295,13 +345,6 @@ func (p ImportProblem) validateReferences() []string {
 			errs = append(errs, fmt.Sprintf("reference_solutions[%d] has no source", i))
 		}
 	}
-	// A candidate may pick any allowed language, so every one of them must be
-	// proven solvable before the problem enters the bank.
-	for _, lang := range p.AllowedLanguages {
-		if !seen[lang] {
-			errs = append(errs, fmt.Sprintf("%s is allowed but has no reference solution", lang))
-		}
-	}
 	return errs
 }
 
@@ -322,6 +365,12 @@ func (p ImportProblem) validateTestCases() []string {
 		default:
 			errs = append(errs, fmt.Sprintf("test_cases[%d] has unknown visibility %q", i, tc.Visibility))
 		}
+		if !contains(TestCaseClasses, tc.Class) {
+			errs = append(errs, fmt.Sprintf("test_cases[%d] has unknown class %q (want %s)", i, tc.Class, strings.Join(TestCaseClasses, ", ")))
+		}
+		if len(tc.Name) > MaxCaseNameLength {
+			errs = append(errs, fmt.Sprintf("test_cases[%d] has a name longer than %d characters", i, MaxCaseNameLength))
+		}
 		if tc.WeightValue() <= 0 {
 			errs = append(errs, fmt.Sprintf("test_cases[%d] has weight %v; a weight must be positive", i, tc.WeightValue()))
 		}
@@ -330,6 +379,15 @@ func (p ImportProblem) validateTestCases() []string {
 		errs = append(errs, "at least one test case must be public so the candidate sees an example")
 	}
 	return errs
+}
+
+// mapList applies f to every entry, leaving de-duplication to normalizeList.
+func mapList(in []string, f func(string) string) []string {
+	out := make([]string, len(in))
+	for i, v := range in {
+		out[i] = f(v)
+	}
+	return out
 }
 
 // normalizeList trims, lower-cases, and de-duplicates a tag or language list,
@@ -357,4 +415,53 @@ func contains(list []string, v string) bool {
 		}
 	}
 	return false
+}
+
+// ValidateDraft is what a half-finished problem is held to. An author moving
+// between wizard steps has not written the cases or the solutions yet, so
+// only the fields that are already typed are checked; a draft is never
+// runnable and never attachable, so nothing downstream depends on the rest.
+// Normalize must have run first.
+func (p ImportProblem) ValidateDraft() []string {
+	var errs []string
+	add := func(format string, args ...any) { errs = append(errs, fmt.Sprintf(format, args...)) }
+	switch p.Kind {
+	case ProblemKindCode, ProblemKindSQL:
+	case "":
+		add("kind is required (%s or %s)", ProblemKindCode, ProblemKindSQL)
+	default:
+		add("unknown kind %q", p.Kind)
+	}
+	if p.Title == "" {
+		add("title is required")
+	}
+	if !contains(ProblemDifficulties, p.Difficulty) {
+		add("unknown difficulty %q (want %s)", p.Difficulty, strings.Join(ProblemDifficulties, ", "))
+	}
+	if p.TimeLimitMs > MaxProblemTimeLimitMs {
+		add("time_limit_ms %d exceeds the %d ms cap", p.TimeLimitMs, MaxProblemTimeLimitMs)
+	}
+	if p.MemoryLimitKB > MaxProblemMemoryLimitKB {
+		add("memory_limit_kb %d exceeds the %d kB cap", p.MemoryLimitKB, MaxProblemMemoryLimitKB)
+	}
+	if p.RecommendedMinutes > MaxRecommendedMinutes {
+		add("recommended_minutes %d exceeds the %d minute cap", p.RecommendedMinutes, MaxRecommendedMinutes)
+	}
+	for _, lang := range p.AllowedLanguages {
+		if !contains(ProblemLanguages, lang) {
+			add("unknown language %q in allowed_languages (want %s)", lang, strings.Join(ProblemLanguages, ", "))
+		}
+	}
+	for i, tc := range p.TestCases {
+		if !contains(TestCaseClasses, tc.Class) {
+			add("test_cases[%d] has unknown class %q (want %s)", i, tc.Class, strings.Join(TestCaseClasses, ", "))
+		}
+	}
+	return errs
+}
+
+// Quality is the problem as the quality review scores it, given the languages
+// a reference solution has been proven in.
+func (p ImportProblem) Quality(proven []string) QualityInput {
+	return QualityInput{Statement: p.Statement, Tags: p.Tags, TestCases: p.TestCases, ProvenLanguages: proven}
 }

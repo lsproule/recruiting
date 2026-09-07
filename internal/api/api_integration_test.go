@@ -248,3 +248,20 @@ func TestAnAdminCannotRevokeAnotherOrgsToken(t *testing.T) {
 		t.Fatalf("token after a refused cross-org revoke: status = %d, want 200", got)
 	}
 }
+
+// The try endpoint runs code, so it is an org-user operation: a client
+// credential is refused before any problem is loaded.
+func TestTryEndpointRefusesAClientCredential(t *testing.T) {
+	f := newAPIFixture(t)
+	_, clientToken, err := f.tokens.Issue(f.ctx, f.admin(), service.NewAPIToken{Name: "portal", UserID: f.clientID, ClientUser: true})
+	if err != nil {
+		t.Fatalf("issue client token: %v", err)
+	}
+	path := "/api/v1/problems/" + uuid.New().String() + "/try"
+	if got, body := f.call(t, http.MethodPost, path, clientToken); got != http.StatusForbidden {
+		t.Errorf("client token on %s: status = %d, want 403; body %s", path, got, body)
+	}
+	if got, _ := f.call(t, http.MethodPost, path, ""); got != http.StatusUnauthorized {
+		t.Errorf("no credential on %s: status = %d, want 401", path, got)
+	}
+}

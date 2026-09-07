@@ -27,6 +27,14 @@ const Prefix = "/app/problems"
 // ImportPath is the upload screen that takes a JSON batch.
 const ImportPath = Prefix + "/import"
 
+// StepPath stores the authoring draft and answers with the wizard on the
+// step the author asked for; VerifyPath runs the reference solutions and
+// answers with the grid. Both are htmx fragments of the authoring screen.
+const (
+	StepPath   = Prefix + "/step"
+	VerifyPath = Prefix + "/verify"
+)
+
 // MaxImportBytes bounds an uploaded batch. A hundred problems with their test
 // cases sit far inside it; anything larger is a mistake, not a bank.
 const MaxImportBytes = 4 << 20
@@ -59,10 +67,14 @@ func Mount(r chi.Router, d Deps) {
 		r.Get("/", h.list)
 		r.Get("/new", h.newProblem)
 		r.Post("/", h.create)
+		r.Post("/step", h.step)
+		r.Post("/verify", h.verify)
 		r.Get("/import", h.importForm)
 		r.Post("/import", h.importBatch)
 		r.Get("/{id}", h.detail)
 		r.Get("/{id}/edit", h.edit)
+		r.Get("/{id}/try", h.tryIt)
+		r.Post("/{id}/clone", h.clone)
 		r.Post("/{id}", h.update)
 		r.Post("/{id}/delete", h.remove)
 	})
@@ -92,7 +104,7 @@ func render(w http.ResponseWriter, r *http.Request, status int, c templ.Componen
 func (h *handlers) page(r *http.Request, title string) layout.Page {
 	p, _ := middleware.PrincipalFrom(r.Context())
 	return layout.Page{
-		Title: title, Surface: layout.SurfaceApp, Nav: layout.AppNav(p, Prefix),
+		Title: title, Surface: layout.SurfaceApp, Nav: layout.AppNav(p, Prefix), UserRole: layout.RoleLabel(p), Menu: layout.AppMenu(p, Prefix),
 		CSRF: middleware.CSRFToken(r), UserName: h.displayName(r, p),
 	}
 }
@@ -133,7 +145,8 @@ func statusFor(err error) int {
 	case errors.Is(err, service.ErrNotFound):
 		return http.StatusNotFound
 	case errors.Is(err, service.ErrPlatformProblem), errors.Is(err, service.ErrProblemTitleTaken),
-		errors.Is(err, service.ErrNoExecutor):
+		errors.Is(err, service.ErrNoExecutor), errors.Is(err, service.ErrProblemInvalid),
+		errors.Is(err, service.ErrProblemQuality):
 		return http.StatusUnprocessableEntity
 	}
 	return http.StatusInternalServerError
@@ -179,11 +192,109 @@ func (h *handlers) detail(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handlers) newProblem(w http.ResponseWriter, r *http.Request) {
-	render(w, r, http.StatusOK, formPage(h.page(r, "New problem"), problemForm{
-		New: true, Difficulty: "medium", Kind: domain.ProblemKindCode,
-		TimeLimitMs: domain.DefaultProblemTimeLimitMs, MemoryLimitKB: domain.DefaultProblemMemoryLimitKB,
-		References: make([]referenceRow, formRows), TestCases: make([]testCaseRow, formRows),
-	}, nil))
+	form := newForm()
+	form.Return = strings.TrimSpace(r.URL.Query().Get("return"))
+	render(w, r, http.StatusOK, formPage(h.page(r, "New problem"), form, nil))
+}
+
+// step stores what the author has typed so far as a draft and answers with
+// the wizard on the step they asked for. A draft is never verified, so it
+// scores zero and cannot be attached to an assessment until it is saved for
+// real; that is what makes leaving the wizard safe.
+func (h *handlers) step(w http.ResponseWriter, r *http.Request) {
+	p, _ := middleware.PrincipalFrom(r.Context())
+	form := readForm(r)
+	var messages []string
+	if verified, ok := h.verifiedProven(r, p, form.ID); ok {
+		// A stored problem whose solutions have already passed is not demoted
+		// by walking the wizard: a draft proves nothing, and the author has
+		// not asked to save yet. Their edits stay on the page either way.
+		form.New, form.Proven = false, verified
+	} else {
+		saved, err := h.d.Problems.SaveDraft(r.Context(), p, form.ID, form.asImport())
+		switch {
+		case err == nil:
+			form.ID, form.New = saved.ID, false
+			form.Proven = saved.ProvenLanguages
+		case statusFor(err) == http.StatusInternalServerError:
+			h.fail(w, r, err)
+			return
+		default:
+			messages = problemMessages(err)
+		}
+	}
+	form.Step = clampStep(atoiOr(r.PostFormValue("goto"), form.Step))
+	render(w, r, http.StatusOK, wizard(form, messages))
+}
+
+// verifiedProven reports the languages a stored problem has already been
+// proven in, and whether it is such a problem at all. A new problem, a draft,
+// and one the caller cannot read all answer false.
+func (h *handlers) verifiedProven(r *http.Request, p service.Principal, id uuid.UUID) ([]string, bool) {
+	if id == uuid.Nil {
+		return nil, false
+	}
+	stored, err := h.d.Problems.Get(r.Context(), p, id)
+	if err != nil || len(stored.ProvenLanguages) == 0 {
+		return nil, false
+	}
+	return stored.ProvenLanguages, true
+}
+
+// verify runs every reference solution against every case and answers with
+// the grid, storing nothing. It is the author's dry run of the check that a
+// save then makes binding.
+func (h *handlers) verify(w http.ResponseWriter, r *http.Request) {
+	p, _ := middleware.PrincipalFrom(r.Context())
+	form := readForm(r)
+	verdicts, err := h.d.Problems.Verify(r.Context(), p, form.asImport())
+	if err != nil {
+		if statusFor(err) == http.StatusInternalServerError {
+			h.fail(w, r, err)
+			return
+		}
+		render(w, r, http.StatusUnprocessableEntity, verifyPanel(nil, problemMessages(err)))
+		return
+	}
+	render(w, r, http.StatusOK, verifyPanel(verdicts, nil))
+}
+
+// clone copies a problem into the caller's org and opens the copy for
+// editing, which is the only thing an author wants next.
+func (h *handlers) clone(w http.ResponseWriter, r *http.Request) {
+	p, _ := middleware.PrincipalFrom(r.Context())
+	id, ok := idParam(w, r, "id")
+	if !ok {
+		return
+	}
+	copied, err := h.d.Problems.Clone(r.Context(), p, id)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	http.Redirect(w, r, Prefix+"/"+copied.ID.String()+"/edit", http.StatusSeeOther)
+}
+
+// tryIt renders the candidate's editor against one problem. The island runs
+// in try mode: no recorder, no timer, no attempt, and Run goes to the
+// problem's own try endpoint.
+func (h *handlers) tryIt(w http.ResponseWriter, r *http.Request) {
+	p, _ := middleware.PrincipalFrom(r.Context())
+	id, ok := idParam(w, r, "id")
+	if !ok {
+		return
+	}
+	problem, err := h.d.Problems.Get(r.Context(), p, id)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	cfg, err := tryIslandConfig(problem, middleware.CSRFToken(r))
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	render(w, r, http.StatusOK, tryPage(h.page(r, "Try "+problem.Title), problem, cfg))
 }
 
 func (h *handlers) edit(w http.ResponseWriter, r *http.Request) {
@@ -208,12 +319,13 @@ func (h *handlers) create(w http.ResponseWriter, r *http.Request) {
 	p, _ := middleware.PrincipalFrom(r.Context())
 	form := readForm(r)
 	form.New = true
+	form.Step = lastStep
 	created, err := h.d.Problems.Create(r.Context(), p, form.asImport())
 	if err != nil {
 		h.renderFormError(w, r, "New problem", form, err)
 		return
 	}
-	http.Redirect(w, r, Prefix+"/"+created.ID.String(), http.StatusSeeOther)
+	http.Redirect(w, r, form.returnPath(created.ID), http.StatusSeeOther)
 }
 
 func (h *handlers) update(w http.ResponseWriter, r *http.Request) {
@@ -224,6 +336,8 @@ func (h *handlers) update(w http.ResponseWriter, r *http.Request) {
 	}
 	form := readForm(r)
 	form.ID = id
+	form.New = false
+	form.Step = lastStep
 	if _, err := h.d.Problems.Update(r.Context(), p, id, form.asImport()); err != nil {
 		h.renderFormError(w, r, "Edit "+form.Title, form, err)
 		return

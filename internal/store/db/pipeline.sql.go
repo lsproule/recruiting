@@ -250,7 +250,7 @@ func (q *Queries) HasScorecardForStage(ctx context.Context, arg HasScorecardForS
 const hasVerdictForStage = `-- name: HasVerdictForStage :one
 select exists (
     select 1 from review r join attempt t on t.id = r.attempt_id
-    where t.application_id = $1 and t.stage_id = $2
+    where t.application_id = $1::uuid and t.stage_id = $2::uuid
 )
 `
 

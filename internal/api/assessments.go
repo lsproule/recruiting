@@ -17,6 +17,8 @@ type Assessment struct {
 	DurationMinutes  int       `json:"duration_minutes"`
 	LanguageOverride string    `json:"language_override,omitempty"`
 	InviteWindowDays int       `json:"invite_window_days"`
+	AllowedLanguages []string  `json:"allowed_languages" doc:"Empty means every language each problem offers"`
+	Integrity        Integrity `json:"integrity"`
 	ProblemCount     int       `json:"problem_count"`
 	Problems         []Problem `json:"problems"`
 }
@@ -27,13 +29,29 @@ type AssessmentInput struct {
 	DurationMinutes  int         `json:"duration_minutes" minimum:"1"`
 	LanguageOverride string      `json:"language_override,omitempty"`
 	InviteWindowDays int         `json:"invite_window_days" minimum:"1"`
+	AllowedLanguages []string    `json:"allowed_languages,omitempty" doc:"Empty, or \"any\", means every language each problem offers"`
+	Integrity        Integrity   `json:"integrity,omitempty"`
 	ProblemIDs       []uuid.UUID `json:"problem_ids" minItems:"1" doc:"In the order the candidate sees them"`
 }
 
+// Integrity is what the candidate's session runs under.
+type Integrity struct {
+	Fullscreen  bool `json:"fullscreen,omitempty"`
+	BlockPaste  bool `json:"block_paste,omitempty"`
+	Webcam      bool `json:"webcam,omitempty"`
+	WebcamEvery int  `json:"webcam_interval_s,omitempty" doc:"Seconds between snapshots; 60 by default"`
+	PhotoID     bool `json:"photo_id,omitempty" doc:"Needs webcam"`
+}
+
 func assessmentView(a service.Assessment) Assessment {
+	if a.AllowedLanguages == nil {
+		// The field is always present; an absent set is the empty one.
+		a.AllowedLanguages = []string{}
+	}
 	return Assessment{
 		ID: a.ID, Name: a.Name, DurationMinutes: a.DurationMinutes,
 		LanguageOverride: a.LanguageOverride, InviteWindowDays: a.InviteWindowDays,
+		AllowedLanguages: a.AllowedLanguages, Integrity: Integrity(a.Integrity),
 		ProblemCount: a.ProblemCount, Problems: problemViews(a.Problems),
 	}
 }
@@ -107,6 +125,7 @@ func (in AssessmentInput) service() service.AssessmentInput {
 	return service.AssessmentInput{
 		Name: in.Name, DurationMinutes: in.DurationMinutes,
 		LanguageOverride: in.LanguageOverride, InviteWindowDays: in.InviteWindowDays,
+		AllowedLanguages: in.AllowedLanguages, Integrity: service.IntegritySettings(in.Integrity),
 		ProblemIDs: in.ProblemIDs,
 	}
 }

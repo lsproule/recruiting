@@ -35,6 +35,8 @@ import (
 	"recruiting/internal/web/book"
 	candidatesweb "recruiting/internal/web/candidates"
 	clientweb "recruiting/internal/web/client"
+	clientsweb "recruiting/internal/web/clients"
+	"recruiting/internal/web/intake"
 	"recruiting/internal/web/jobs"
 	"recruiting/internal/web/layout"
 	"recruiting/internal/web/pipeline"
@@ -42,6 +44,8 @@ import (
 	"recruiting/internal/web/problems"
 	"recruiting/internal/web/reviews"
 	"recruiting/internal/web/scorecards"
+	"recruiting/internal/web/shortlist"
+	"recruiting/internal/web/workqueue"
 )
 
 // defaultListenAddr is where serve binds when LISTEN_ADDR is unset. The
@@ -66,7 +70,7 @@ func listenAddr() string {
 // until ctx is cancelled. ready, when set, receives the bound address, which
 // matters when addr asks the kernel for a port.
 func serve(ctx context.Context, logger *slog.Logger, cfg *config.Config, addr string, ready func(net.Addr)) error {
-	st, err := store.Open(ctx, cfg.DatabaseURL)
+	st, err := store.Open(ctx, cfg.DatabaseURLApp)
 	if err != nil {
 		return fmt.Errorf("serve: %w", err)
 	}
@@ -180,13 +184,28 @@ func appHandler(ctx context.Context, logger *slog.Logger, cfg *config.Config, st
 	problemService := service.NewProblemService(st, runnerExec)
 	assessmentService := service.NewAssessmentService(st)
 	attempts := service.NewAttemptService(st, q, cfg.BaseURL)
+	// The webcam frames live in object storage: without it the session
+	// cannot store one and the reviewer's timeline opens nothing.
+	attempts.Blobs = blobStore
+	attempts.Logger = logger
 	reviewService := service.NewReviewService(st, poolService, blobReader)
+	shortlists := service.NewShortlistService(st, releases, reviewService, poolService, q, cfg.BaseURL)
 	apiTokens := service.NewAPITokenService(st)
+	clientAccounts := service.NewClientService(st, applications)
+	workQueue := service.NewWorkQueueService(st)
+
+	// The sidebar's badges are computed once per request, and only when a
+	// page actually draws the sidebar.
+	app.Use(layout.WithCounts(workQueue.NavCounts, logger))
 
 	admin.Mount(app, admin.Deps{Org: org, BaseURL: cfg.BaseURL, SendInvite: sendPasswordReset(st, q, cfg.BaseURL)})
 	mountAPITokens(app, apiTokensDeps{Tokens: apiTokens, Org: org, Logger: logger})
 	jobs.Mount(app, jobs.Deps{Jobs: jobService, Org: org, Logger: logger})
-	pipeline.Mount(app, pipeline.Deps{Applications: applications, Release: releases, Schedule: schedule, Org: org, Logger: logger})
+	pipeline.Mount(app, pipeline.Deps{
+		Applications: applications, Release: releases, Schedule: schedule, Org: org,
+		Reviews: reviewService, Attempts: attempts, Pool: poolService, Candidates: candidates,
+		Logger: logger,
+	})
 	applyweb.Mount(app, applyweb.Deps{Candidates: candidates, Logger: logger})
 	candidatesweb.Mount(app, candidatesweb.Deps{Candidates: candidates, Jobs: jobService, Org: org, Logger: logger})
 	availability.Mount(app, availability.Deps{Schedule: schedule, Org: org, Logger: logger})
@@ -198,14 +217,22 @@ func appHandler(ctx context.Context, logger *slog.Logger, cfg *config.Config, st
 		book.Mount(g, book.Deps{Schedule: schedule, Links: links, Logger: logger})
 	})
 	scorecards.Mount(app, scorecards.Deps{Scorecards: scorecardService, Org: org, Logger: logger})
-	clientweb.Mount(app, clientweb.Deps{Portal: portal, Logger: logger})
-	// pool.Mount must come after jobs.Mount: its per-job suggestions partial
-	// shares jobs's subrouter.
+	clientweb.Mount(app, clientweb.Deps{Portal: portal, Shortlists: shortlists, Logger: logger})
+	// pool.Mount and shortlist.Mount must come after jobs.Mount: their
+	// per-job screens share jobs's subrouter.
 	pool.Mount(app, pool.Deps{Pool: poolService, Org: org, Logger: logger})
+	shortlist.Mount(app, shortlist.Deps{Shortlists: shortlists, Org: org, Logger: logger})
 	problems.Mount(app, problems.Deps{Problems: problemService, Org: org, Logger: logger})
+	intake.Mount(app, intake.Deps{
+		Intake:   service.NewIntakeService(st, q, cfg.BaseURL),
+		Problems: problemService, Org: org, Logger: logger,
+	})
 	assess.Mount(app, assess.Deps{Attempts: attempts, Assessment: authSurface.Assessment(), API: r.Mux, Logger: logger})
-	assess.MountRecruiter(app, assess.RecruiterDeps{Assessments: assessmentService, Problems: problemService, Jobs: jobService, Org: org, Logger: logger})
-	reviews.Mount(app, reviews.Deps{Reviews: reviewService, Org: org, Logger: logger})
+	assess.MountRecruiter(app, assess.RecruiterDeps{Assessments: assessmentService, Problems: problemService, Jobs: jobService, Attempts: attempts, Org: org, Logger: logger})
+	reviews.Mount(app, reviews.Deps{Reviews: reviewService, Org: org, Attempts: attempts, Logger: logger})
+	workqueue.Mount(app, workqueue.Deps{Queue: workQueue, Org: org, Logger: logger})
+	// clients.Mount must come after intake.Mount, which owns /app/clients/new.
+	clientsweb.Mount(app, clientsweb.Deps{Clients: clientAccounts, Org: org, Logger: logger})
 
 	web.Mount("/", app)
 	r.Mux.Mount("/", web)
@@ -227,6 +254,7 @@ func appHandler(ctx context.Context, logger *slog.Logger, cfg *config.Config, st
 		Reviews:      reviewService,
 		Pool:         poolService,
 		Portal:       portal,
+		Shortlists:   shortlists,
 		APITokens:    apiTokens,
 	})
 

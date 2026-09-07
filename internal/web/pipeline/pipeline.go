@@ -17,6 +17,7 @@ import (
 	"recruiting/internal/service"
 	"recruiting/internal/web/layout"
 	"recruiting/internal/web/middleware"
+	"recruiting/internal/web/reviews"
 )
 
 // Where the screens live on the app surface: the board and list are per job,
@@ -34,6 +35,14 @@ type Deps struct {
 	Release      *service.ReleaseService
 	Schedule     *service.ScheduleService
 	Org          *service.OrgService
+	// Reviews, Attempts, Pool, and Candidates fill in the candidate detail
+	// screen: the assessment and its replay, the fit against the job, and
+	// the résumés. Any of them nil leaves that panel off the screen rather
+	// than failing the page.
+	Reviews    *service.ReviewService
+	Attempts   *service.AttemptService
+	Pool       *service.PoolService
+	Candidates *service.CandidateService
 	// Logger records the errors behind a 500; the visitor only ever sees a
 	// generic message. Nil disables that logging.
 	Logger *slog.Logger
@@ -57,6 +66,7 @@ func Mount(r chi.Router, d Deps) {
 		r.Post("/release", h.release)
 		r.Post("/unrelease", h.unrelease)
 		r.Post("/assign", h.assign)
+		r.Post("/assessment", h.sendAssessment)
 	})
 }
 
@@ -71,7 +81,7 @@ func render(w http.ResponseWriter, r *http.Request, status int, c templ.Componen
 func (h *handlers) page(r *http.Request, title string, flashes ...layout.Flash) layout.Page {
 	p, _ := middleware.PrincipalFrom(r.Context())
 	return layout.Page{
-		Title: title, Surface: layout.SurfaceApp, Nav: layout.AppNav(p, "/app/jobs"),
+		Title: title, Surface: layout.SurfaceApp, Nav: layout.AppNav(p, "/app/jobs"), UserRole: layout.RoleLabel(p), Menu: layout.AppMenu(p, "/app/jobs"),
 		Flashes: flashes, CSRF: middleware.CSRFToken(r), UserName: h.displayName(r, p),
 	}
 }
@@ -112,7 +122,8 @@ func statusFor(err error) int {
 		return http.StatusNotFound
 	case errors.Is(err, service.ErrStale):
 		return http.StatusConflict
-	case errors.Is(err, domain.ErrPrereqMissing),
+	case errors.Is(err, service.ErrStageNotAssessment),
+		errors.Is(err, domain.ErrPrereqMissing),
 		errors.Is(err, domain.ErrReasonRequired),
 		errors.Is(err, domain.ErrTerminal),
 		errors.Is(err, service.ErrNotActive),
@@ -206,7 +217,61 @@ func (h *handlers) renderApplication(w http.ResponseWriter, r *http.Request, id 
 		h.fail(w, r, err)
 		return
 	}
-	render(w, r, status, applicationPage(h.page(r, detail.Application.CandidateName, flashes...), detail, h.vetters(r, p), middleware.CSRFToken(r), problem))
+	v := candidateView{
+		Detail: detail, Vetters: h.vetters(r, p),
+		Advance: nextStage(detail), Reject: rejectStage(detail),
+	}
+	h.assessment(r, p, &v)
+	if h.d.Pool != nil {
+		if fit, err := h.d.Pool.Fit(r.Context(), p, id); err == nil {
+			v.Fit, v.HasFit = fit, true
+		}
+	}
+	if h.d.Candidates != nil {
+		if cand, err := h.d.Candidates.Detail(r.Context(), p, detail.Application.CandidateID); err == nil {
+			v.Resumes = cand.Resumes
+		}
+	}
+	render(w, r, status, applicationPage(h.page(r, detail.Application.CandidateName, flashes...), v, middleware.CSRFToken(r), problem))
+}
+
+// assessment loads the sitting the screen replays: the latest attempt on the
+// application, with the island's boot JSON when there is a recording to show.
+// A reader the attempt is not theirs to see simply gets no panel.
+func (h *handlers) assessment(r *http.Request, p service.Principal, v *candidateView) {
+	if h.d.Reviews == nil {
+		return
+	}
+	summaries, err := h.d.Reviews.Summaries(r.Context(), p, v.Detail.Application.ID)
+	if err != nil || len(summaries) == 0 {
+		return
+	}
+	latest := summaries[len(summaries)-1]
+	detail, err := h.d.Reviews.Attempt(r.Context(), p, latest.AttemptID)
+	if err != nil {
+		return
+	}
+	v.Attempt = &detail
+	cfg, err := reviews.IslandConfig(detail.AttemptID, service.ReplayJumps(detail.Submissions))
+	if err != nil {
+		return
+	}
+	v.ReplayConfig = cfg
+}
+
+// sendAssessment invites the candidate to the assessment their current stage
+// carries, from the "no assessment yet" card.
+func (h *handlers) sendAssessment(w http.ResponseWriter, r *http.Request) {
+	p, _ := middleware.PrincipalFrom(r.Context())
+	id, ok := param(w, r, "id")
+	if !ok {
+		return
+	}
+	if h.d.Attempts == nil {
+		http.Error(w, "assessments are not configured", http.StatusNotFound)
+		return
+	}
+	h.afterAction(w, r, id, h.d.Attempts.SendAssessment(r.Context(), p, id))
 }
 
 // vetters is who a recruiter may assign as the interviewer. Anyone who may

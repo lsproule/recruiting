@@ -167,7 +167,9 @@ func (s *ScoringService) Finalize(ctx context.Context, p AttemptFinalizePayload,
 		case err != nil:
 			return err
 		}
-		if s.q == nil {
+		if s.q == nil || att.Preview {
+			// A preview is scored so the recruiter sees the same results a
+			// candidate would; its integrity signals are nobody's to read.
 			return nil
 		}
 		return enqueued(s.q.Enqueue(ctx, tx, queue.KindSignalsCompute, SignalsComputePayload{AttemptID: p.AttemptID, OrgID: p.OrgID}))
