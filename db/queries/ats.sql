@@ -31,11 +31,14 @@ select * from job where org_id = $1 and slug = $2;
 select * from job where org_id = $1 order by created_at desc;
 
 -- name: CreateStage :one
-insert into stage (org_id, job_id, position, name, kind, terminal_status, unblind, scorecard_rubric_id, default_vetter_id, assessment_id)
-values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning *;
+insert into stage (org_id, job_id, position, name, kind, terminal_status, unblind, scorecard_rubric_id, default_vetter_id, assessment_id,
+    interview_format, duration_minutes, round_seconds, break_seconds)
+values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) returning *;
 
 -- name: UpdateStage :one
-update stage set name = $2, kind = $3, terminal_status = $4, unblind = $5, default_vetter_id = $6 where id = $1 returning *;
+update stage set name = $2, kind = $3, terminal_status = $4, unblind = $5, default_vetter_id = $6,
+    interview_format = $7, duration_minutes = $8, round_seconds = $9, break_seconds = $10
+where id = $1 returning *;
 
 -- name: SetStagePosition :exec
 update stage set position = $2 where id = $1;

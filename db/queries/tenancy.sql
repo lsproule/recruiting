@@ -95,7 +95,7 @@ select value from org_setting where org_id = $1 and key = $2;
 select * from org_setting where org_id = $1 order by key;
 
 -- name: CreatePipelineTemplate :one
-insert into pipeline_template (org_id, name, is_default) values ($1, $2, $3) returning *;
+insert into pipeline_template (org_id, name, is_default, description, library_key) values ($1, $2, $3, $4, $5) returning *;
 
 -- name: GetDefaultPipelineTemplate :one
 select * from pipeline_template where org_id = $1 and is_default;
@@ -108,8 +108,8 @@ select * from pipeline_template where org_id = $1 order by is_default desc, name
 select * from pipeline_template where id = $1 and org_id = $2;
 
 -- name: CreatePipelineTemplateStage :one
-insert into pipeline_template_stage (org_id, template_id, position, name, kind, unblind)
-values ($1, $2, $3, $4, $5, $6) returning *;
+insert into pipeline_template_stage (org_id, template_id, position, name, kind, unblind, interview_format, duration_minutes, round_seconds, break_seconds)
+values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning *;
 
 -- name: ListPipelineTemplateStages :many
 select * from pipeline_template_stage where template_id = $1 order by position;
