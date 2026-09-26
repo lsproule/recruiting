@@ -154,6 +154,42 @@ func (s *OrgService) Vetters(ctx context.Context, p Principal) ([]OrgUser, error
 	return out, nil
 }
 
+// Interviewers lists the org's users who may interview in a sprint: anyone
+// holding the vetter, recruiter, or admin role. Recruiters and admins read
+// it when setting one up.
+func (s *OrgService) Interviewers(ctx context.Context, p Principal) ([]OrgUser, error) {
+	if err := requireRecruiter(p); err != nil {
+		return nil, err
+	}
+	var out []OrgUser
+	err := s.st.WithTx(ctx, p, func(ctx context.Context, tx *store.Tx) error {
+		rows, err := tx.Q.ListOrgUsers(ctx, p.OrgID)
+		if err != nil {
+			return err
+		}
+		roleRows, err := tx.Q.ListOrgUserRolesForOrg(ctx, p.OrgID)
+		if err != nil {
+			return err
+		}
+		byUser := make(map[uuid.UUID][]string, len(rows))
+		for _, r := range roleRows {
+			byUser[r.OrgUserID] = append(byUser[r.OrgUserID], r.Role)
+		}
+		out = make([]OrgUser, 0, len(rows))
+		for _, u := range rows {
+			roles := byUser[u.ID]
+			if pr := (Principal{Roles: roles}); pr.HasRole(RoleVetter) || pr.HasRole(RoleRecruiter) || pr.HasRole(RoleAdmin) {
+				out = append(out, OrgUser{ID: u.ID, Email: u.Email, Name: u.Name, Roles: roles})
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list interviewers: %w", err)
+	}
+	return out, nil
+}
+
 // User loads one of the org's users. Any org user may read a colleague; the
 // chrome needs a display name for whoever is signed in.
 func (s *OrgService) User(ctx context.Context, p Principal, userID uuid.UUID) (OrgUser, error) {

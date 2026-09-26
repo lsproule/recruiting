@@ -13,6 +13,16 @@ templ bookingPage(page layout.Page, b service.Booking, action string, tz string,
 			<section class="current">
 				<h2>Your interview</h2>
 				<p><strong>{ local(b.Current.Start, b.Current.Timezone) }</strong></p>
+				if b.Video {
+					if b.RoomOpen {
+						<p class="book-join">
+							<a class="btn btn-primary" href={ templ.SafeURL(action + "/room/" + b.Current.ID.String()) }>Join your interview</a>
+							<span class="muted">Video and a shared code editor, in this browser. Have your camera and microphone ready.</span>
+						</p>
+					} else {
+						<p class="muted">This interview is by video. The room opens here ten minutes before the start, at { local(b.RoomOpensAt, b.Current.Timezone) }; come back to this page then, from a laptop with a camera and a microphone.</p>
+					}
+				}
 				if b.CanChange {
 					<p class="muted">You can move or cancel it until two hours before it starts. Choose a new time below to move it.</p>
 					<form method="post" action={ templ.SafeURL(action + "/cancel") }>

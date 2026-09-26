@@ -43,11 +43,12 @@ type JobInput struct {
 	SalaryMax       int       `json:"salary_max,omitempty"`
 	BlindMode       bool      `json:"blind_mode,omitempty"`
 	Status          string    `json:"status,omitempty"`
+	ProcessID       uuid.UUID `json:"process_id,omitempty" doc:"The hiring process to copy the pipeline from; the org's default when absent. Ignored on update"`
 }
 
 func (in JobInput) service() service.NewJob {
 	return service.NewJob{
-		ClientCompanyID: in.ClientCompanyID, Title: in.Title, Slug: in.Slug,
+		ClientCompanyID: in.ClientCompanyID, Title: in.Title, Slug: in.Slug, TemplateID: in.ProcessID,
 		Description: in.Description, Skills: in.Skills, Seniority: in.Seniority,
 		Location: in.Location, RemotePolicy: in.RemotePolicy,
 		SalaryMin: in.SalaryMin, SalaryMax: in.SalaryMax,
@@ -69,28 +70,43 @@ type Stage struct {
 	ID       uuid.UUID `json:"id"`
 	Position int       `json:"position"`
 	Name     string    `json:"name"`
-	Kind     string    `json:"kind" enum:"generic,interview,assessment,client_review,terminal"`
+	Kind     string    `json:"kind" enum:"generic,interview,assessment,sprint,client_review,terminal"`
 	Unblind  bool      `json:"unblind"`
 	Terminal string    `json:"terminal,omitempty" doc:"Outcome a terminal stage closes an application with"`
+	// The settings a kind carries; absent on kinds that have none.
+	InterviewFormat string `json:"interview_format,omitempty" enum:"call,video," doc:"Interview stages: a phone call the platform books, or a hosted video room"`
+	DurationMinutes int    `json:"duration_minutes,omitempty" doc:"Interview stages: how long a slot is booked for"`
+	RoundSeconds    int    `json:"round_seconds,omitempty" doc:"Sprint stages: how long each conversation lasts"`
+	BreakSeconds    int    `json:"break_seconds,omitempty" doc:"Sprint stages: the pause between conversations"`
 }
 
 // StageInput is the body of a stage create or update.
 type StageInput struct {
-	Name     string `json:"name" minLength:"1"`
-	Kind     string `json:"kind" enum:"generic,interview,assessment,client_review,terminal"`
-	Terminal string `json:"terminal,omitempty" doc:"Required on a terminal stage"`
-	Unblind  bool   `json:"unblind,omitempty"`
+	Name            string `json:"name" minLength:"1"`
+	Kind            string `json:"kind" enum:"generic,interview,assessment,sprint,client_review,terminal"`
+	Terminal        string `json:"terminal,omitempty" doc:"Required on a terminal stage"`
+	Unblind         bool   `json:"unblind,omitempty"`
+	InterviewFormat string `json:"interview_format,omitempty" enum:"call,video," doc:"Interview stages only; defaults to call"`
+	DurationMinutes int    `json:"duration_minutes,omitempty" minimum:"0" maximum:"480" doc:"Interview stages only; defaults to 30"`
+	RoundSeconds    int    `json:"round_seconds,omitempty" minimum:"0" maximum:"3600" doc:"Sprint stages only; defaults to 300"`
+	BreakSeconds    int    `json:"break_seconds,omitempty" minimum:"0" maximum:"3600" doc:"Sprint stages only; defaults to 60"`
 }
 
 func (in StageInput) service() service.StageInput {
 	return service.StageInput{
 		Name: in.Name, Kind: domain.StageKind(in.Kind),
 		Terminal: domain.ApplicationStatus(in.Terminal), Unblind: in.Unblind,
+		InterviewFormat: in.InterviewFormat, DurationMinutes: in.DurationMinutes,
+		RoundSeconds: in.RoundSeconds, BreakSeconds: in.BreakSeconds,
 	}
 }
 
 func stageView(s domain.Stage) Stage {
-	return Stage{ID: s.ID, Position: s.Position, Name: s.Name, Kind: string(s.Kind), Unblind: s.Unblind, Terminal: string(s.Terminal)}
+	return Stage{
+		ID: s.ID, Position: s.Position, Name: s.Name, Kind: string(s.Kind), Unblind: s.Unblind, Terminal: string(s.Terminal),
+		InterviewFormat: s.InterviewFormat, DurationMinutes: s.DurationMinutes,
+		RoundSeconds: s.RoundSeconds, BreakSeconds: s.BreakSeconds,
+	}
 }
 
 func stageViews(in []domain.Stage) []Stage {

@@ -526,3 +526,117 @@ func wrapClient(what string, err error) error {
 	}
 	return fmt.Errorf("%s: %w", what, err)
 }
+
+// ClientApplicationFilter narrows the company-wide application list. A zero
+// JobID, empty Status, or zero UpdatedSince is "any". Limit and Offset page
+// it; a Limit outside 1..ClientListMax takes the default.
+type ClientApplicationFilter struct {
+	JobID        uuid.UUID
+	Status       string
+	UpdatedSince time.Time
+	Limit        int
+	Offset       int
+}
+
+// Paging bounds for the company API's collection reads.
+const (
+	ClientListDefault = 50
+	ClientListMax     = 200
+)
+
+// Applications lists every application released to the company, most
+// recently changed first, across all its jobs.
+func (s *ClientPortalService) Applications(ctx context.Context, p Principal, f ClientApplicationFilter) ([]ClientApplication, error) {
+	if err := requireClient(p); err != nil {
+		return nil, err
+	}
+	if f.Limit < 1 || f.Limit > ClientListMax {
+		f.Limit = ClientListDefault
+	}
+	if f.Offset < 0 {
+		f.Offset = 0
+	}
+	params := db.ListReleasedApplicationsByCompanyParams{
+		ClientCompanyID: p.ClientCompanyID, JobID: f.JobID, Status: f.Status,
+		RowLimit: int32(f.Limit), RowOffset: int32(f.Offset),
+	}
+	if !f.UpdatedSince.IsZero() {
+		params.UpdatedSince = ts(f.UpdatedSince)
+	}
+	var out []ClientApplication
+	err := s.st.WithTx(ctx, p, func(ctx context.Context, tx *store.Tx) error {
+		rows, err := tx.Q.ListReleasedApplicationsByCompany(ctx, params)
+		if err != nil {
+			return err
+		}
+		out = make([]ClientApplication, 0, len(rows))
+		for _, r := range rows {
+			out = append(out, clientApplication(db.ListReleasedApplicationsRow(r)))
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, wrapClient("client applications", err)
+	}
+	return out, nil
+}
+
+// ClientEvent is one change on a released application as the company's
+// feed reports it. Seq is the cursor: monotonic across the org, so a caller
+// resumes from the last one it saw. Reason is carried only for events the
+// company's own users wrote; a recruiter's move reasons are the org's.
+type ClientEvent struct {
+	Seq           int64
+	ID            uuid.UUID
+	ApplicationID uuid.UUID
+	JobID         uuid.UUID
+	JobTitle      string
+	Kind          string
+	ActorKind     string
+	FromStage     string
+	ToStage       string
+	Reason        string
+	CreatedAt     time.Time
+}
+
+// Events is the company's change feed after a cursor: every event on a
+// released application from the moment it was released, in order. It
+// returns at most limit events (ClientListDefault when unset) and the
+// caller pages by passing the last Seq back.
+func (s *ClientPortalService) Events(ctx context.Context, p Principal, afterSeq int64, limit int) ([]ClientEvent, error) {
+	if err := requireClient(p); err != nil {
+		return nil, err
+	}
+	if limit < 1 || limit > ClientListMax {
+		limit = ClientListDefault
+	}
+	var out []ClientEvent
+	err := s.st.WithTx(ctx, p, func(ctx context.Context, tx *store.Tx) error {
+		rows, err := tx.Q.ListClientEvents(ctx, db.ListClientEventsParams{
+			ClientCompanyID: p.ClientCompanyID, AfterSeq: afterSeq, RowLimit: int32(limit),
+		})
+		if err != nil {
+			return err
+		}
+		out = make([]ClientEvent, 0, len(rows))
+		for _, r := range rows {
+			e := ClientEvent{
+				ID: r.ID, ApplicationID: r.ApplicationID, JobID: r.JobID, JobTitle: r.JobTitle,
+				Kind: r.Kind, ActorKind: r.ActorKind, FromStage: deref(r.FromStage), ToStage: deref(r.ToStage),
+				CreatedAt: r.CreatedAt.Time,
+			}
+			if r.Seq != nil {
+				e.Seq = *r.Seq
+			}
+			if r.ActorKind == "client_user" {
+				e.Reason = deref(r.Reason)
+			}
+			out = append(out, e)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, wrapClient("client events", err)
+	}
+	return out, nil
+}

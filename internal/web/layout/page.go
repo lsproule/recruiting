@@ -95,9 +95,17 @@ func AppNav(p service.Principal, current string) []NavItem {
 // AppMenu is the sidebar footer menu: the role-gated screens that sit outside
 // the five primary destinations.
 func AppMenu(p service.Principal, current string) []NavItem {
-	items := []NavItem{{Key: "jobs", Label: "Jobs", Href: "/app/jobs"}}
+	items := []NavItem{
+		{Key: "jobs", Label: "Jobs", Href: "/app/jobs"},
+		{Key: "interviews", Label: "Interviews", Href: "/app/interviews"},
+	}
 	if p.HasRole(service.RoleRecruiter) || p.HasRole(service.RoleAdmin) {
-		items = append(items, NavItem{Key: "pool", Label: "Talent pool", Href: "/app/pool"})
+		items = append(items,
+			NavItem{Key: "processes", Label: "Hiring processes", Href: "/app/processes"},
+			NavItem{Key: "sprints", Label: "Sprints", Href: "/app/sprints"},
+			NavItem{Key: "pool", Label: "Talent pool", Href: "/app/pool"},
+			NavItem{Key: "talent", Label: "Talent network", Href: "/app/talent"},
+		)
 	}
 	if p.HasRole(service.RoleVetter) {
 		items = append(items,
@@ -155,8 +163,17 @@ func csrfHeader(token string) string {
 	return string(b)
 }
 
+// htmxConfig is read by htmx at boot. It swaps a 422 like a 2xx: every
+// refused form here answers with the fragment re-rendered around its reason,
+// and htmx's default of leaving a 4xx unswapped would hide that reason.
+const htmxConfig = `{"responseHandling":[{"code":"204","swap":false},{"code":"[23]..","swap":true},{"code":"422","swap":true},{"code":"[45]..","swap":false,"error":true}]}`
+
 // ClientNav is the client-portal navigation, with the entry matching current
 // marked active.
 func ClientNav(current string) []NavItem {
-	return markActive([]NavItem{{Key: "jobs", Label: "Jobs", Href: "/client/jobs"}}, current)
+	return markActive([]NavItem{
+		{Key: "jobs", Label: "Jobs", Href: "/client/jobs"},
+		{Key: "talent", Label: "Talent requests", Href: "/client/talent"},
+		{Key: "developer", Label: "Developer", Href: "/client/developer"},
+	}, current)
 }

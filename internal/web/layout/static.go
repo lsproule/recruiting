@@ -25,6 +25,7 @@ const (
 	AlpinePath = StaticPrefix + "/alpine.min.js"
 	AssessPath = StaticPrefix + "/assess/assess.js"
 	ReplayPath = StaticPrefix + "/replay/replay.js"
+	RoomPath   = StaticPrefix + "/room/room.js"
 )
 
 // staticMaxAge is short enough that a redeploy is picked up quickly; the ETag

@@ -1,0 +1,411 @@
+package client
+
+import (
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+
+	"recruiting/internal/service"
+	"recruiting/internal/web/layout"
+)
+
+// talentPage is the company's talent requests: what it has asked the
+// network for, and a form to ask for more.
+templ talentPage(page layout.Page, v talentView) {
+	@layout.Base(page) {
+		<div class="page-head">
+			<div>
+				<p class="page-kicker">Talent network</p>
+				<h1>Who are you looking for?</h1>
+				<p class="muted">Describe the person and we match them against everyone in the network who agreed to be approached. You see what they do, never who they are, until they say yes to an introduction.</p>
+			</div>
+		</div>
+		<div class="talent-layout">
+			<section>
+				if len(v.Requests) == 0 {
+					<div class="panel empty-card">
+						<h2>No requests yet</h2>
+						<p class="muted">File one on the right. Matches are ranked the moment it is saved.</p>
+					</div>
+				} else {
+					<table class="talent-requests">
+						<thead><tr><th>Request</th><th>Skills</th><th>Introductions</th><th>Status</th></tr></thead>
+						<tbody>
+							for _, r := range v.Requests {
+								<tr>
+									<td>
+										<a href={ templ.SafeURL(TalentRequestPath(r.ID)) }>{ r.Title }</a>
+										if r.JobTitle != "" {
+											<span class="row-note">{ "joins " + r.JobTitle }</span>
+										}
+									</td>
+									<td class="muted">{ strings.Join(r.Skills, ", ") }</td>
+									<td class="num">{ strconv.Itoa(r.IntroCount) }</td>
+									<td><span class={ "tag", requestTag(r) }>{ r.Status }</span></td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				}
+			</section>
+			<aside>
+				<form class="panel talent-form stack" method="post" action={ templ.SafeURL(TalentPath) }>
+					@layout.CSRFField(page.CSRF)
+					<span class="card-kicker">New request</span>
+					if v.Form.Error != "" {
+						<p class="flash flash-error" role="alert">{ v.Form.Error }</p>
+					}
+					<label>Title <input type="text" name="title" value={ v.Form.Title } placeholder="Senior Go engineer" required/></label>
+					<label>Skills <input type="text" name="skills" value={ v.Form.Skills } placeholder="go, postgres, kubernetes" required/></label>
+					<div class="grid-2">
+						<label>
+							Seniority
+							<select name="seniority">
+								<option value="">Any</option>
+								for _, s := range service.Seniorities {
+									<option value={ s } selected?={ s == v.Form.Seniority }>{ s }</option>
+								}
+							</select>
+						</label>
+						<label>
+							Remote
+							<select name="remote_policy">
+								<option value="">Any</option>
+								for _, s := range service.RemotePolicies {
+									<option value={ s } selected?={ s == v.Form.RemotePolicy }>{ s }</option>
+								}
+							</select>
+						</label>
+					</div>
+					<label>Location <input type="text" name="location" value={ v.Form.Location } placeholder="Berlin"/></label>
+					<label>
+						Job an accepted introduction joins
+						<select name="job_id">
+							<option value="">Decide later</option>
+							for _, j := range v.Jobs {
+								<option value={ j.ID.String() } selected?={ j.ID.String() == v.Form.JobID }>{ j.Title }</option>
+							}
+						</select>
+					</label>
+					<label>Note for the recruiter <textarea name="note" rows="3">{ v.Form.Note }</textarea></label>
+					<button type="submit" class="btn btn-primary">Find matches</button>
+				</form>
+			</aside>
+		</div>
+	}
+}
+
+// talentRequestPage is one request: the anonymised people who fit, and the
+// introductions already asked for.
+templ talentRequestPage(page layout.Page, v talentRequestView) {
+	@layout.Base(page) {
+		<p><a href={ templ.SafeURL(TalentPath) }>&larr; Talent requests</a></p>
+		<div class="page-head detail-head">
+			<div>
+				<p class="page-kicker">Talent request</p>
+				<div class="detail-title">
+					<h1>{ v.Request.Title }</h1>
+					<span class={ "tag", requestTag(v.Request) }>{ v.Request.Status }</span>
+				</div>
+				<p class="muted">{ requestSummary(v.Request) }</p>
+				if v.Request.Note != "" {
+					<p class="muted">{ v.Request.Note }</p>
+				}
+			</div>
+			if v.Request.Open() {
+				<div class="page-actions">
+					<form method="post" action={ templ.SafeURL(TalentRequestPath(v.Request.ID) + "/close") }>
+						@layout.CSRFField(page.CSRF)
+						<button type="submit" class="btn btn-ghost">Close request</button>
+					</form>
+				</div>
+			}
+		</div>
+		<section>
+			<h2 class="section-title">Introductions</h2>
+			if len(v.Intros) == 0 {
+				<p class="muted">None asked for yet. Pick from the matches below.</p>
+			} else {
+				<table class="talent-intros">
+					<thead><tr><th>Who</th><th>Fit</th><th>Status</th><th>Asked</th></tr></thead>
+					<tbody>
+						for _, i := range v.Intros {
+							<tr>
+								<td>
+									if i.ApplicationID != uuid.Nil {
+										<a href={ templ.SafeURL(ApplicationPath(i.ApplicationID)) }>{ i.Label }</a>
+									} else {
+										{ i.Label }
+									}
+									<span class="row-note">{ sourceLabel(i.Source) }</span>
+								</td>
+								<td class="num">{ percent(i.Score) }</td>
+								<td><span class={ "tag", introTag(i.Status) }>{ introLabel(i.Status) }</span></td>
+								<td class="muted num">{ when(i.RequestedAt) }</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			}
+		</section>
+		if v.Request.Open() {
+			<section>
+				<h2 class="section-title">Matches</h2>
+				if len(v.Matches) == 0 {
+					<p class="muted">Nobody in the network fits this yet. New members are matched as they join; check back, or widen the skills.</p>
+				} else {
+					<div class="match-grid">
+						for _, m := range v.Matches {
+							@matchCard(v.Request, m, page.CSRF)
+						}
+					</div>
+				}
+			</section>
+		}
+	}
+}
+
+// matchCard is one anonymised person: what earned the score and the one
+// thing the company can do about it.
+templ matchCard(req service.TalentRequest, m service.TalentMatch, csrf string) {
+	<article class="panel match-card">
+		<div class="match-head">
+			<span class="match-score num">{ percent(m.Score) }</span>
+			<div>
+				<p class="match-headline">{ headlineOr(m) }</p>
+				<p class="muted">{ matchSummary(m) } &middot; { sourceLabel(m.Source) }</p>
+			</div>
+		</div>
+		<div class="match-skills">
+			for _, s := range m.SharedSkills {
+				<span class="tag tag-accent">{ s }</span>
+			}
+			for _, s := range otherSkills(m) {
+				<span class="tag tag-neutral">{ s }</span>
+			}
+		</div>
+		<dl class="match-parts">
+			<div><dt>Skills</dt><dd class="num">{ percent(m.Breakdown.Skills) }</dd></div>
+			<div><dt>Seniority</dt><dd class="num">{ percent(m.Breakdown.Seniority) }</dd></div>
+			<div><dt>Location</dt><dd class="num">{ percent(m.Breakdown.Location) }</dd></div>
+			<div><dt>Résumé</dt><dd class="num">{ percent(m.Breakdown.Text) }</dd></div>
+		</dl>
+		<div class="match-foot">
+			if m.AvailableFrom != nil {
+				<span class="muted">Available from { m.AvailableFrom.Format("2 Jan 2006") }</span>
+			} else {
+				<span class="muted">
+					if m.HasResume {
+						Résumé on file
+					} else {
+						No résumé
+					}
+				</span>
+			}
+			if m.IntroStatus != "" {
+				<span class={ "tag", introTag(m.IntroStatus) }>{ introLabel(m.IntroStatus) }</span>
+			} else {
+				<form method="post" action={ templ.SafeURL(TalentRequestPath(req.ID) + "/introduce/" + m.ID.String()) }>
+					@layout.CSRFField(csrf)
+					<button type="submit" class="btn btn-primary">Request introduction</button>
+				</form>
+			}
+		</div>
+	</article>
+}
+
+// developerPage is the company's way in by API: its tokens, the reference,
+// and worked requests against this deployment.
+templ developerPage(page layout.Page, v developerView) {
+	@layout.Base(page) {
+		<div class="page-head">
+			<div>
+				<p class="page-kicker">Developer</p>
+				<h1>Your candidates, by API</h1>
+				<p class="muted">Everything this portal shows is also served as JSON under <code>{ v.BaseURL }/api/v1</code>. A token acts as you and reaches exactly what you can see here.</p>
+			</div>
+			<div class="page-actions">
+				<a class="btn btn-secondary" href={ templ.SafeURL(v.BaseURL + "/api/v1/docs") } target="_blank" rel="noopener">Interactive reference</a>
+				<a class="btn btn-ghost" href={ templ.SafeURL(v.BaseURL + "/api/v1/openapi.json") } target="_blank" rel="noopener">OpenAPI document</a>
+			</div>
+		</div>
+		<div class="talent-layout">
+			<section class="stack-sections">
+				<section class="panel">
+					<div class="panel-head"><span class="panel-title">Your tokens</span></div>
+					<div class="panel-body">
+						if v.Secret != "" {
+							<p class="notice secret-notice" role="status">
+								Copy this token now; it is not shown again.
+								<code class="secret">{ v.Secret }</code>
+							</p>
+						}
+						if v.Error != "" {
+							<p class="flash flash-error" role="alert">{ v.Error }</p>
+						}
+						if len(v.Tokens) == 0 {
+							<p class="muted">No tokens yet.</p>
+						} else {
+							<table>
+								<thead><tr><th>Name</th><th>Prefix</th><th>Expires</th><th></th></tr></thead>
+								<tbody>
+									for _, t := range v.Tokens {
+										<tr>
+											<td>{ t.Name }</td>
+											<td><code>{ t.Prefix }…</code></td>
+											<td class="muted">{ expiry(t) }</td>
+											<td class="row-actions">
+												<form method="post" action={ templ.SafeURL(DeveloperPath + "/tokens/" + t.ID.String() + "/revoke") }>
+													@layout.CSRFField(page.CSRF)
+													<button type="submit" class="btn btn-ghost">Revoke</button>
+												</form>
+											</td>
+										</tr>
+									}
+								</tbody>
+							</table>
+						}
+						<form class="stack token-form" method="post" action={ templ.SafeURL(DeveloperPath + "/tokens") }>
+							@layout.CSRFField(page.CSRF)
+							<label>Name <input type="text" name="name" placeholder="ATS sync" required/></label>
+							<label>Expires on <input type="date" name="expires_on"/></label>
+							<button type="submit" class="btn btn-primary">Issue token</button>
+						</form>
+					</div>
+				</section>
+			</section>
+			<aside class="stack-sections">
+				<section class="panel">
+					<div class="panel-head"><span class="panel-title">First requests</span></div>
+					<div class="panel-body api-examples">
+						<p class="muted">Send the token as a bearer credential. Replies are JSON; refusals are <code>application/problem+json</code> with a status and a reason.</p>
+						<pre class="statement">curl { v.BaseURL }/api/v1/portal/me \
+  -H "Authorization: Bearer $TOKEN"</pre>
+						<p class="muted">Every application released to you, most recently changed first, fifty a page:</p>
+						<pre class="statement">curl "{ v.BaseURL }/api/v1/portal/applications?limit=50&offset=0" \
+  -H "Authorization: Bearer $TOKEN"</pre>
+						<p class="muted">What changed since you last looked. Keep <code>next_since</code> and pass it back:</p>
+						<pre class="statement">curl "{ v.BaseURL }/api/v1/portal/events?since=0" \
+  -H "Authorization: Bearer $TOKEN"</pre>
+						<p class="muted">Ask the network for someone, then read the anonymised matches:</p>
+						<pre class="statement">{ talentExample(v.BaseURL) }</pre>
+						<p class="muted">The narrative guide, with every operation and its fields, ships with the platform as <code>docs/api.md</code>.</p>
+					</div>
+				</section>
+			</aside>
+		</div>
+	}
+}
+
+func requestTag(r service.TalentRequest) string {
+	if r.Open() {
+		return "tag-accent"
+	}
+	return "tag-neutral"
+}
+
+func requestSummary(r service.TalentRequest) string {
+	parts := []string{strings.Join(r.Skills, ", ")}
+	for _, p := range []string{r.Seniority, r.Location, r.RemotePolicy} {
+		if p != "" {
+			parts = append(parts, p)
+		}
+	}
+	if r.JobTitle != "" {
+		parts = append(parts, "joins "+r.JobTitle)
+	}
+	return strings.Join(parts, " · ")
+}
+
+func matchSummary(m service.TalentMatch) string {
+	parts := []string{}
+	for _, p := range []string{m.Seniority, m.Location, m.RemotePolicy} {
+		if p != "" {
+			parts = append(parts, p)
+		}
+	}
+	if len(parts) == 0 {
+		return "No preferences given"
+	}
+	return strings.Join(parts, " · ")
+}
+
+func headlineOr(m service.TalentMatch) string {
+	if m.Headline != "" {
+		return m.Headline
+	}
+	if m.Source == "pool" {
+		return "A past applicant the recruiters rate highly"
+	}
+	return "A member of the talent network"
+}
+
+// otherSkills is what the person lists beyond the request's own skills.
+func otherSkills(m service.TalentMatch) []string {
+	shared := map[string]bool{}
+	for _, s := range m.SharedSkills {
+		shared[strings.ToLower(s)] = true
+	}
+	out := []string{}
+	for _, s := range m.Skills {
+		if !shared[strings.ToLower(s)] {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func percent(f float64) string { return strconv.Itoa(int(f*100+0.5)) + "%" }
+
+func sourceLabel(source string) string {
+	if source == "pool" {
+		return "past applicant"
+	}
+	return "talent network"
+}
+
+func introTag(status string) string {
+	switch status {
+	case service.IntroAccepted:
+		return "tag-accent"
+	case service.IntroDeclined, service.IntroDismissed:
+		return "tag-neutral"
+	}
+	return "tag-outline"
+}
+
+func introLabel(status string) string {
+	switch status {
+	case service.IntroRequested:
+		return "Asked"
+	case service.IntroSent:
+		return "Approached"
+	case service.IntroAccepted:
+		return "Said yes"
+	case service.IntroDeclined:
+		return "Said no"
+	case service.IntroDismissed:
+		return "Not made"
+	}
+	return status
+}
+
+func expiry(t service.APIToken) string {
+	if t.ExpiresAt.IsZero() {
+		return "never"
+	}
+	return t.ExpiresAt.UTC().Format("2 Jan 2006")
+}
+
+// talentExample is the request that files a talent request; the JSON body
+// is built here because braces in template text read as Go.
+func talentExample(base string) string {
+	return "curl " + base + "/api/v1/portal/talent-requests \\\n" +
+		"  -H \"Authorization: Bearer $TOKEN\" \\\n" +
+		"  -H \"Content-Type: application/json\" \\\n" +
+		`  -d '{"title":"Senior Go engineer","skills":["go","postgres"],"remote_policy":"remote"}'`
+}
+
+var _ = time.Now

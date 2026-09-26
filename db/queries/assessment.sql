@@ -1,10 +1,10 @@
 -- name: CreateAssessment :one
-insert into assessment (org_id, name, duration_minutes, language_override, invite_window_days, allowed_languages, integrity)
-values ($1, $2, $3, $4, $5, $6, $7) returning *;
+insert into assessment (org_id, name, duration_minutes, language_override, invite_window_days, allowed_languages, integrity, format)
+values ($1, $2, $3, $4, $5, $6, $7, $8) returning *;
 
 -- name: UpdateAssessment :one
 update assessment set name = $3, duration_minutes = $4, language_override = $5, invite_window_days = $6,
-    allowed_languages = $7, integrity = $8, updated_at = now()
+    allowed_languages = $7, integrity = $8, format = $9, updated_at = now()
 where id = $1 and org_id = $2 returning *;
 
 -- name: GetAssessment :one

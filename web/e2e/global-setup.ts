@@ -12,6 +12,7 @@ const PROBLEM_TITLE = "Receipt Total";
 
 const ADMIN_PASSWORD = "e2e-admin-password";
 const CLIENT_PASSWORD = "e2e-client-password";
+const VETTER_PASSWORD = "e2e-vetter-password";
 
 /** csrfToken pulls the double-submit token out of a rendered form. */
 function csrfToken(html: string): string {
@@ -46,21 +47,43 @@ async function signIn(api: APIRequestContext, prefix: string, email: string, pas
   if (res.status() !== 303) throw new Error(`sign in as ${email}: ${res.status()}`);
 }
 
-/** issueAPIToken issues a token for the admin and returns its secret. */
-async function issueAPIToken(api: APIRequestContext): Promise<string> {
+/** userIDs reads the org's users off the API token screen, by email. */
+async function userIDs(api: APIRequestContext): Promise<Record<string, string>> {
+  const page = await api.get("/app/admin/api-tokens");
+  await must("open the API token screen", page);
+  const out: Record<string, string> = {};
+  for (const m of (await page.text()).matchAll(/<option value="([0-9a-f-]{36})">[^<]*&lt;([^&]+)&gt;<\/option>/g)) {
+    out[m[2]] = m[1];
+  }
+  return out;
+}
+
+/** issueAPIToken issues a token for one user and returns its secret. */
+async function issueAPIToken(api: APIRequestContext, userID: string): Promise<string> {
   const page = await api.get("/app/admin/api-tokens");
   await must("open the API token screen", page);
   const html = await page.text();
-  const user = html.match(/<option value="([0-9a-f-]{36})"/);
-  if (!user) throw new Error("the API token screen offered no user");
   const res = await api.post("/app/admin/api-tokens", {
-    form: { _csrf: csrfToken(html), name: "e2e", user_id: user[1] },
+    form: { _csrf: csrfToken(html), name: "e2e", user_id: userID },
   });
   await must("issue an API token", res);
   // The screen shows the raw secret once, in the first <code> of its notice.
   const secret = (await res.text()).match(/<code>([A-Za-z0-9_-]{20,})<\/code>/);
   if (!secret) throw new Error("the API token screen showed no secret");
   return secret[1];
+}
+
+/** createOrgUser adds an org user with roles and sets their password. */
+async function createOrgUser(api: APIRequestContext, name: string, email: string, roles: string[], password: string) {
+  const page = await api.get("/app/admin/users");
+  await must("open the users screen", page);
+  const res = await api.post("/app/admin/users", {
+    form: { _csrf: csrfToken(await page.text()), name, email, roles },
+  });
+  await must("create an org user", res);
+  const link = (await res.text()).match(/https?:\/\/\S+?\/app\/reset\/[A-Za-z0-9_-]+/);
+  if (!link) throw new Error("no password-set link for the org user");
+  await setPassword(api, link[0], password);
 }
 
 /** createClientCompany adds a company and returns its id. */
@@ -100,7 +123,8 @@ export default async function globalSetup() {
   const baseURL = process.env.E2E_BASE_URL;
   const passwordSetURL = process.env.E2E_PASSWORD_SET_URL;
   const adminEmail = process.env.E2E_ADMIN_EMAIL;
-  if (!baseURL || !passwordSetURL || !adminEmail) {
+  const orgSlug = process.env.E2E_ORG_SLUG;
+  if (!baseURL || !passwordSetURL || !adminEmail || !orgSlug) {
     throw new Error("run the suite through web/e2e/run.sh; it boots the app and bootstraps the org");
   }
   fs.mkdirSync(runDir, { recursive: true });
@@ -113,7 +137,14 @@ export default async function globalSetup() {
   await setPassword(api, passwordSetURL, ADMIN_PASSWORD);
   await signIn(api, "/app", adminEmail, ADMIN_PASSWORD);
 
-  const token = await issueAPIToken(api);
+  const vetterEmail = `e2e-vetter-${stamp}@example.test`;
+  await createOrgUser(api, "Vera Vetter", vetterEmail, ["vetter"], VETTER_PASSWORD);
+  const users = await userIDs(api);
+  const adminUserId = users[adminEmail];
+  const vetterUserId = users[vetterEmail];
+  if (!adminUserId || !vetterUserId) throw new Error(`the token screen lists ${Object.keys(users)}, not the admin and the vetter`);
+  const token = await issueAPIToken(api, adminUserId);
+  const vetterToken = await issueAPIToken(api, vetterUserId);
   const clientCompanyId = await createClientCompany(api, "Acme E2E");
   await createClientUser(api, clientCompanyId, clientEmail);
 
@@ -127,6 +158,31 @@ export default async function globalSetup() {
     await must(label, res);
     return res.json();
   };
+
+  // The vetter is bookable around the clock, so a booking scenario always
+  // finds a slot two hours out whatever the wall clock says.
+  const asVetter = await request.newContext({
+    baseURL,
+    extraHTTPHeaders: { Authorization: `Bearer ${vetterToken}` },
+  });
+  await must(
+    "set the vetter's availability",
+    await asVetter.put("/api/v1/availability", {
+      data: {
+        timezone: "UTC",
+        slot_minutes: 30,
+        buffer_minutes: 0,
+        rules: [0, 1, 2, 3, 4, 5, 6].map((weekday) => ({ weekday, start: "00:00", end: "23:30" })),
+      },
+    }),
+  );
+  await asVetter.dispose();
+
+  const processList = await json("list processes", await asAPI.get("/api/v1/processes"));
+  const processes: Record<string, string> = {};
+  for (const p of processList.processes as { id: string; library_key?: string }[]) {
+    if (p.library_key) processes[p.library_key] = p.id;
+  }
 
   const problems = await json("list problems", await asAPI.get("/api/v1/problems"));
   const problem = problems.problems.find((p: { title: string }) => p.title === PROBLEM_TITLE);
@@ -193,6 +249,7 @@ export default async function globalSetup() {
     baseURL,
     adminEmail,
     adminPassword: ADMIN_PASSWORD,
+    orgSlug,
     clientEmail,
     clientPassword: CLIENT_PASSWORD,
     apiToken: token,
@@ -204,6 +261,12 @@ export default async function globalSetup() {
     problemTitle: PROBLEM_TITLE,
     candidateEmail,
     assessURL,
+    adminUserId,
+    vetterUserId,
+    vetterEmail,
+    vetterPassword: VETTER_PASSWORD,
+    vetterToken,
+    processes,
   };
   writeFixture(fixture);
 

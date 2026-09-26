@@ -68,6 +68,10 @@ type statusRecorder struct {
 	status int
 }
 
+// Unwrap exposes the writer underneath for http.ResponseController, which
+// is how the candidate's room stream flushes through this wrapper.
+func (w *statusRecorder) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
 func (w *statusRecorder) WriteHeader(code int) {
 	w.status = code
 	w.ResponseWriter.WriteHeader(code)

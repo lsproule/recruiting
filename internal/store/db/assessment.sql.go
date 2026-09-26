@@ -166,8 +166,8 @@ func (q *Queries) CountPendingSubmissions(ctx context.Context, arg CountPendingS
 }
 
 const createAssessment = `-- name: CreateAssessment :one
-insert into assessment (org_id, name, duration_minutes, language_override, invite_window_days, allowed_languages, integrity)
-values ($1, $2, $3, $4, $5, $6, $7) returning id, org_id, name, duration_minutes, language_override, invite_window_days, created_at, updated_at, allowed_languages, integrity
+insert into assessment (org_id, name, duration_minutes, language_override, invite_window_days, allowed_languages, integrity, format)
+values ($1, $2, $3, $4, $5, $6, $7, $8) returning id, org_id, name, duration_minutes, language_override, invite_window_days, created_at, updated_at, allowed_languages, integrity, format
 `
 
 type CreateAssessmentParams struct {
@@ -178,6 +178,7 @@ type CreateAssessmentParams struct {
 	InviteWindowDays int32
 	AllowedLanguages []string
 	Integrity        []byte
+	Format           string
 }
 
 func (q *Queries) CreateAssessment(ctx context.Context, arg CreateAssessmentParams) (Assessment, error) {
@@ -189,6 +190,7 @@ func (q *Queries) CreateAssessment(ctx context.Context, arg CreateAssessmentPara
 		arg.InviteWindowDays,
 		arg.AllowedLanguages,
 		arg.Integrity,
+		arg.Format,
 	)
 	var i Assessment
 	err := row.Scan(
@@ -202,6 +204,7 @@ func (q *Queries) CreateAssessment(ctx context.Context, arg CreateAssessmentPara
 		&i.UpdatedAt,
 		&i.AllowedLanguages,
 		&i.Integrity,
+		&i.Format,
 	)
 	return i, err
 }
@@ -550,7 +553,7 @@ func (q *Queries) FinishSubmission(ctx context.Context, arg FinishSubmissionPara
 }
 
 const getAssessment = `-- name: GetAssessment :one
-select id, org_id, name, duration_minutes, language_override, invite_window_days, created_at, updated_at, allowed_languages, integrity from assessment where id = $1
+select id, org_id, name, duration_minutes, language_override, invite_window_days, created_at, updated_at, allowed_languages, integrity, format from assessment where id = $1
 `
 
 func (q *Queries) GetAssessment(ctx context.Context, id uuid.UUID) (Assessment, error) {
@@ -567,6 +570,7 @@ func (q *Queries) GetAssessment(ctx context.Context, id uuid.UUID) (Assessment, 
 		&i.UpdatedAt,
 		&i.AllowedLanguages,
 		&i.Integrity,
+		&i.Format,
 	)
 	return i, err
 }
@@ -818,7 +822,7 @@ func (q *Queries) ListAssessmentProblems(ctx context.Context, assessmentID uuid.
 }
 
 const listAssessments = `-- name: ListAssessments :many
-select id, org_id, name, duration_minutes, language_override, invite_window_days, created_at, updated_at, allowed_languages, integrity from assessment where org_id = $1 order by name
+select id, org_id, name, duration_minutes, language_override, invite_window_days, created_at, updated_at, allowed_languages, integrity, format from assessment where org_id = $1 order by name
 `
 
 func (q *Queries) ListAssessments(ctx context.Context, orgID uuid.UUID) ([]Assessment, error) {
@@ -841,6 +845,7 @@ func (q *Queries) ListAssessments(ctx context.Context, orgID uuid.UUID) ([]Asses
 			&i.UpdatedAt,
 			&i.AllowedLanguages,
 			&i.Integrity,
+			&i.Format,
 		); err != nil {
 			return nil, err
 		}
@@ -1803,8 +1808,8 @@ func (q *Queries) StartSubmission(ctx context.Context, id uuid.UUID) error {
 
 const updateAssessment = `-- name: UpdateAssessment :one
 update assessment set name = $3, duration_minutes = $4, language_override = $5, invite_window_days = $6,
-    allowed_languages = $7, integrity = $8, updated_at = now()
-where id = $1 and org_id = $2 returning id, org_id, name, duration_minutes, language_override, invite_window_days, created_at, updated_at, allowed_languages, integrity
+    allowed_languages = $7, integrity = $8, format = $9, updated_at = now()
+where id = $1 and org_id = $2 returning id, org_id, name, duration_minutes, language_override, invite_window_days, created_at, updated_at, allowed_languages, integrity, format
 `
 
 type UpdateAssessmentParams struct {
@@ -1816,6 +1821,7 @@ type UpdateAssessmentParams struct {
 	InviteWindowDays int32
 	AllowedLanguages []string
 	Integrity        []byte
+	Format           string
 }
 
 func (q *Queries) UpdateAssessment(ctx context.Context, arg UpdateAssessmentParams) (Assessment, error) {
@@ -1828,6 +1834,7 @@ func (q *Queries) UpdateAssessment(ctx context.Context, arg UpdateAssessmentPara
 		arg.InviteWindowDays,
 		arg.AllowedLanguages,
 		arg.Integrity,
+		arg.Format,
 	)
 	var i Assessment
 	err := row.Scan(
@@ -1841,6 +1848,7 @@ func (q *Queries) UpdateAssessment(ctx context.Context, arg UpdateAssessmentPara
 		&i.UpdatedAt,
 		&i.AllowedLanguages,
 		&i.Integrity,
+		&i.Format,
 	)
 	return i, err
 }

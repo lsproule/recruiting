@@ -52,11 +52,7 @@ func (s *JobService) AddStage(ctx context.Context, p Principal, jobID uuid.UUID,
 		if err != nil {
 			return err
 		}
-		row, err := tx.Q.CreateStage(ctx, db.CreateStageParams{
-			OrgID: p.OrgID, JobID: jobID, Position: int32(len(existing) + 1),
-			Name: in.Name, Kind: string(in.Kind), TerminalStatus: terminalParam(in.Terminal), Unblind: in.Unblind,
-			DefaultVetterID: vetterParam(in.DefaultVetterID),
-		})
+		row, err := tx.Q.CreateStage(ctx, createStageParams(p.OrgID, jobID, int32(len(existing)+1), in.stage()))
 		if err != nil {
 			return err
 		}
@@ -93,10 +89,13 @@ func (s *JobService) UpdateStage(ctx context.Context, p Principal, jobID, stageI
 		if _, err := stageOfJob(ctx, tx, jobID, stageID); err != nil {
 			return err
 		}
+		st := in.stage()
 		row, err := tx.Q.UpdateStage(ctx, db.UpdateStageParams{
-			ID: stageID, Name: in.Name, Kind: string(in.Kind),
-			TerminalStatus: terminalParam(in.Terminal), Unblind: in.Unblind,
-			DefaultVetterID: vetterParam(in.DefaultVetterID),
+			ID: stageID, Name: st.Name, Kind: string(st.Kind),
+			TerminalStatus: terminalParam(st.Terminal), Unblind: st.Unblind,
+			DefaultVetterID: vetterParam(st.DefaultVetterID),
+			InterviewFormat: formatParam(st.InterviewFormat), DurationMinutes: int32Ptr(st.DurationMinutes),
+			RoundSeconds: int32Ptr(st.RoundSeconds), BreakSeconds: int32Ptr(st.BreakSeconds),
 		})
 		if err != nil {
 			return err
@@ -204,55 +203,85 @@ func renumber(ctx context.Context, tx *store.Tx, stages []domain.Stage) error {
 }
 
 // copyTemplateStages copies a pipeline template into the job's own stage
-// rows; the nil template id takes the org's default. Terminal template stages
-// carry no outcome of their own, so the outcome comes from the stage name;
-// whatever the template leaves out is appended, because a job without both
-// terminals cannot close an application.
-func copyTemplateStages(ctx context.Context, tx *store.Tx, orgID, jobID, templateID uuid.UUID) error {
+// rows and records which template the job came from; the nil template id
+// takes the org's default. Whatever terminal the template leaves out is
+// appended, because a job without both terminals cannot close an
+// application. It returns the template's id.
+func copyTemplateStages(ctx context.Context, tx *store.Tx, orgID, jobID, templateID uuid.UUID) (uuid.UUID, error) {
 	tmpl, err := pipelineTemplate(ctx, tx, orgID, templateID)
 	if err != nil {
-		return err
+		return uuid.Nil, err
 	}
 	rows, err := tx.Q.ListPipelineTemplateStages(ctx, tmpl.ID)
 	if err != nil {
-		return err
+		return uuid.Nil, err
 	}
-	specs := make([]StageInput, 0, len(rows)+2)
+	specs := make([]domain.Stage, 0, len(rows)+2)
 	var hired, rejected bool
 	for _, row := range rows {
-		in := StageInput{Name: row.Name, Kind: domain.StageKind(row.Kind), Unblind: row.Unblind}
-		if in.Kind == domain.StageTerminal {
-			in.Terminal = terminalOutcomeFor(row.Name)
-			if in.Terminal == domain.StatusHired && hired {
+		st := templateStage(row)
+		if st.Kind == domain.StageTerminal {
+			if st.Terminal == domain.StatusHired && hired {
 				continue
 			}
-			if in.Terminal == domain.StatusRejected && rejected {
+			if st.Terminal == domain.StatusRejected && rejected {
 				continue
 			}
-			hired = hired || in.Terminal == domain.StatusHired
-			rejected = rejected || in.Terminal == domain.StatusRejected
+			hired = hired || st.Terminal == domain.StatusHired
+			rejected = rejected || st.Terminal == domain.StatusRejected
 		}
-		specs = append(specs, in)
+		specs = append(specs, st)
 	}
 	if !hired {
-		specs = append(specs, StageInput{Name: "Hired", Kind: domain.StageTerminal, Terminal: domain.StatusHired})
+		specs = append(specs, domain.Stage{Name: "Hired", Kind: domain.StageTerminal, Terminal: domain.StatusHired})
 	}
 	if !rejected {
-		specs = append(specs, StageInput{Name: "Rejected", Kind: domain.StageTerminal, Terminal: domain.StatusRejected})
+		specs = append(specs, domain.Stage{Name: "Rejected", Kind: domain.StageTerminal, Terminal: domain.StatusRejected})
 	}
 
 	copied := make([]domain.Stage, 0, len(specs))
-	for i, in := range specs {
-		row, err := tx.Q.CreateStage(ctx, db.CreateStageParams{
-			OrgID: orgID, JobID: jobID, Position: int32(i + 1),
-			Name: in.Name, Kind: string(in.Kind), TerminalStatus: terminalParam(in.Terminal), Unblind: in.Unblind,
-		})
+	for i, st := range specs {
+		row, err := tx.Q.CreateStage(ctx, createStageParams(orgID, jobID, int32(i+1), st))
 		if err != nil {
-			return fmt.Errorf("copy stage %q: %w", in.Name, err)
+			return uuid.Nil, fmt.Errorf("copy stage %q: %w", st.Name, err)
 		}
 		copied = append(copied, toStage(row))
 	}
-	return domain.ValidatePipeline(copied)
+	if err := domain.ValidatePipeline(copied); err != nil {
+		return uuid.Nil, err
+	}
+	if err := tx.Q.SetJobTemplate(ctx, db.SetJobTemplateParams{ID: jobID, TemplateID: uuid.NullUUID{UUID: tmpl.ID, Valid: true}}); err != nil {
+		return uuid.Nil, err
+	}
+	return tmpl.ID, nil
+}
+
+// templateStage reads a template stage as a pipeline stage. A terminal row
+// seeded before template stages carried an outcome reads it off its name.
+func templateStage(row db.PipelineTemplateStage) domain.Stage {
+	st := domain.Stage{
+		ID: row.ID, Position: int(row.Position), Name: row.Name, Kind: domain.StageKind(row.Kind), Unblind: row.Unblind,
+		InterviewFormat: row.InterviewFormat, DurationMinutes: derefInt32(row.DurationMinutes),
+		RoundSeconds: derefInt32(row.RoundSeconds), BreakSeconds: derefInt32(row.BreakSeconds),
+	}
+	if st.Kind == domain.StageTerminal {
+		st.Terminal = domain.TerminalOutcomeFor(row.Name)
+		if row.TerminalStatus != nil {
+			st.Terminal = domain.ApplicationStatus(*row.TerminalStatus)
+		}
+	}
+	return domain.NormalizeStage(st)
+}
+
+// createStageParams is a normalised stage as an insert.
+func createStageParams(orgID, jobID uuid.UUID, position int32, st domain.Stage) db.CreateStageParams {
+	return db.CreateStageParams{
+		OrgID: orgID, JobID: jobID, Position: position,
+		Name: st.Name, Kind: string(st.Kind), TerminalStatus: terminalParam(st.Terminal), Unblind: st.Unblind,
+		DefaultVetterID: vetterParam(st.DefaultVetterID),
+		InterviewFormat: formatParam(st.InterviewFormat), DurationMinutes: int32Ptr(st.DurationMinutes),
+		RoundSeconds: int32Ptr(st.RoundSeconds), BreakSeconds: int32Ptr(st.BreakSeconds),
+	}
 }
 
 // pipelineTemplate loads the named template, or the org's default when the
@@ -271,15 +300,6 @@ func pipelineTemplate(ctx context.Context, tx *store.Tx, orgID, templateID uuid.
 	return tmpl, err
 }
 
-// terminalOutcomeFor reads a template terminal stage's outcome off its name;
-// anything that is not a rejection closes the application as hired.
-func terminalOutcomeFor(name string) domain.ApplicationStatus {
-	if strings.Contains(strings.ToLower(name), "reject") {
-		return domain.StatusRejected
-	}
-	return domain.StatusHired
-}
-
 func cleanStage(in StageInput) (StageInput, error) {
 	in.Name = strings.TrimSpace(in.Name)
 	if in.Name == "" {
@@ -288,17 +308,14 @@ func cleanStage(in StageInput) (StageInput, error) {
 	if !in.Kind.Valid() {
 		return in, fmt.Errorf("%w: %q is not a stage kind", domain.ErrInvalidPipeline, in.Kind)
 	}
-	if in.Kind != domain.StageInterview {
-		in.DefaultVetterID = uuid.Nil
-	}
-	if in.Kind != domain.StageTerminal {
-		in.Terminal = ""
-		return in, nil
-	}
-	if in.Terminal != domain.StatusHired && in.Terminal != domain.StatusRejected {
+	if in.Kind == domain.StageTerminal && in.Terminal != domain.StatusHired && in.Terminal != domain.StatusRejected {
 		return in, fmt.Errorf("%w: terminal stage %q must close applications as hired or rejected", domain.ErrInvalidPipeline, in.Name)
 	}
-	return in, nil
+	st := in.stage()
+	if err := domain.ValidateStageSettings(st); err != nil {
+		return in, err
+	}
+	return stageInputOf(st), nil
 }
 
 // requireJob refuses a job id the org cannot see, so an unknown id is a 404
@@ -370,6 +387,8 @@ func toStage(row db.Stage) domain.Stage {
 	st := domain.Stage{
 		ID: row.ID, Position: int(row.Position), Name: row.Name,
 		Kind: domain.StageKind(row.Kind), Unblind: row.Unblind,
+		InterviewFormat: row.InterviewFormat, DurationMinutes: derefInt32(row.DurationMinutes),
+		RoundSeconds: derefInt32(row.RoundSeconds), BreakSeconds: derefInt32(row.BreakSeconds),
 	}
 	if row.TerminalStatus != nil {
 		st.Terminal = domain.ApplicationStatus(*row.TerminalStatus)
@@ -377,7 +396,32 @@ func toStage(row db.Stage) domain.Stage {
 	if row.DefaultVetterID.Valid {
 		st.DefaultVetterID = row.DefaultVetterID.UUID
 	}
-	return st
+	return domain.NormalizeStage(st)
+}
+
+// formatParam stores an interview format; the column is not null, so a stage
+// of another kind carries the default rather than nothing.
+func formatParam(format string) string {
+	if format == "" {
+		return domain.FormatCall
+	}
+	return format
+}
+
+// int32Ptr stores a setting a kind does not use as null.
+func int32Ptr(n int) *int32 {
+	if n == 0 {
+		return nil
+	}
+	v := int32(n)
+	return &v
+}
+
+func derefInt32(p *int32) int {
+	if p == nil {
+		return 0
+	}
+	return int(*p)
 }
 
 func vetterParam(id uuid.UUID) uuid.NullUUID {

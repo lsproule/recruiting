@@ -20,7 +20,7 @@ type queueFixture struct {
 	queue *service.WorkQueueService
 	exec  func(sql string, args ...any)
 	// the subject of each rule's row
-	scoredAttempt, invitedAttempt, waitingApp, draftPacket, overdueSlot uuid.UUID
+	scoredAttempt, invitedAttempt, waitingApp, draftPacket, overdueSlot, unratedPairing, waitingIntro uuid.UUID
 	// the second recruiter, who shares the queue but not the snoozes
 	mateID uuid.UUID
 	// assessment the sittings belong to
@@ -66,6 +66,27 @@ func newQueueFixture(t *testing.T) *queueFixture {
 	f.exec(`insert into interview_slot (id, org_id, vetter_id, application_id, stage_id, starts_at, ends_at, status)
 		values ($1, $2, $3, $4, $5, now() - interval '2 days', now() - interval '2 days' + interval '1 hour', 'completed')`,
 		f.overdueSlot, pf.orgID, pf.userID, pf.appID, pf.stages[domain.StageInterview])
+	// sprint_rating: a sprint conversation that ended an hour ago, unrated.
+	sprintStage := uuid.New()
+	f.exec(`insert into stage (id, org_id, job_id, position, name, kind, round_seconds, break_seconds) values ($1, $2, $3, 7, 'Sprint', 'sprint', 300, 60)`,
+		sprintStage, pf.orgID, pf.jobID)
+	sprintID := uuid.New()
+	f.exec(`insert into sprint (id, org_id, job_id, stage_id, name, status, starts_at, round_seconds, break_seconds)
+		values ($1, $2, $3, $4, 'Sprint', 'scheduled', now() - interval '1 hour', 300, 60)`, sprintID, pf.orgID, pf.jobID, sprintStage)
+	f.unratedPairing = uuid.New()
+	f.exec(`insert into sprint_pairing (id, sprint_id, org_id, round, interviewer_id, application_id) values ($1, $2, $3, 0, $4, $5)`,
+		f.unratedPairing, sprintID, pf.orgID, pf.userID, pf.appID)
+	// talent_intro: a company asked to meet someone and nobody has sent them
+	// the opportunity.
+	var companyID, candID uuid.UUID
+	if err := pf.sys.QueryRow(ctx, `select client_company_id, candidate_id from application where id = $1`, pf.appID).Scan(&companyID, &candID); err != nil {
+		t.Fatal(err)
+	}
+	requestID := uuid.New()
+	f.exec(`insert into talent_request (id, org_id, client_company_id, title, skills) values ($1, $2, $3, 'Go engineer', '{go}')`, requestID, pf.orgID, companyID)
+	f.waitingIntro = uuid.New()
+	f.exec(`insert into talent_intro (id, org_id, request_id, candidate_id, source, score) values ($1, $2, $3, $4, 'network', 0.7)`,
+		f.waitingIntro, pf.orgID, requestID, candID)
 	return f
 }
 
@@ -269,5 +290,19 @@ func TestQueueRefusesClientUsers(t *testing.T) {
 	client := service.Principal{Kind: service.PrincipalClientUser, OrgID: f.orgID, UserID: uuid.New()}
 	if _, err := f.queue.List(context.Background(), client, ""); err == nil {
 		t.Fatal("a client user read the recruiter's work queue")
+	}
+}
+
+func TestQueueTalentIntroWaitsUntilSent(t *testing.T) {
+	f := newQueueFixture(t)
+	p := f.recruiter()
+	onlySubject(t, f.subjects(t, p, service.QueueTalentIntro), f.waitingIntro)
+	items := f.list(t, p, service.QueueTalentIntro)
+	if len(items) != 1 || items[0].ActionLabel != "Send opportunity" || items[0].Due == nil {
+		t.Fatalf("talent intro item = %+v", items)
+	}
+	f.exec(`update talent_intro set status = 'sent', sent_at = now() where id = $1`, f.waitingIntro)
+	if got := f.subjects(t, p, service.QueueTalentIntro); len(got) != 0 {
+		t.Fatalf("a sent introduction is still queued: %v", got)
 	}
 }

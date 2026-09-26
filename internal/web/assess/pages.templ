@@ -43,7 +43,11 @@ templ sessionPage(s service.AttemptSession, cfgJSON string, csrf string) {
 					@consentSection(s, csrf)
 				} else {
 					<section class="assess-intro">
-						<p>Hi { s.CandidateName }. This assessment has { fmt.Sprint(len(s.Problems)) } problem(s) and a time limit of { fmt.Sprint(s.Assessment.DurationMinutes) } minutes. The clock starts when you press Start and cannot be paused.</p>
+						if s.Assessment.Format == service.AssessmentTakeHome {
+							<p>Hi { s.CandidateName }. This is a take-home with { fmt.Sprint(len(s.Problems)) } problem(s). Once you start you have { takeHomeWindow(s.Assessment.DurationMinutes) } to finish; you can close this page and come back through the same link as often as you like until then. Nothing is proctored.</p>
+						} else {
+							<p>Hi { s.CandidateName }. This assessment has { fmt.Sprint(len(s.Problems)) } problem(s) and a time limit of { fmt.Sprint(s.Assessment.DurationMinutes) } minutes. The clock starts when you press Start and cannot be paused.</p>
+						}
 						<ul>
 							for _, p := range s.Problems {
 								<li>{ p.Title } <span class="muted">({ p.Difficulty })</span></li>
@@ -52,7 +56,13 @@ templ sessionPage(s service.AttemptSession, cfgJSON string, csrf string) {
 						<p>Your invite is valid until { s.Attempt.InviteExpiresAt.Format("2006-01-02 15:04 UTC") }.</p>
 						<form method="post" action={ templ.SafeURL(SessionPath + "start") }>
 							<input type="hidden" name={ middleware.CSRFField } value={ csrf }/>
-							<button type="submit" class="primary">Start the assessment</button>
+							<button type="submit" class="primary">
+								if s.Assessment.Format == service.AssessmentTakeHome {
+									Start the take-home
+								} else {
+									Start the assessment
+								}
+							</button>
 						</form>
 					</section>
 				}

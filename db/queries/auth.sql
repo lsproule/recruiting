@@ -48,3 +48,14 @@ order by t.created_at desc;
 
 -- name: RevokeAPIToken :execrows
 update api_token set revoked_at = now() where id = $1 and revoked_at is null;
+
+-- name: ListAPITokensByClientUser :many
+-- A client user's own live tokens, for the portal's developer page.
+select * from api_token
+where client_user_id = $1 and revoked_at is null
+  and (expires_at is null or expires_at > now())
+order by created_at desc;
+
+-- name: RevokeAPITokenOfClientUser :execrows
+update api_token set revoked_at = now()
+where id = $1 and client_user_id = $2 and revoked_at is null;

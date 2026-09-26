@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -91,6 +92,7 @@ func newAPIFixture(t *testing.T) *apiFixture {
 		APITokens: f.tokens,
 		Jobs:      service.NewJobService(st),
 		Portal:    service.NewClientPortalService(st, nil, nil, nil, ""),
+		Talent:    service.NewTalentService(st, nil, nil, nil, ""),
 	})
 	f.srv = httptest.NewServer(r.Mux)
 	t.Cleanup(f.srv.Close)
@@ -263,5 +265,131 @@ func TestTryEndpointRefusesAClientCredential(t *testing.T) {
 	}
 	if got, _ := f.call(t, http.MethodPost, path, ""); got != http.StatusUnauthorized {
 		t.Errorf("no credential on %s: status = %d, want 401", path, got)
+	}
+}
+
+// postJSON makes a request with a JSON body and the bearer token.
+func (f *apiFixture) postJSON(t *testing.T, method, path, token, body string) (int, []byte) {
+	t.Helper()
+	req, err := http.NewRequestWithContext(f.ctx, method, f.srv.URL+path, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := f.srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	out, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, out
+}
+
+// TestCompanySurfaceIssuesTokensAndReadsItsFeed walks the integration path a
+// company follows: one token issued by the admin bootstraps the rest.
+func TestCompanySurfaceIssuesTokensAndReadsItsFeed(t *testing.T) {
+	f := newAPIFixture(t)
+	_, first, err := f.tokens.Issue(f.ctx, f.admin(), service.NewAPIToken{Name: "bootstrap", UserID: f.clientID, ClientUser: true})
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+
+	status, body := f.postJSON(t, http.MethodPost, "/api/v1/portal/tokens", first, `{"name":"ats sync"}`)
+	if status != http.StatusCreated {
+		t.Fatalf("create own token: %d %s", status, body)
+	}
+	var created struct {
+		Token  struct{ ID uuid.UUID } `json:"token"`
+		Secret string                 `json:"secret"`
+	}
+	if err := json.Unmarshal(body, &created); err != nil || created.Secret == "" {
+		t.Fatalf("decode: %v %s", err, body)
+	}
+	// The new token reaches the company surface like the first.
+	if got, b := f.call(t, http.MethodGet, "/api/v1/portal/tokens", created.Secret); got != http.StatusOK || !strings.Contains(string(b), "ats sync") {
+		t.Fatalf("list own tokens: %d %s", got, b)
+	}
+	if got, _ := f.call(t, http.MethodGet, "/api/v1/jobs", created.Secret); got != http.StatusForbidden {
+		t.Fatalf("company token on the org surface: %d, want 403", got)
+	}
+	status, body = f.call(t, http.MethodGet, "/api/v1/portal/events?since=0", created.Secret)
+	if status != http.StatusOK {
+		t.Fatalf("events: %d %s", status, body)
+	}
+	var feed struct {
+		Events    []json.RawMessage `json:"events"`
+		NextSince int64             `json:"next_since"`
+	}
+	if err := json.Unmarshal(body, &feed); err != nil || len(feed.Events) != 0 || feed.NextSince != 0 {
+		t.Fatalf("empty feed = %s (%v)", body, err)
+	}
+	if status, body = f.call(t, http.MethodGet, "/api/v1/portal/applications?limit=5", created.Secret); status != http.StatusOK || !strings.Contains(string(body), `"applications":[]`) {
+		t.Fatalf("applications: %d %s", status, body)
+	}
+	// Revoking through the API stops the token at once; the first still works.
+	if got, _ := f.call(t, http.MethodDelete, "/api/v1/portal/tokens/"+created.Token.ID.String(), first); got != http.StatusNoContent {
+		t.Fatalf("revoke own: %d", got)
+	}
+	if got, _ := f.call(t, http.MethodGet, "/api/v1/portal/me", created.Secret); got != http.StatusUnauthorized {
+		t.Fatalf("revoked token: %d, want 401", got)
+	}
+	if got, _ := f.call(t, http.MethodDelete, "/api/v1/portal/tokens/"+created.Token.ID.String(), first); got != http.StatusNotFound {
+		t.Fatalf("revoking twice: %d, want 404", got)
+	}
+	// The org's admin token cannot use the company's own token operations.
+	_, orgToken, _ := f.tokens.Issue(f.ctx, f.admin(), service.NewAPIToken{Name: "ci", UserID: f.adminID})
+	if got, _ := f.postJSON(t, http.MethodPost, "/api/v1/portal/tokens", orgToken, `{"name":"x"}`); got != http.StatusForbidden {
+		t.Fatalf("org token issuing a portal token: %d, want 403", got)
+	}
+}
+
+// TestCompanyFilesATalentRequestAndReadsMatches covers the talent operations
+// over HTTP: a request with a bad vocabulary is refused with a 422, a good
+// one is created, and the matches read is anonymised and empty for a fresh
+// org.
+func TestCompanyFilesATalentRequestAndReadsMatches(t *testing.T) {
+	f := newAPIFixture(t)
+	_, token, err := f.tokens.Issue(f.ctx, f.admin(), service.NewAPIToken{Name: "portal", UserID: f.clientID, ClientUser: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, body := f.postJSON(t, http.MethodPost, "/api/v1/portal/talent-requests", token, `{"title":"x","skills":["go"],"seniority":"wizard"}`); got != http.StatusUnprocessableEntity {
+		t.Fatalf("bad seniority: %d %s", got, body)
+	}
+	status, body := f.postJSON(t, http.MethodPost, "/api/v1/portal/talent-requests", token, `{"title":"Senior Go engineer","skills":["go","postgres"],"remote_policy":"remote"}`)
+	if status != http.StatusCreated {
+		t.Fatalf("create: %d %s", status, body)
+	}
+	var created struct {
+		Request struct {
+			ID     uuid.UUID `json:"id"`
+			Status string    `json:"status"`
+			Skills []string  `json:"skills"`
+		} `json:"request"`
+	}
+	if err := json.Unmarshal(body, &created); err != nil || created.Request.Status != "open" || len(created.Request.Skills) != 2 {
+		t.Fatalf("created = %s (%v)", body, err)
+	}
+	path := "/api/v1/portal/talent-requests/" + created.Request.ID.String()
+	if got, b := f.call(t, http.MethodGet, path+"/matches", token); got != http.StatusOK || !strings.Contains(string(b), `"matches":[]`) {
+		t.Fatalf("matches: %d %s", got, b)
+	}
+	if got, _ := f.postJSON(t, http.MethodPost, path+"/matches/"+uuid.New().String()+"/introduce", token, ""); got != http.StatusNotFound {
+		t.Fatalf("introduce to nobody: %d, want 404", got)
+	}
+	if got, _ := f.postJSON(t, http.MethodPost, path+"/close", token, ""); got != http.StatusNoContent {
+		t.Fatalf("close: %d", got)
+	}
+	if got, _ := f.postJSON(t, http.MethodPost, path+"/close", token, ""); got != http.StatusConflict {
+		t.Fatalf("close twice: %d, want 409", got)
+	}
+	// The recruiter's side lists it; a company token cannot.
+	_, orgToken, _ := f.tokens.Issue(f.ctx, f.admin(), service.NewAPIToken{Name: "ci", UserID: f.adminID})
+	if got, b := f.call(t, http.MethodGet, "/api/v1/talent-requests", orgToken); got != http.StatusOK || !strings.Contains(string(b), "Senior Go engineer") {
+		t.Fatalf("recruiter list: %d %s", got, b)
+	}
+	if got, _ := f.call(t, http.MethodGet, "/api/v1/talent-requests", token); got != http.StatusForbidden {
+		t.Fatalf("company token on the recruiter list: %d, want 403", got)
 	}
 }

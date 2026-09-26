@@ -182,6 +182,45 @@ func (q *Queries) ListAPITokens(ctx context.Context, orgID uuid.UUID) ([]ListAPI
 	return items, nil
 }
 
+const listAPITokensByClientUser = `-- name: ListAPITokensByClientUser :many
+select id, org_id, org_user_id, name, token_hash, created_at, revoked_at, prefix, expires_at, client_user_id from api_token
+where client_user_id = $1 and revoked_at is null
+  and (expires_at is null or expires_at > now())
+order by created_at desc
+`
+
+// A client user's own live tokens, for the portal's developer page.
+func (q *Queries) ListAPITokensByClientUser(ctx context.Context, clientUserID uuid.NullUUID) ([]ApiToken, error) {
+	rows, err := q.db.Query(ctx, listAPITokensByClientUser, clientUserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ApiToken{}
+	for rows.Next() {
+		var i ApiToken
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrgID,
+			&i.OrgUserID,
+			&i.Name,
+			&i.TokenHash,
+			&i.CreatedAt,
+			&i.RevokedAt,
+			&i.Prefix,
+			&i.ExpiresAt,
+			&i.ClientUserID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lookupPasswordReset = `-- name: LookupPasswordReset :one
 select id, org_id, org_user_id, client_user_id, token_hash, expires_at, used_at, created_at from password_reset where token_hash = $1
 `
@@ -238,6 +277,24 @@ update api_token set revoked_at = now() where id = $1 and revoked_at is null
 
 func (q *Queries) RevokeAPIToken(ctx context.Context, id uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, revokeAPIToken, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const revokeAPITokenOfClientUser = `-- name: RevokeAPITokenOfClientUser :execrows
+update api_token set revoked_at = now()
+where id = $1 and client_user_id = $2 and revoked_at is null
+`
+
+type RevokeAPITokenOfClientUserParams struct {
+	ID           uuid.UUID
+	ClientUserID uuid.NullUUID
+}
+
+func (q *Queries) RevokeAPITokenOfClientUser(ctx context.Context, arg RevokeAPITokenOfClientUserParams) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeAPITokenOfClientUser, arg.ID, arg.ClientUserID)
 	if err != nil {
 		return 0, err
 	}

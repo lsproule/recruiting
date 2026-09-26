@@ -134,6 +134,7 @@ type assessmentForm struct {
 	ID               uuid.UUID
 	New              bool
 	Name             string
+	Format           string
 	DurationMinutes  int
 	LanguageOverride string
 	InviteWindowDays int
@@ -184,7 +185,7 @@ func (f assessmentForm) webcamInterval() int {
 }
 
 func (f assessmentForm) input() service.AssessmentInput {
-	in := service.AssessmentInput{Name: f.Name, DurationMinutes: f.DurationMinutes, LanguageOverride: f.LanguageOverride,
+	in := service.AssessmentInput{Name: f.Name, Format: f.Format, DurationMinutes: f.DurationMinutes, LanguageOverride: f.LanguageOverride,
 		InviteWindowDays: f.InviteWindowDays, AllowedLanguages: f.AllowedLanguages, Integrity: f.Integrity}
 	for _, p := range f.Picked {
 		in.ProblemIDs = append(in.ProblemIDs, p.ID)
@@ -273,7 +274,7 @@ func (h *recruiter) form(w http.ResponseWriter, r *http.Request) {
 			h.fail(w, r, err)
 			return
 		}
-		f = assessmentForm{ID: a.ID, Name: a.Name, DurationMinutes: a.DurationMinutes, LanguageOverride: a.LanguageOverride,
+		f = assessmentForm{ID: a.ID, Name: a.Name, Format: a.Format, DurationMinutes: a.DurationMinutes, LanguageOverride: a.LanguageOverride,
 			InviteWindowDays: a.InviteWindowDays, AllowedLanguages: a.AllowedLanguages, Integrity: a.Integrity, Picked: a.Problems}
 	}
 	if r.URL.Query().Has("name") {
@@ -312,7 +313,7 @@ func (h *recruiter) readForm(r *http.Request, id uuid.UUID, isNew bool) assessme
 		_ = r.ParseForm()
 		values = r.PostForm
 	}
-	f := assessmentForm{ID: id, New: isNew, Name: values.Get("name"), LanguageOverride: values.Get("language_override")}
+	f := assessmentForm{ID: id, New: isNew, Name: values.Get("name"), Format: values.Get("format"), LanguageOverride: values.Get("language_override")}
 	f.DurationMinutes, _ = strconv.Atoi(values.Get("duration_minutes"))
 	f.InviteWindowDays, _ = strconv.Atoi(values.Get("invite_window_days"))
 	for _, l := range values["allowed_languages"] {

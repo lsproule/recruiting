@@ -1,0 +1,473 @@
+package sprints
+
+import (
+	"time"
+
+	"github.com/google/uuid"
+
+	"recruiting/internal/domain"
+	"recruiting/internal/service"
+	"recruiting/internal/web/layout"
+	"recruiting/internal/web/room"
+)
+
+// listPage is every sprint of the org.
+templ listPage(page layout.Page, items []service.SprintListItem, now time.Time) {
+	@layout.Base(page) {
+		<div class="page-head">
+			<div>
+				<p class="page-kicker">Screening sprints</p>
+				<h1>Speed screening, on a clock</h1>
+				<p class="muted">Every candidate in a sprint stage meets every interviewer for a few minutes each. Set one up from a job's sprint stage on its board.</p>
+			</div>
+		</div>
+		if len(items) == 0 {
+			<div class="panel empty-card">
+				<h2>No sprints yet</h2>
+				<p class="muted">Add a screening-sprint stage to a job's pipeline, move candidates into it, and set up a sprint from the board.</p>
+				<a class="btn btn-primary" href="/app/jobs">Jobs</a>
+			</div>
+		} else {
+			<table>
+				<thead><tr><th>Sprint</th><th>Job</th><th>Starts</th><th>Shape</th><th>Status</th><th></th></tr></thead>
+				<tbody>
+					for _, s := range items {
+						{{ label := statusLabel(s.Status, s.Clock(), now) }}
+						<tr>
+							<td><a href={ templ.SafeURL(Path(s.ID)) }>{ s.Name }</a></td>
+							<td class="muted">{ s.JobTitle } &middot; { s.StageName }</td>
+							<td class="num">{ when(s.StartsAt) }</td>
+							<td class="muted">{ itoa(s.Candidates) } × { itoa(s.Interviewers) } &middot; { itoa(s.Rounds()) } rounds of { RoundLabel(s.RoundSeconds) }</td>
+							<td><span class={ "tag", statusTag(label) }>{ label }</span></td>
+							<td class="row-actions"><a href={ templ.SafeURL(ConsolePath(s.ID)) }>Console</a></td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+	}
+}
+
+// setupPage plans a sprint. The plan line reads the form as it is filled in.
+templ setupPage(page layout.Page, v setupView) {
+	@layout.Base(page) {
+		<div class="page-head">
+			<div>
+				<p class="page-kicker"><a href={ templ.SafeURL("/app/pipeline/" + v.Job.ID.String()) }>{ v.Job.Title }</a> &middot; { v.Stage.Name }</p>
+				<h1>New screening sprint</h1>
+				<p class="muted">Pick who takes part and when. Every candidate meets every interviewer once; the platform schedules the rotation.</p>
+			</div>
+		</div>
+		if v.Error != "" {
+			<p class="flash flash-error" role="alert">{ v.Error }</p>
+		}
+		<form class="sprint-setup" method="post" action={ templ.SafeURL(Prefix) } x-data="sprintPlan()" x-init="init()">
+			@layout.CSRFField(page.CSRF)
+			<input type="hidden" name="job_id" value={ v.Job.ID.String() }/>
+			<input type="hidden" name="stage_id" value={ v.Stage.ID.String() }/>
+			<input type="hidden" name="timezone" x-ref="tz" value={ v.Form.Timezone }/>
+			<div class="sprint-setup-main">
+				<section class="panel">
+					<div class="panel-head"><span class="panel-title">When and how long</span></div>
+					<div class="panel-body stage-fields">
+						<label>Name <input type="text" name="name" value={ v.Form.Name } required/></label>
+						<label>Starts (your local time) <input type="datetime-local" name="starts_local" value={ v.Form.StartsLocal } required/></label>
+						<label>Round length (minutes) <input type="number" name="round_minutes" x-model.number="round" min="0.25" step="0.25" max="60" value={ v.Form.RoundMinutes } required/></label>
+						<label>Break between rounds (seconds) <input type="number" name="break_seconds" x-model.number="brk" min="0" max="3600" value={ v.Form.BreakSeconds } required/></label>
+					</div>
+				</section>
+				<section class="panel">
+					<div class="panel-head">
+						<span class="panel-title">Candidates</span>
+						<span class="muted">in { v.Stage.Name } now</span>
+					</div>
+					<div class="panel-body">
+						if len(v.Candidates) == 0 {
+							<p class="muted">Nobody is in this stage yet. Move candidates into it from the board first.</p>
+						} else {
+							<div class="options options-rows">
+								for _, a := range v.Candidates {
+									<label class="option">
+										<input type="checkbox" name="candidate" value={ a.ID.String() } checked?={ v.Form.has(v.Form.Candidates, a.ID) } @change="count()"/>
+										{ a.CandidateName }
+										<span class="option-note">{ a.CandidateEmail }</span>
+									</label>
+								}
+							</div>
+						}
+					</div>
+				</section>
+				<section class="panel">
+					<div class="panel-head">
+						<span class="panel-title">Interviewers</span>
+						<span class="muted">vetters, recruiters and admins</span>
+					</div>
+					<div class="panel-body">
+						<div class="options">
+							for _, u := range v.Interviewers {
+								<label class="option">
+									<input type="checkbox" name="interviewer" value={ u.ID.String() } checked?={ v.Form.has(v.Form.Interviewers, u.ID) } @change="count()"/>
+									{ userLabel(u) }
+									<span class="option-note">{ roles(u) }</span>
+								</label>
+							}
+						</div>
+					</div>
+				</section>
+			</div>
+			<aside class="sprint-setup-side">
+				<section class="panel sprint-plan">
+					<span class="card-kicker">The plan</span>
+					<p class="sprint-plan-line">
+						<span class="num" x-text="candidates"></span> candidates × <span class="num" x-text="interviewers"></span> interviewers
+					</p>
+					<p class="sprint-plan-big"><span class="num" x-text="rounds()"></span> rounds</p>
+					<p class="muted">
+						of <span x-text="round"></span> min with <span x-text="brk"></span> s between &middot;
+						about <span class="num" x-text="totalMinutes()"></span> minutes in all.
+						Every candidate meets every interviewer once; each conversation gets its own room.
+					</p>
+					<p class="muted" x-show="candidates > interviewers" x-cloak>With more candidates than interviewers, each candidate waits out <span x-text="candidates - interviewers"></span> rounds in the lobby.</p>
+					<button type="submit" class="btn btn-primary btn-block" :disabled="candidates === 0 || interviewers === 0">Save as draft</button>
+					<p class="muted">Nothing is sent until you schedule it from the next page.</p>
+				</section>
+			</aside>
+		</form>
+		@planScript()
+	}
+}
+
+templ planScript() {
+	<script>
+		window.sprintPlan = function () {
+			return {
+				candidates: 0, interviewers: 0, round: 5, brk: 60,
+				init() {
+					try { this.$refs.tz.value = this.$refs.tz.value || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch (e) { this.$refs.tz.value = 'UTC'; }
+					const form = this.$root;
+					this.round = parseFloat(form.querySelector('[name=round_minutes]').value) || 5;
+					this.brk = parseInt(form.querySelector('[name=break_seconds]').value, 10) || 0;
+					this.count();
+				},
+				count() {
+					const form = this.$root;
+					this.candidates = form.querySelectorAll('[name=candidate]:checked').length;
+					this.interviewers = form.querySelectorAll('[name=interviewer]:checked').length;
+				},
+				rounds() { return this.candidates && this.interviewers ? Math.max(this.candidates, this.interviewers) : 0; },
+				totalMinutes() {
+					const r = this.rounds();
+					if (!r) return 0;
+					return Math.round((r * this.round * 60 + (r - 1) * this.brk) / 60);
+				},
+			};
+		};
+	</script>
+}
+
+// summaryPage is the sprint as the recruiter reads it: what it is, its
+// standing on the clock, and the candidates ranked once ratings are in.
+templ summaryPage(page layout.Page, v summaryView) {
+	{{ sp := v.Summary.Sprint }}
+	{{ label := statusLabel(sp.Status, sp.Clock(), v.Now) }}
+	@layout.Base(page) {
+		<div class="page-head">
+			<div>
+				<p class="page-kicker"><a href={ templ.SafeURL(Prefix) }>Screening sprints</a> &middot; <a href={ templ.SafeURL("/app/pipeline/" + sp.JobID.String()) }>{ sp.JobTitle }</a></p>
+				<h1>{ sp.Name } <span class={ "tag", statusTag(label) }>{ label }</span></h1>
+				<p class="muted">
+					{ when(sp.StartsAt) } &middot; { itoa(len(sp.Candidates)) } candidates × { itoa(len(sp.Interviewers)) } interviewers &middot; { itoa(sp.Rounds()) } rounds of { RoundLabel(sp.RoundSeconds) }, { minutes(sp.Duration()) } in all
+				</p>
+			</div>
+			<div class="page-actions">
+				if sp.Status == service.SprintScheduled {
+					<a class="btn btn-primary" href={ templ.SafeURL(ConsolePath(sp.ID)) }>Open console</a>
+				}
+				if v.CanManage {
+					if sp.Status == service.SprintDraft {
+						<form method="post" action={ templ.SafeURL(Path(sp.ID) + "/schedule") }>
+							@layout.CSRFField(page.CSRF)
+							<button type="submit" class="btn btn-primary">Schedule and invite</button>
+						</form>
+					}
+					if sp.Status == service.SprintScheduled && v.phase().Phase == domain.PhaseBefore {
+						<form method="post" action={ templ.SafeURL(Path(sp.ID) + "/start") }>
+							@layout.CSRFField(page.CSRF)
+							<button type="submit" class="btn btn-secondary">Start now</button>
+						</form>
+					}
+					if sp.Status != service.SprintCancelled {
+						<form method="post" action={ templ.SafeURL(Path(sp.ID) + "/cancel") }>
+							@layout.CSRFField(page.CSRF)
+							<button type="submit" class="btn btn-ghost" onclick="return confirm('Cancel this sprint? Candidate links stop working.')">Cancel</button>
+						</form>
+					}
+				}
+			</div>
+		</div>
+		<div class="detail-grid">
+			<div class="detail-main">
+				<section class="panel">
+					<div class="panel-head">
+						<span class="panel-title">Ranking</span>
+						<span class="muted">by mean score, then strong yeses</span>
+					</div>
+					if len(v.Summary.Rows) == 0 {
+						<p class="muted panel-body">No candidates.</p>
+					} else {
+						<table class="sprint-ranking">
+							<thead>
+								<tr>
+									<th>#</th><th>Candidate</th><th>Mean</th>
+									for _, i := range sp.Interviewers {
+										<th>{ i.Name }</th>
+									}
+									<th></th>
+								</tr>
+							</thead>
+							<tbody>
+								for n, row := range v.Summary.Rows {
+									<tr>
+										<td class="num">{ itoa(n + 1) }</td>
+										<td>
+											<a href={ templ.SafeURL("/app/applications/" + row.Candidate.ApplicationID.String()) }>{ row.Candidate.Name }</a>
+											<span class="row-note">{ recSummary(row) }</span>
+										</td>
+										<td class="num sprint-mean">{ mean(row.Mean) }</td>
+										for _, pr := range row.Ratings {
+											<td>
+												if pr.Rating != nil {
+													<span class="sprint-score num">{ itoa(pr.Rating.Score) }</span>
+													<span class="row-note">{ recommendationLabel(pr.Rating.Recommendation) }</span>
+													if pr.Rating.Note != "" {
+														<span class="row-note">{ pr.Rating.Note }</span>
+													}
+												} else {
+													<span class="muted">—</span>
+												}
+											</td>
+										}
+										<td class="row-actions">
+											if v.CanManage && row.Candidate.Status == string(domain.StatusActive) {
+												if v.Next.ID != uuid.Nil {
+													<form method="post" action={ templ.SafeURL("/app/applications/" + row.Candidate.ApplicationID.String() + "/move") }>
+														@layout.CSRFField(page.CSRF)
+														<input type="hidden" name="to_stage_id" value={ v.Next.ID.String() }/>
+														<button type="submit" class="btn btn-primary">Advance</button>
+													</form>
+												}
+												if v.Reject.ID != uuid.Nil {
+													<form method="post" action={ templ.SafeURL("/app/applications/" + row.Candidate.ApplicationID.String() + "/move") }>
+														@layout.CSRFField(page.CSRF)
+														<input type="hidden" name="to_stage_id" value={ v.Reject.ID.String() }/>
+														<input type="hidden" name="reason" value="Screening sprint"/>
+														<button type="submit" class="btn btn-quiet">Reject</button>
+													</form>
+												}
+											} else if row.Candidate.Status != string(domain.StatusActive) {
+												<span class="muted">{ row.Candidate.Status }</span>
+											}
+										</td>
+									</tr>
+								}
+							</tbody>
+						</table>
+					}
+				</section>
+			</div>
+			<aside class="detail-side">
+				<section class="panel">
+					<div class="panel-head"><span class="panel-title">Rotation</span></div>
+					<div class="panel-body">
+						<table class="sprint-grid">
+							<thead>
+								<tr>
+									<th>Round</th>
+									for _, i := range sp.Interviewers {
+										<th>{ i.Name }</th>
+									}
+								</tr>
+							</thead>
+							<tbody>
+								for r := 0; r < sp.Rounds(); r++ {
+									<tr>
+										<td class="num">{ itoa(r + 1) } <span class="row-note">{ clock(sp.Clock().RoundStart(r)) }</span></td>
+										for _, i := range sp.Interviewers {
+											<td>{ pairingName(sp, r, i.ID) }</td>
+										}
+									</tr>
+								}
+							</tbody>
+						</table>
+					</div>
+				</section>
+			</aside>
+		</div>
+	}
+}
+
+// consolePage is the interviewer's seat: the clock, the room of the running
+// round, and the rating card between rounds. The island reads the state
+// endpoint and swaps rooms itself.
+templ consolePage(page layout.Page, v consoleView) {
+	@layout.Base(page) {
+		<script src={ layout.RoomPath } defer></script>
+		<div class="page-head">
+			<div>
+				<p class="page-kicker"><a href={ templ.SafeURL(Path(v.Sprint.ID)) }>{ v.Sprint.Name }</a> &middot; { v.Sprint.JobTitle }</p>
+				<h1 id="console-title">Console</h1>
+				<p class="muted" id="console-clock">Reading the clock…</p>
+			</div>
+			<div class="page-actions">
+				<a class="btn btn-secondary" href={ templ.SafeURL(Path(v.Sprint.ID)) }>Summary</a>
+			</div>
+		</div>
+		@room.ConfigScript("console-config", v.Config)
+		<div class="console" id="console" data-config="console-config">
+			<div class="console-main">
+				<div id="console-stage" class="console-stage">
+					<section class="panel empty-card"><h2>Loading…</h2></section>
+				</div>
+				<div id="console-rating" class="console-rating"></div>
+			</div>
+			<aside class="console-side">
+				<section class="panel">
+					<div class="panel-head"><span class="panel-title">Your rounds</span></div>
+					<ol id="console-rounds" class="console-rounds">
+						for _, pr := range v.Sprint.PairingsOf(v.UserID) {
+							<li data-pairing={ pr.ID.String() } data-round={ itoa(pr.Round) }>
+								<span class="console-round-index num">{ itoa(pr.Round + 1) }</span>
+								<span class="console-round-who">{ pr.CandidateName }</span>
+								<span class="console-round-at num">{ clock(v.Sprint.Clock().RoundStart(pr.Round)) }</span>
+								if pr.Rating != nil {
+									<span class="tag tag-neutral">rated { itoa(pr.Rating.Score) }</span>
+								} else {
+									<a class="btn-link console-rate-link" href={ templ.SafeURL(Path(v.Sprint.ID) + "/rate/" + pr.ID.String()) } hx-get={ Path(v.Sprint.ID) + "/rate/" + pr.ID.String() } hx-target="#console-rating" hx-swap="innerHTML">rate</a>
+								}
+							</li>
+						}
+					</ol>
+					if !v.Interviewer {
+						<p class="muted panel-body">You are not interviewing in this sprint; every room is open to you from the summary's rotation.</p>
+					}
+				</section>
+			</aside>
+		</div>
+	}
+}
+
+// ratingCard is the card for one conversation: filed once, editable after.
+templ ratingCard(sprintID uuid.UUID, pr service.SprintPairing, csrf string, errMessage string, saved bool) {
+	<form
+		class="panel rating-card"
+		id={ "rating-" + pr.ID.String() }
+		method="post"
+		action={ templ.SafeURL(Path(sprintID) + "/rate/" + pr.ID.String()) }
+		hx-post={ Path(sprintID) + "/rate/" + pr.ID.String() }
+		hx-target="this"
+		hx-swap="outerHTML"
+	>
+		@layout.CSRFField(csrf)
+		<div class="panel-head">
+			<span class="panel-title">Rate { pr.CandidateName }</span>
+			<span class="muted">round { itoa(pr.Round + 1) }</span>
+		</div>
+		<div class="panel-body rating-body">
+			if errMessage != "" {
+				<p class="flash flash-error" role="alert">{ errMessage }</p>
+			}
+			if saved {
+				<p class="flash flash-success" role="status">Saved.</p>
+			}
+			<fieldset class="rating-scores">
+				<legend>Score</legend>
+				for n := 1; n <= 5; n++ {
+					<label class="rating-score">
+						<input type="radio" name="score" value={ itoa(n) } required checked?={ pr.Rating != nil && pr.Rating.Score == n }/>
+						<span>{ itoa(n) }</span>
+					</label>
+				}
+			</fieldset>
+			<div class="seg rating-rec">
+				for _, rec := range service.SprintRecommendations {
+					<label class="seg-opt">
+						<input type="radio" name="recommendation" value={ rec } required checked?={ pr.Rating != nil && pr.Rating.Recommendation == rec }/>
+						{ recommendationLabel(rec) }
+					</label>
+				}
+			</div>
+			<label>One line <input type="text" name="note" maxlength="240" placeholder="What stood out" value={ ratingNote(pr) }/></label>
+			<button type="submit" class="btn btn-primary">
+				if pr.Rating != nil {
+					Update rating
+				} else {
+					Save rating
+				}
+			</button>
+		</div>
+	</form>
+}
+
+// lobbyPage is the candidate's page: their schedule, the countdown to the
+// next conversation, and the room when one is running.
+templ lobbyPage(v lobbyView) {
+	@lobbyShell(v.Lobby.Sprint.JobTitle + " · screening sprint") {
+		<header class="room-head">
+			<div>
+				<p class="page-kicker">Screening sprint &middot; { v.Lobby.Sprint.JobTitle }</p>
+				<h1 class="room-title">Hi { v.Lobby.CandidateName }</h1>
+				<p class="muted" id="console-clock">Reading the clock…</p>
+			</div>
+		</header>
+		@room.ConfigScript("console-config", v.Config)
+		<div class="console" id="console" data-config="console-config">
+			<div class="console-main">
+				<div id="console-stage" class="console-stage">
+					<section class="panel empty-card"><h2>Loading…</h2></section>
+				</div>
+			</div>
+			<aside class="console-side">
+				<section class="panel">
+					<div class="panel-head"><span class="panel-title">Your conversations</span></div>
+					<ol id="console-rounds" class="console-rounds">
+						for _, pr := range v.Lobby.Pairings {
+							<li data-pairing={ pr.ID.String() } data-round={ itoa(pr.Round) }>
+								<span class="console-round-index num">{ itoa(pr.Round + 1) }</span>
+								<span class="console-round-who">{ pr.InterviewerName }</span>
+								<span class="console-round-at num" data-at={ v.Lobby.Sprint.Clock().RoundStart(pr.Round).UTC().Format(time.RFC3339) }>{ clock(v.Lobby.Sprint.Clock().RoundStart(pr.Round)) } UTC</span>
+							</li>
+						}
+					</ol>
+					<p class="muted panel-body">Each conversation lasts { RoundLabel(v.Lobby.Sprint.RoundSeconds) }. The page moves you into the room when it starts; keep this tab open.</p>
+				</section>
+			</aside>
+		</div>
+	}
+}
+
+templ lobbyClosedPage(title, msg string) {
+	@lobbyShell(title) {
+		<section class="room-waiting panel">
+			<h2>{ title }</h2>
+			<p class="muted">{ msg }</p>
+		</section>
+	}
+}
+
+// lobbyShell is the candidate chrome: no navigation, the island loaded.
+templ lobbyShell(title string) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ title }</title>
+			<link rel="stylesheet" href={ layout.NocturnePath }/>
+			<link rel="stylesheet" href={ layout.AppCSSPath }/>
+			<script src={ layout.RoomPath } defer></script>
+		</head>
+		<body class="room-body">
+			{ children... }
+		</body>
+	</html>
+}

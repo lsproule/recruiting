@@ -29,10 +29,16 @@ const (
 	QueueShortlistDraft QueueKind = "shortlist_draft"
 	// QueueScorecardOverdue: an interview ended over a day ago with no scorecard.
 	QueueScorecardOverdue QueueKind = "scorecard_overdue"
+	// QueueSprintRating: a sprint conversation ended and its interviewer
+	// never rated the candidate.
+	QueueSprintRating QueueKind = "sprint_rating"
+	// QueueTalentIntro is a company that asked to meet a match and a
+	// recruiter who has not yet sent the person the opportunity.
+	QueueTalentIntro QueueKind = "talent_intro"
 )
 
 // QueueKinds is the queue's rules in the order the screen groups them.
-var QueueKinds = []QueueKind{QueueReview, QueueExpiring, QueueClientWaiting, QueueShortlistDraft, QueueScorecardOverdue}
+var QueueKinds = []QueueKind{QueueReview, QueueExpiring, QueueClientWaiting, QueueShortlistDraft, QueueScorecardOverdue, QueueSprintRating, QueueTalentIntro}
 
 // SnoozeWindow is how long "not now" lasts.
 const SnoozeWindow = 24 * time.Hour
@@ -44,6 +50,7 @@ const (
 	queueScorecardPath = "/scorecard/"
 	queueShortlistPath = "/shortlist"
 	queueJobPath       = "/app/jobs/"
+	queueSprintPath    = "/app/sprints/"
 )
 
 // QueueItem is one pending action: who it is about, what it is, and the one
@@ -178,6 +185,8 @@ func (s *WorkQueueService) collect(ctx context.Context, tx *store.Tx, p Principa
 		QueueClientWaiting:    clientWaitingItems,
 		QueueShortlistDraft:   shortlistDraftItems,
 		QueueScorecardOverdue: scorecardOverdueItems,
+		QueueSprintRating:     sprintRatingItems,
+		QueueTalentIntro:      talentIntroItems,
 	}
 	out := []QueueItem{}
 	for _, kind := range QueueKinds {
@@ -309,6 +318,24 @@ func scorecardOverdueItems(ctx context.Context, tx *store.Tx) ([]QueueItem, erro
 			item.ActionURL = appPath + row.ApplicationID.UUID.String() + queueScorecardPath + row.StageID.UUID.String()
 		}
 		out = append(out, item)
+	}
+	return out, nil
+}
+
+func sprintRatingItems(ctx context.Context, tx *store.Tx) ([]QueueItem, error) {
+	rows, err := tx.Q.ListQueueSprintRatingsMissing(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]QueueItem, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, QueueItem{
+			Kind: QueueSprintRating, Who: row.CandidateName,
+			Detail:   row.SprintName + " with " + row.InterviewerName + ", no rating",
+			JobTitle: row.JobTitle, ClientName: row.ClientName, Due: timePtr(row.EndedAt),
+			ActionLabel: "Rate", ActionURL: queueSprintPath + row.SprintID.String() + "/console",
+			SubjectID: row.PairingID,
+		})
 	}
 	return out, nil
 }

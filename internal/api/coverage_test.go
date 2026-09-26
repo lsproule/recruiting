@@ -97,8 +97,29 @@ var specResources = []resource{
 	},
 	{
 		Name: "client-portal", List: "list-portal-jobs", Get: "get-portal-job",
-		Extra: []string{"get-portal-me", "get-portal-application", "get-portal-resume"},
-		Why:   "the client portal is read-only",
+		Extra: []string{"get-portal-me", "get-portal-shortlist", "list-portal-applications", "get-portal-application", "get-portal-resume",
+			"advance-portal-application", "reject-portal-application", "request-portal-info", "list-portal-events",
+			"list-portal-tokens", "create-portal-token", "revoke-portal-token"},
+		Why: "a company creates nothing here but its own tokens and talent requests; jobs and applications are the recruiter's to open",
+	},
+	{
+		Name: "talent-network", List: "list-portal-talent-requests", Get: "get-portal-talent-request", Create: "create-portal-talent-request",
+		Extra: []string{"close-portal-talent-request", "list-portal-talent-matches", "introduce-portal-talent-match",
+			"list-talent-requests", "get-talent-request", "send-talent-opportunity", "dismiss-talent-introduction",
+			"list-talent-profiles", "get-talent-profile"},
+	},
+	{
+		Name: "processes", List: "list-processes", Get: "get-process", Create: "create-process",
+		Extra: []string{"update-process", "delete-process", "set-default-process", "list-process-library",
+			"create-process-stage", "update-process-stage", "delete-process-stage", "reorder-process-stages"},
+	},
+	{
+		Name: "sprints", List: "list-sprints", Get: "get-sprint", Create: "create-sprint",
+		Extra: []string{"update-sprint", "schedule-sprint", "start-sprint", "cancel-sprint", "rate-sprint-pairing", "get-sprint-summary"},
+	},
+	{
+		Name: "rooms", Get: "get-room-code",
+		Why: "a room is joined from a page with a browser session; the API only reads what its editor holds",
 	},
 	{
 		Name: "api-tokens", List: "list-api-tokens", Create: "create-api-token",

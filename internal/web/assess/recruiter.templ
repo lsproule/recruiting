@@ -157,7 +157,14 @@ templ formPage(page layout.Page, f assessmentForm, problems []string) {
 		<form id="assessment" class="stack" method="post" action={ templ.SafeURL(f.action()) }>
 			@layout.CSRFField(page.CSRF)
 			<label>Name <input type="text" name="name" value={ f.Name } required/></label>
-			<label>Duration (minutes) <input type="number" name="duration_minutes" min="1" max="1440" value={ fmt.Sprint(f.DurationMinutes) } required/></label>
+			<label>
+				Format
+				<select name="format">
+					<option value={ service.AssessmentTimed } selected?={ f.Format != service.AssessmentTakeHome }>Timed sitting (minutes, proctored)</option>
+					<option value={ service.AssessmentTakeHome } selected?={ f.Format == service.AssessmentTakeHome }>Take-home (days, no proctoring)</option>
+				</select>
+			</label>
+			<label>Window (minutes; a take-home defaults to 3 days, 4320) <input type="number" name="duration_minutes" min="1" max="43200" value={ fmt.Sprint(f.DurationMinutes) } required/></label>
 			<label>
 				Language override
 				<select name="language_override">

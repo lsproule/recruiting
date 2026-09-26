@@ -231,3 +231,127 @@ func toAPIToken(r db.ApiToken) APIToken {
 	}
 	return out
 }
+
+// ErrTokenLimit is returned when a client user already holds as many live
+// tokens as one account may keep.
+var ErrTokenLimit = errors.New("service: revoke a token before issuing another; an account keeps at most ten")
+
+// ClientTokenLimit is how many live tokens one client user may hold.
+const ClientTokenLimit = 10
+
+// IssueOwn mints a token for the signed-in client user themselves, for the
+// portal's developer page and the create-portal-token operation. The token
+// acts as that user, so it can reach exactly what they can. The row is
+// written in the org scope: api_token is an org-internal table a client
+// scope cannot see, and the check that the subject is the caller is made
+// here.
+func (s *APITokenService) IssueOwn(ctx context.Context, p Principal, name string, expiresAt *time.Time) (APIToken, string, error) {
+	if p.Kind != PrincipalClientUser {
+		return APIToken{}, "", ErrForbidden
+	}
+	if strings.TrimSpace(name) == "" {
+		return APIToken{}, "", ErrTokenName
+	}
+	if expiresAt != nil && !expiresAt.After(time.Now()) {
+		return APIToken{}, "", ErrTokenExpired
+	}
+	raw, hash, err := newToken()
+	if err != nil {
+		return APIToken{}, "", err
+	}
+	params := db.CreateAPITokenParams{
+		OrgID: p.OrgID, Name: strings.TrimSpace(name), Prefix: raw[:APITokenPrefixLen], TokenHash: hash,
+		ClientUserID: uuid.NullUUID{UUID: p.UserID, Valid: true},
+	}
+	if expiresAt != nil {
+		params.ExpiresAt = ts(*expiresAt)
+	}
+	var out APIToken
+	err = s.st.WithTx(ctx, orgScoped(p.OrgID), func(ctx context.Context, tx *store.Tx) error {
+		u, err := tx.Q.GetClientUser(ctx, p.UserID)
+		if err != nil {
+			return err
+		}
+		live, err := tx.Q.ListAPITokensByClientUser(ctx, uuid.NullUUID{UUID: p.UserID, Valid: true})
+		if err != nil {
+			return err
+		}
+		if len(live) >= ClientTokenLimit {
+			return ErrTokenLimit
+		}
+		row, err := tx.Q.CreateAPIToken(ctx, params)
+		if err != nil {
+			return err
+		}
+		out = toAPIToken(row)
+		out.UserEmail = u.Email
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, ErrTokenLimit) || errors.Is(err, pgx.ErrNoRows) {
+			return APIToken{}, "", errOr(err, ErrNotFound)
+		}
+		return APIToken{}, "", fmt.Errorf("issue own api token: %w", err)
+	}
+	return out, raw, nil
+}
+
+// ListOwn is a client user's live tokens, newest first.
+func (s *APITokenService) ListOwn(ctx context.Context, p Principal) ([]APIToken, error) {
+	if p.Kind != PrincipalClientUser {
+		return nil, ErrForbidden
+	}
+	var out []APIToken
+	err := s.st.WithTx(ctx, orgScoped(p.OrgID), func(ctx context.Context, tx *store.Tx) error {
+		u, err := tx.Q.GetClientUser(ctx, p.UserID)
+		if err != nil {
+			return err
+		}
+		rows, err := tx.Q.ListAPITokensByClientUser(ctx, uuid.NullUUID{UUID: p.UserID, Valid: true})
+		if err != nil {
+			return err
+		}
+		out = make([]APIToken, 0, len(rows))
+		for _, r := range rows {
+			t := toAPIToken(r)
+			t.UserEmail = u.Email
+			out = append(out, t)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list own api tokens: %w", err)
+	}
+	return out, nil
+}
+
+// RevokeOwn retires one of the client user's own tokens; anyone else's, or
+// one already revoked, is ErrNotFound.
+func (s *APITokenService) RevokeOwn(ctx context.Context, p Principal, id uuid.UUID) error {
+	if p.Kind != PrincipalClientUser {
+		return ErrForbidden
+	}
+	var n int64
+	err := s.st.WithTx(ctx, orgScoped(p.OrgID), func(ctx context.Context, tx *store.Tx) error {
+		var err error
+		n, err = tx.Q.RevokeAPITokenOfClientUser(ctx, db.RevokeAPITokenOfClientUserParams{
+			ID: id, ClientUserID: uuid.NullUUID{UUID: p.UserID, Valid: true},
+		})
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("revoke own api token: %w", err)
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// errOr is err when it is one of the callers' sentinels, else fallback.
+func errOr(err, fallback error) error {
+	if errors.Is(err, ErrTokenLimit) {
+		return err
+	}
+	return fallback
+}

@@ -15,8 +15,11 @@ import (
 
 	"recruiting/internal/domain"
 	"recruiting/internal/service"
+	"recruiting/internal/web/assess"
 	"recruiting/internal/web/layout"
 	"recruiting/internal/web/middleware"
+	"recruiting/internal/web/scorecards"
+	"recruiting/internal/web/stages"
 )
 
 // Prefix is where the job screens live on the app surface.
@@ -245,12 +248,37 @@ func (h *handlers) pipeline(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	stages, err := h.d.Jobs.Stages(r.Context(), p, id)
+	list, err := h.d.Jobs.Stages(r.Context(), p, id)
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
-	render(w, r, http.StatusOK, pipelinePage(h.page(r, job.Title+" pipeline", Prefix), job, stages, h.vetters(r, p), middleware.CSRFToken(r), ""))
+	render(w, r, http.StatusOK, pipelinePage(h.page(r, job.Title+" pipeline", Prefix), job, h.editor(r, p, job, list, "")))
+}
+
+// editor is the shared stage editor bound to this job's routes.
+func (h *handlers) editor(r *http.Request, p service.Principal, job service.Job, list []domain.Stage, message string) stages.Editor {
+	jobID := job.ID
+	recruiter := p.HasRole(service.RoleRecruiter) || p.HasRole(service.RoleAdmin)
+	return stages.Editor{
+		ID: "pipeline", Stages: list, Vetters: h.vetters(r, p), Error: message, CSRF: middleware.CSRFToken(r),
+		ReadOnly:    !recruiter,
+		OrderAction: Prefix + "/" + jobID.String() + "/stages/order",
+		AddAction:   Prefix + "/" + jobID.String() + "/stages",
+		StageAction: func(stageID uuid.UUID) string { return stagePath(jobID.String(), stageID.String()) },
+		DeleteAction: func(stageID uuid.UUID) string {
+			return stagePath(jobID.String(), stageID.String()) + "/delete"
+		},
+		SetupLink: func(s domain.Stage) (string, string) {
+			switch s.Kind {
+			case domain.StageInterview:
+				return "Rubric", scorecards.RubricPath(jobID, s.ID)
+			case domain.StageAssessment:
+				return "Assessment", assess.AttachStagePath(jobID, s.ID)
+			}
+			return "", ""
+		},
+	}
 }
 
 // vetters is who the editor offers as a stage's default interviewer. A
@@ -285,18 +313,17 @@ func (h *handlers) afterStageChange(w http.ResponseWriter, r *http.Request, jobI
 		h.fail(w, r, err)
 		return
 	}
-	stages, err := h.d.Jobs.Stages(r.Context(), p, jobID)
+	list, err := h.d.Jobs.Stages(r.Context(), p, jobID)
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
-	csrf := middleware.CSRFToken(r)
-	vetters := h.vetters(r, p)
+	editor := h.editor(r, p, job, list, message)
 	if r.Header.Get("HX-Request") != "" {
-		render(w, r, status, pipelineEditor(job, stages, vetters, csrf, message))
+		render(w, r, status, stages.View(editor))
 		return
 	}
-	render(w, r, status, pipelinePage(h.page(r, job.Title+" pipeline", Prefix), job, stages, vetters, csrf, message))
+	render(w, r, status, pipelinePage(h.page(r, job.Title+" pipeline", Prefix), job, editor))
 }
 
 func (h *handlers) addStage(w http.ResponseWriter, r *http.Request) {
@@ -305,7 +332,7 @@ func (h *handlers) addStage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	_, err := h.d.Jobs.AddStage(r.Context(), p, id, stageFromForm(r))
+	_, err := h.d.Jobs.AddStage(r.Context(), p, id, stages.FromForm(r))
 	h.afterStageChange(w, r, id, err)
 }
 
@@ -320,7 +347,7 @@ func (h *handlers) updateStage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad stage id", http.StatusBadRequest)
 		return
 	}
-	_, err = h.d.Jobs.UpdateStage(r.Context(), p, id, stageID, stageFromForm(r))
+	_, err = h.d.Jobs.UpdateStage(r.Context(), p, id, stageID, stages.FromForm(r))
 	h.afterStageChange(w, r, id, err)
 }
 
@@ -367,19 +394,6 @@ func jobID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 		return uuid.Nil, false
 	}
 	return id, true
-}
-
-func stageFromForm(r *http.Request) service.StageInput {
-	in := service.StageInput{
-		Name:     r.PostFormValue("name"),
-		Kind:     domain.StageKind(r.PostFormValue("kind")),
-		Terminal: domain.ApplicationStatus(r.PostFormValue("terminal_status")),
-		Unblind:  r.PostFormValue("unblind") != "",
-	}
-	// An unparseable id is treated as none: the select only ever offers
-	// real ids, and clearing the default is the harmless reading.
-	in.DefaultVetterID, _ = uuid.Parse(strings.TrimSpace(r.PostFormValue("default_vetter_id")))
-	return in
 }
 
 func jobFromForm(r *http.Request) (service.NewJob, error) {

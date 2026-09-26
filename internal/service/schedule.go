@@ -119,9 +119,16 @@ type Booking struct {
 	CandidateName string
 	JobTitle      string
 	VetterName    string
-	Slots         []domain.Slot // bookable, UTC, in start order
-	Current       *BookedSlot
-	CanChange     bool
+	// Video is set when the stage hosts the interview in a room, which the
+	// page offers to join from the booking once it opens.
+	Video     bool
+	Slots     []domain.Slot // bookable, UTC, in start order
+	Current   *BookedSlot
+	CanChange bool
+	// RoomOpen reports whether the current booking's room may be joined
+	// right now; RoomOpensAt is when it may.
+	RoomOpen    bool
+	RoomOpensAt time.Time
 }
 
 // ScheduleService is vetter availability and candidate booking.
@@ -357,8 +364,20 @@ func (s *ScheduleService) Assign(ctx context.Context, p Principal, applicationID
 type bookingContext struct {
 	app     db.Application
 	card    db.GetApplicationCardRow
+	stage   db.Stage
 	vetter  db.OrgUser
 	current *db.InterviewSlot
+}
+
+// video reports whether the stage hosts the interview in a room.
+func (b bookingContext) video() bool { return b.stage.InterviewFormat == domain.FormatVideo }
+
+// joinNote is the line a confirmation carries for a video interview.
+func (b bookingContext) joinNote() string {
+	if !b.video() {
+		return ""
+	}
+	return "This interview is by video. The room opens from your booking page ten minutes before the start; join from a laptop with a camera and a microphone."
 }
 
 func (s *ScheduleService) loadBooking(ctx context.Context, tx *store.Tx, p Principal) (bookingContext, error) {
@@ -373,16 +392,15 @@ func (s *ScheduleService) loadBooking(ctx context.Context, tx *store.Tx, p Princ
 	if b.card, err = tx.Q.GetApplicationCard(ctx, b.app.ID); err != nil {
 		return b, err
 	}
+	if b.stage, err = tx.Q.GetStage(ctx, b.app.StageID); err != nil {
+		return b, err
+	}
 	vetterID := b.app.VetterID
 	if !vetterID.Valid {
-		stage, err := tx.Q.GetStage(ctx, b.app.StageID)
-		if err != nil {
-			return b, err
-		}
-		if !stage.DefaultVetterID.Valid {
+		if !b.stage.DefaultVetterID.Valid {
 			return b, ErrNoVetter
 		}
-		vetterID = stage.DefaultVetterID
+		vetterID = b.stage.DefaultVetterID
 		// Remembered so the vetter stays the same if the stage default moves.
 		if b.app, err = tx.Q.SetApplicationVetter(ctx, db.SetApplicationVetterParams{ID: b.app.ID, VetterID: vetterID}); err != nil {
 			return b, err
@@ -483,10 +501,18 @@ func (s *ScheduleService) Booking(ctx context.Context, p Principal) (Booking, er
 func (s *ScheduleService) view(b bookingContext) Booking {
 	out := Booking{
 		ApplicationID: b.app.ID, CandidateName: b.card.CandidateName, JobTitle: b.card.JobTitle, VetterName: b.vetter.Name,
+		Video: b.video(),
 	}
 	if b.current != nil {
 		out.Current = &BookedSlot{ID: b.current.ID, Start: b.current.StartsAt.Time, End: b.current.EndsAt.Time, Timezone: deref(b.current.CandidateTimezone)}
-		out.CanChange = domain.CanChangeBooking(b.current.StartsAt.Time, s.Now())
+		now := s.Now()
+		out.CanChange = domain.CanChangeBooking(b.current.StartsAt.Time, now)
+		out.RoomOpensAt = b.current.StartsAt.Time.Add(-RoomOpensBefore)
+		closes := b.current.StartsAt.Time.Add(RoomStaysOpen)
+		if b.current.EndsAt.Time.After(closes) {
+			closes = b.current.EndsAt.Time
+		}
+		out.RoomOpen = out.Video && !now.Before(out.RoomOpensAt) && now.Before(closes)
 	}
 	return out
 }
@@ -639,14 +665,18 @@ func (s *ScheduleService) confirm(ctx context.Context, tx *store.Tx, orgID uuid.
 	when := bothTimes(start, candTZ, b.vetter.Timezone)
 	if err := s.email(ctx, tx, orgID, mail.TemplateBookingConfirmation, b.card.CandidateEmail, map[string]any{
 		"CandidateName": b.card.CandidateName, "JobTitle": b.card.JobTitle,
-		"StartsAt": when, "Timezone": candTZ, "BookingURL": bookingURL,
+		"StartsAt": when, "Timezone": candTZ, "BookingURL": bookingURL, "JoinNote": b.joinNote(),
 	}); err != nil {
 		return err
+	}
+	vetterNote := ""
+	if b.video() {
+		vetterNote = "This interview is by video. Join the room from the application page or your interviews list when it opens."
 	}
 	return s.email(ctx, tx, orgID, mail.TemplateBookingConfirmation, b.vetter.Email, map[string]any{
 		"CandidateName": b.vetter.Name, "JobTitle": b.card.JobTitle + " with " + b.card.CandidateName,
 		"StartsAt": bothTimes(start, b.vetter.Timezone, candTZ), "Timezone": b.vetter.Timezone,
-		"BookingURL": s.baseURL + applicationPath + b.app.ID.String(),
+		"BookingURL": s.baseURL + applicationPath + b.app.ID.String(), "JoinNote": vetterNote,
 	})
 }
 

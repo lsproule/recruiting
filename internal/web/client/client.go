@@ -55,6 +55,15 @@ func ShortlistReplayPath(jobID, applicationID uuid.UUID) string {
 	return ShortlistPickPath(jobID, applicationID) + "/replay"
 }
 
+// TalentPath is the company's talent requests; TalentRequestPath one of them.
+const TalentPath = Prefix + "/talent"
+
+func TalentRequestPath(id uuid.UUID) string { return TalentPath + "/" + id.String() }
+
+// DeveloperPath is the company's API page: its tokens, the documentation,
+// and worked examples.
+const DeveloperPath = Prefix + "/developer"
+
 // AdvancePath, RejectPath, and RequestInfoPath are the client's actions.
 func AdvancePath(id uuid.UUID) string     { return ApplicationPath(id) + "/advance" }
 func RejectPath(id uuid.UUID) string      { return ApplicationPath(id) + "/reject" }
@@ -67,6 +76,14 @@ type Deps struct {
 	// shortlist screens off the portal rather than failing the pages that
 	// link to them.
 	Shortlists *service.ShortlistService
+	// Talent serves the company's talent requests; nil leaves those screens
+	// off the portal.
+	Talent *service.TalentService
+	// Tokens issues the company's own API tokens on the developer page; nil
+	// leaves the page off.
+	Tokens *service.APITokenService
+	// BaseURL is the public origin the developer page's examples call.
+	BaseURL string
 	// Logger records the errors behind a 500; nil disables that logging.
 	Logger *slog.Logger
 }
@@ -91,6 +108,18 @@ func Mount(r chi.Router, d Deps) {
 		r.Post(ApplicationPrefix+"/{id}/advance", h.advance)
 		r.Post(ApplicationPrefix+"/{id}/reject", h.reject)
 		r.Post(ApplicationPrefix+"/{id}/request-info", h.requestInfo)
+		if d.Talent != nil {
+			r.Get(TalentPath, h.talent)
+			r.Post(TalentPath, h.createTalentRequest)
+			r.Get(TalentPath+"/{id}", h.talentRequest)
+			r.Post(TalentPath+"/{id}/close", h.closeTalentRequest)
+			r.Post(TalentPath+"/{id}/introduce/{matchID}", h.introduce)
+		}
+		if d.Tokens != nil {
+			r.Get(DeveloperPath, h.developer)
+			r.Post(DeveloperPath+"/tokens", h.issueToken)
+			r.Post(DeveloperPath+"/tokens/{id}/revoke", h.revokeToken)
+		}
 	})
 }
 
@@ -320,6 +349,11 @@ func statusFor(err error) int {
 	switch {
 	case errors.Is(err, service.ErrForbidden), errors.Is(err, service.ErrBlind), errors.Is(err, domain.ErrForbiddenMove):
 		return http.StatusForbidden
+	case errors.Is(err, service.ErrTalentRequestClosed), errors.Is(err, service.ErrIntroRequested), errors.Is(err, service.ErrTokenLimit):
+		return http.StatusConflict
+	case errors.Is(err, service.ErrTalentTitle), errors.Is(err, service.ErrTalentSkills), errors.Is(err, service.ErrIntroJob),
+		errors.Is(err, service.ErrInvalidJob), errors.Is(err, service.ErrTokenName), errors.Is(err, service.ErrTokenExpired):
+		return http.StatusUnprocessableEntity
 	case errors.Is(err, service.ErrNotFound), errors.Is(err, service.ErrNoResume):
 		return http.StatusNotFound
 	case errors.Is(err, domain.ErrReasonRequired), errors.Is(err, domain.ErrTerminal), errors.Is(err, domain.ErrPrereqMissing),

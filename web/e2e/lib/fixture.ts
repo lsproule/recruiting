@@ -7,6 +7,8 @@ export interface Fixture {
   baseURL: string;
   adminEmail: string;
   adminPassword: string;
+  /** The org's URL slug: the public talent-network page lives under it. */
+  orgSlug: string;
   clientEmail: string;
   clientPassword: string;
   apiToken: string;
@@ -19,6 +21,14 @@ export interface Fixture {
   candidateEmail: string;
   /** The candidate's one-time entry link, straight out of the invite email. */
   assessURL: string;
+  /** The admin's own user id, and the vetter the bootstrap adds beside them. */
+  adminUserId: string;
+  vetterUserId: string;
+  vetterEmail: string;
+  vetterPassword: string;
+  vetterToken: string;
+  /** The built-in processes, by library key. */
+  processes: Record<string, string>;
 }
 
 export function writeFixture(f: Fixture): void {

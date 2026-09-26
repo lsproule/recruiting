@@ -65,6 +65,7 @@ type Assessment struct {
 	UpdatedAt        pgtype.Timestamptz
 	AllowedLanguages []string
 	Integrity        []byte
+	Format           string
 }
 
 type AssessmentProblem struct {
@@ -232,6 +233,16 @@ type IntegritySignal struct {
 	CreatedAt  pgtype.Timestamptz
 }
 
+type InterviewRoom struct {
+	ID        uuid.UUID
+	OrgID     uuid.UUID
+	Kind      string
+	SubjectID uuid.UUID
+	Language  string
+	Source    string
+	UpdatedAt pgtype.Timestamptz
+}
+
 type InterviewSlot struct {
 	ID                uuid.UUID
 	OrgID             uuid.UUID
@@ -265,6 +276,7 @@ type Job struct {
 	CreatedAt       pgtype.Timestamptz
 	UpdatedAt       pgtype.Timestamptz
 	Slug            string
+	TemplateID      uuid.NullUUID
 }
 
 type MagicLink struct {
@@ -328,21 +340,29 @@ type PasswordReset struct {
 }
 
 type PipelineTemplate struct {
-	ID        uuid.UUID
-	OrgID     uuid.UUID
-	Name      string
-	IsDefault bool
-	CreatedAt pgtype.Timestamptz
+	ID          uuid.UUID
+	OrgID       uuid.UUID
+	Name        string
+	IsDefault   bool
+	CreatedAt   pgtype.Timestamptz
+	Description string
+	LibraryKey  *string
+	UpdatedAt   pgtype.Timestamptz
 }
 
 type PipelineTemplateStage struct {
-	ID         uuid.UUID
-	OrgID      uuid.UUID
-	TemplateID uuid.UUID
-	Position   int32
-	Name       string
-	Kind       string
-	Unblind    bool
+	ID              uuid.UUID
+	OrgID           uuid.UUID
+	TemplateID      uuid.UUID
+	Position        int32
+	Name            string
+	Kind            string
+	Unblind         bool
+	InterviewFormat string
+	DurationMinutes *int32
+	RoundSeconds    *int32
+	BreakSeconds    *int32
+	TerminalStatus  *string
 }
 
 type Problem struct {
@@ -463,6 +483,59 @@ type ShortlistPick struct {
 	Rank          int32
 }
 
+type Sprint struct {
+	ID           uuid.UUID
+	OrgID        uuid.UUID
+	JobID        uuid.UUID
+	StageID      uuid.UUID
+	Name         string
+	Status       string
+	StartsAt     pgtype.Timestamptz
+	RoundSeconds int32
+	BreakSeconds int32
+	CreatedBy    uuid.NullUUID
+	CreatedAt    pgtype.Timestamptz
+	UpdatedAt    pgtype.Timestamptz
+}
+
+type SprintCandidate struct {
+	ID            uuid.UUID
+	SprintID      uuid.UUID
+	OrgID         uuid.UUID
+	ApplicationID uuid.UUID
+	Position      int32
+}
+
+type SprintInterviewer struct {
+	SprintID uuid.UUID
+	OrgID    uuid.UUID
+	UserID   uuid.UUID
+	Position int32
+}
+
+type SprintPairing struct {
+	ID            uuid.UUID
+	SprintID      uuid.UUID
+	OrgID         uuid.UUID
+	Round         int32
+	InterviewerID uuid.UUID
+	ApplicationID uuid.UUID
+}
+
+type SprintRating struct {
+	ID             uuid.UUID
+	OrgID          uuid.UUID
+	SprintID       uuid.UUID
+	PairingID      uuid.UUID
+	InterviewerID  uuid.UUID
+	ApplicationID  uuid.UUID
+	Score          int16
+	Recommendation string
+	Note           string
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+}
+
 type Stage struct {
 	ID                uuid.UUID
 	OrgID             uuid.UUID
@@ -475,6 +548,10 @@ type Stage struct {
 	DefaultVetterID   uuid.NullUUID
 	AssessmentID      uuid.NullUUID
 	TerminalStatus    *string
+	InterviewFormat   string
+	DurationMinutes   *int32
+	RoundSeconds      *int32
+	BreakSeconds      *int32
 }
 
 type Submission struct {
@@ -490,6 +567,22 @@ type Submission struct {
 	Score     pgtype.Numeric
 	CreatedAt pgtype.Timestamptz
 	UpdatedAt pgtype.Timestamptz
+}
+
+type TalentIntro struct {
+	ID            uuid.UUID
+	OrgID         uuid.UUID
+	RequestID     uuid.UUID
+	CandidateID   uuid.UUID
+	Source        string
+	Score         float32
+	Status        string
+	JobID         uuid.NullUUID
+	ApplicationID uuid.NullUUID
+	SentBy        uuid.NullUUID
+	RequestedAt   pgtype.Timestamptz
+	SentAt        pgtype.Timestamptz
+	AnsweredAt    pgtype.Timestamptz
 }
 
 type TalentPoolEntry struct {
@@ -508,6 +601,41 @@ type TalentPoolEntry struct {
 	UpdatedAt        pgtype.Timestamptz
 	RemovedAt        pgtype.Timestamptz
 	Source           string
+}
+
+type TalentProfile struct {
+	ID            uuid.UUID
+	OrgID         uuid.UUID
+	CandidateID   uuid.UUID
+	Headline      string
+	Skills        []string
+	Seniority     *string
+	Roles         []string
+	Location      *string
+	RemotePolicy  *string
+	SalaryMin     *int32
+	AvailableFrom pgtype.Date
+	ConsentAt     pgtype.Timestamptz
+	WithdrawnAt   pgtype.Timestamptz
+	CreatedAt     pgtype.Timestamptz
+	UpdatedAt     pgtype.Timestamptz
+}
+
+type TalentRequest struct {
+	ID              uuid.UUID
+	OrgID           uuid.UUID
+	ClientCompanyID uuid.UUID
+	ClientUserID    uuid.NullUUID
+	JobID           uuid.NullUUID
+	Title           string
+	Skills          []string
+	Seniority       *string
+	Location        *string
+	RemotePolicy    *string
+	Note            string
+	Status          string
+	CreatedAt       pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
 }
 
 type TestCase struct {

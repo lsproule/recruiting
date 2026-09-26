@@ -72,7 +72,7 @@ func (q *Queries) CreateResume(ctx context.Context, arg CreateResumeParams) (Res
 }
 
 const findPublicJobBySlug = `-- name: FindPublicJobBySlug :one
-select j.id, j.org_id, j.client_company_id, j.title, j.description, j.skills, j.seniority, j.location, j.remote_policy, j.salary_min, j.salary_max, j.blind_mode, j.status, j.created_by, j.created_at, j.updated_at, j.slug from job j
+select j.id, j.org_id, j.client_company_id, j.title, j.description, j.skills, j.seniority, j.location, j.remote_policy, j.salary_min, j.salary_max, j.blind_mode, j.status, j.created_by, j.created_at, j.updated_at, j.slug, j.template_id from job j
 join org o on o.id = j.org_id
 where o.slug = $1 and j.slug = $2 and j.status = 'open'
 `
@@ -105,12 +105,13 @@ func (q *Queries) FindPublicJobBySlug(ctx context.Context, arg FindPublicJobBySl
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Slug,
+		&i.TemplateID,
 	)
 	return i, err
 }
 
 const firstStage = `-- name: FirstStage :one
-select id, org_id, job_id, position, name, kind, unblind, scorecard_rubric_id, default_vetter_id, assessment_id, terminal_status from stage where job_id = $1 order by position limit 1
+select id, org_id, job_id, position, name, kind, unblind, scorecard_rubric_id, default_vetter_id, assessment_id, terminal_status, interview_format, duration_minutes, round_seconds, break_seconds from stage where job_id = $1 order by position limit 1
 `
 
 func (q *Queries) FirstStage(ctx context.Context, jobID uuid.UUID) (Stage, error) {
@@ -128,6 +129,10 @@ func (q *Queries) FirstStage(ctx context.Context, jobID uuid.UUID) (Stage, error
 		&i.DefaultVetterID,
 		&i.AssessmentID,
 		&i.TerminalStatus,
+		&i.InterviewFormat,
+		&i.DurationMinutes,
+		&i.RoundSeconds,
+		&i.BreakSeconds,
 	)
 	return i, err
 }

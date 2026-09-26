@@ -40,6 +40,7 @@ interface Problem {
 
 interface Config {
   mode?: Mode;
+  format?: string;
   attempt_id: string;
   api_base: string;
   beacon_url: string;
@@ -239,9 +240,13 @@ function mount(root: HTMLElement, cfg: Config): void {
   if (features.timer) {
     const timer = el("div", "assess-timer");
     root.appendChild(timer);
+    const due = new Date(cfg.expires_at);
     const tick = () => {
       const left = cfg.expires_at - Date.now();
-      timer.textContent = "Time remaining " + formatRemaining(left);
+      timer.textContent =
+        cfg.format === "take_home"
+          ? "Due " + due.toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })
+          : "Time remaining " + formatRemaining(left);
       if (left <= 0 && !closed) {
         window.clearInterval(timerId);
         // The server expires the attempt on the next request; ask it now.

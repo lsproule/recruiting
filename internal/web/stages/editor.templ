@@ -1,0 +1,215 @@
+package stages
+
+import (
+	"recruiting/internal/domain"
+	"recruiting/internal/web/layout"
+)
+
+// View draws the editor. It is the htmx swap target: every change posts
+// back and re-renders the whole thing in place.
+templ View(e Editor) {
+	<section id={ e.ID } class="stage-editor">
+		if e.Error != "" {
+			<p class="flash flash-error" role="alert">{ e.Error }</p>
+		}
+		<div class="stage-flow" x-data={ "stageOrder(" + OrderJSON(e.Stages) + ")" }>
+			<form
+				class="stage-order"
+				hx-post={ e.OrderAction }
+				hx-target={ "#" + e.ID }
+				hx-swap="outerHTML"
+				method="post"
+				action={ templ.SafeURL(e.OrderAction) }
+			>
+				@layout.CSRFField(e.CSRF)
+				<ol class="stage-chain">
+					<template x-for="(s, i) in stages" :key="s.id">
+						<li class="stage-chip">
+							<input type="hidden" name="stage" :value="s.id"/>
+							<span class="stage-chip-index" x-text="i + 1"></span>
+							<span class="stage-chip-body">
+								<span class="stage-chip-name" x-text="s.name"></span>
+								<span class="stage-chip-kind" x-text="s.note ? s.kind + ' · ' + s.note : s.kind"></span>
+							</span>
+							if !e.ReadOnly {
+								<span class="stage-chip-moves">
+									<button type="button" class="btn-icon-sm" @click="move(i, -1)" :disabled="i === 0" aria-label="Move earlier" title="Move earlier">&larr;</button>
+									<button type="button" class="btn-icon-sm" @click="move(i, 1)" :disabled="i === stages.length - 1" aria-label="Move later" title="Move later">&rarr;</button>
+								</span>
+							}
+						</li>
+					</template>
+				</ol>
+				if !e.ReadOnly {
+					<button type="submit" class="btn btn-primary" x-show="dirty" x-cloak>Save this order</button>
+				}
+			</form>
+		</div>
+		if !e.ReadOnly {
+			<div class="stage-cards">
+				for _, s := range e.Stages {
+					@stageCard(e, s)
+				}
+			</div>
+			@addCard(e)
+		}
+		@orderScript()
+	</section>
+}
+
+// stageCard is one stage's settings. The fields a kind does not use are
+// hidden as the kind changes, so the card never asks for a round length on
+// a phone screen.
+templ stageCard(e Editor, s domain.Stage) {
+	<form
+		class="stage-card"
+		method="post"
+		action={ templ.SafeURL(e.StageAction(s.ID)) }
+		hx-post={ e.StageAction(s.ID) }
+		hx-target={ "#" + e.ID }
+		hx-swap="outerHTML"
+		x-data={ "{ kind: '" + string(s.Kind) + "' }" }
+	>
+		@layout.CSRFField(e.CSRF)
+		<div class="stage-card-head">
+			<span class="stage-card-index num">{ itoa(s.Position) }</span>
+			<input class="stage-card-name" type="text" name="name" value={ s.Name } required aria-label="Stage name"/>
+			<select name="kind" x-model="kind" aria-label="Stage kind">
+				for _, k := range domain.StageKinds {
+					<option value={ string(k) } selected?={ k == s.Kind }>{ KindLabel(k) }</option>
+				}
+			</select>
+			{{ label, href := e.setup(s) }}
+			if href != "" {
+				<a class="btn btn-secondary stage-setup" href={ templ.SafeURL(href) }>{ label }</a>
+			}
+		</div>
+		<p class="stage-card-hint">
+			for _, k := range domain.StageKinds {
+				<span x-show={ "kind === '" + string(k) + "'" } x-cloak>{ KindHint(k) }</span>
+			}
+		</p>
+		@kindFields(e, s)
+		<div class="stage-card-actions">
+			<button type="submit" class="btn btn-primary">Save stage</button>
+			<button
+				type="submit"
+				class="btn btn-ghost stage-remove"
+				formaction={ templ.SafeURL(e.DeleteAction(s.ID)) }
+				hx-post={ e.DeleteAction(s.ID) }
+				hx-target={ "#" + e.ID }
+				hx-swap="outerHTML"
+				hx-confirm={ "Remove the stage " + s.Name + "?" }
+			>Remove</button>
+		</div>
+	</form>
+}
+
+// kindFields are the per-kind settings, all present in the form and shown
+// by the kind chosen, so switching kind keeps whatever was typed.
+templ kindFields(e Editor, s domain.Stage) {
+	<div class="stage-fields" x-show="kind === 'interview'" x-cloak>
+		<label>
+			Format
+			<select name="interview_format">
+				<option value={ domain.FormatCall } selected?={ formatValue(s) == domain.FormatCall }>Phone call</option>
+				<option value={ domain.FormatVideo } selected?={ formatValue(s) == domain.FormatVideo }>Video room with shared editor</option>
+			</select>
+		</label>
+		<label>
+			Length (minutes)
+			<input type="number" name="duration_minutes" min={ itoa(domain.MinInterviewMinutes) } max={ itoa(domain.MaxInterviewMinutes) } value={ durationValue(s) }/>
+		</label>
+		if len(e.Vetters) > 0 && s.Kind == domain.StageInterview {
+			<label>
+				Default interviewer
+				<select name="default_vetter_id">
+					<option value="">assign per candidate</option>
+					for _, v := range e.Vetters {
+						<option value={ v.ID.String() } selected?={ v.ID == s.DefaultVetterID }>{ userLabel(v) }</option>
+					}
+				</select>
+			</label>
+		}
+	</div>
+	<div class="stage-fields" x-show="kind === 'sprint'" x-cloak>
+		<label>
+			Round length (minutes)
+			<input type="number" name="round_minutes" min="0.25" step="0.25" max="60" value={ RoundMinutes(s.RoundSeconds) }/>
+		</label>
+		<label>
+			Break between rounds (seconds)
+			<input type="number" name="break_seconds" min="0" max={ itoa(domain.MaxBreakSeconds) } value={ breakValue(s) }/>
+		</label>
+	</div>
+	<div class="stage-fields" x-show="kind === 'terminal'" x-cloak>
+		<label>
+			Closes the application as
+			<select name="terminal_status">
+				<option value="hired" selected?={ s.Terminal == domain.StatusHired }>hired</option>
+				<option value="rejected" selected?={ s.Terminal == domain.StatusRejected }>rejected</option>
+			</select>
+		</label>
+	</div>
+	<div class="stage-fields" x-show="kind === 'client_review' || kind === 'generic'" x-cloak>
+		<label class="option">
+			<input type="checkbox" name="unblind" value="1" checked?={ s.Unblind }/>
+			Unblind the candidate here (blind-mode jobs show their name and contact details from this stage on)
+		</label>
+	</div>
+}
+
+// addCard appends a stage. It carries the same fields as a card, so a new
+// sprint stage gets its round length on the way in.
+templ addCard(e Editor) {
+	<form
+		class="stage-card stage-card-new"
+		method="post"
+		action={ templ.SafeURL(e.AddAction) }
+		hx-post={ e.AddAction }
+		hx-target={ "#" + e.ID }
+		hx-swap="outerHTML"
+		x-data="{ kind: 'generic' }"
+	>
+		@layout.CSRFField(e.CSRF)
+		<div class="stage-card-head">
+			<span class="stage-card-index">+</span>
+			<input class="stage-card-name" type="text" name="name" placeholder="New stage" required aria-label="New stage name"/>
+			<select name="kind" x-model="kind" aria-label="New stage kind">
+				for _, k := range domain.StageKinds {
+					if k != domain.StageTerminal {
+						<option value={ string(k) }>{ KindLabel(k) }</option>
+					}
+				}
+			</select>
+		</div>
+		<p class="stage-card-hint">
+			for _, k := range domain.StageKinds {
+				<span x-show={ "kind === '" + string(k) + "'" } x-cloak>{ KindHint(k) }</span>
+			}
+		</p>
+		@kindFields(e, domain.Stage{Kind: domain.StageGeneric})
+		<div class="stage-card-actions">
+			<button type="submit" class="btn btn-primary">Add stage</button>
+		</div>
+	</form>
+}
+
+// orderScript keeps reordering in the browser until it is saved.
+templ orderScript() {
+	<script>
+		window.stageOrder = window.stageOrder || function (initial) {
+			return {
+				stages: initial,
+				dirty: false,
+				move(i, delta) {
+					const j = i + delta;
+					if (j < 0 || j >= this.stages.length) return;
+					const [s] = this.stages.splice(i, 1);
+					this.stages.splice(j, 0, s);
+					this.dirty = true;
+				},
+			};
+		};
+	</script>
+}
