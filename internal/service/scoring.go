@@ -96,6 +96,9 @@ type ScoringService struct {
 	Logger *slog.Logger
 	// Now is the clock the reschedule delay is measured from; tests replace it.
 	Now func() time.Time
+	// Apps applies an assessment stage's own decision rule once the score is
+	// in. Nil leaves every decision to a person.
+	Apps *ApplicationService
 }
 
 // NewScoringService wires the store, the queue signals.compute goes to, and
@@ -107,9 +110,10 @@ func NewScoringService(st *store.Store, q *queue.Client, b BlobStore) *ScoringSe
 
 // AttemptFinalizeHandler works attempt.finalize. Wire it into the worker's
 // handler table under queue.KindAttemptFinalize.
-func AttemptFinalizeHandler(st *store.Store, q *queue.Client, b BlobStore, logger *slog.Logger) queue.Handler {
+func AttemptFinalizeHandler(st *store.Store, q *queue.Client, b BlobStore, apps *ApplicationService, logger *slog.Logger) queue.Handler {
 	s := NewScoringService(st, q, b)
 	s.Logger = logger
+	s.Apps = apps
 	return func(ctx context.Context, job queue.Job) error {
 		var p AttemptFinalizeJob
 		if err := json.Unmarshal(job.Payload, &p); err != nil {
@@ -167,9 +171,18 @@ func (s *ScoringService) Finalize(ctx context.Context, p AttemptFinalizePayload,
 		case err != nil:
 			return err
 		}
-		if s.q == nil || att.Preview {
+		if att.Preview {
 			// A preview is scored so the recruiter sees the same results a
-			// candidate would; its integrity signals are nobody's to read.
+			// candidate would; it moves nothing and its integrity signals
+			// are nobody's to read.
+			return nil
+		}
+		if s.Apps != nil && att.ApplicationID.Valid {
+			if err := s.Apps.AutoDecide(ctx, tx, p.OrgID, att.ApplicationID.UUID, attemptScore(scores)); err != nil {
+				return fmt.Errorf("auto decide: %w", err)
+			}
+		}
+		if s.q == nil {
 			return nil
 		}
 		return enqueued(s.q.Enqueue(ctx, tx, queue.KindSignalsCompute, SignalsComputePayload{AttemptID: p.AttemptID, OrgID: p.OrgID}))

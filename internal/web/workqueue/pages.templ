@@ -6,19 +6,21 @@ import (
 	"recruiting/internal/web/layout"
 )
 
-// queuePage is every pending action across the org: one row per thing only a
-// person can decide, most overdue first.
+// queuePage is every pending action across every company: one row per thing
+// only a person can decide, grouped by the client it is for, most overdue
+// first. A row that can be decided on the spot carries its buttons.
 templ queuePage(page layout.Page, v queueView, csrf string) {
 	@layout.Base(page) {
 		<div class="page-head">
 			<div>
 				<p class="page-kicker">Work queue</p>
-				<h1>Everything waiting on someone</h1>
+				<h1>What has to happen next, for every client</h1>
 				<p class="muted">
-					{ itoa(v.Total()) } open across the org
+					{ itoa(v.Total()) } open
 					if v.Overdue() > 0 {
-						&middot; { itoa(v.Overdue()) } past their moment
+						&middot; { itoa(v.Overdue()) } late
 					}
+					&middot; résumés to read, calls to chase, feedback to file, exams to review, candidates to forward, decisions to make.
 				</p>
 			</div>
 			<div class="page-actions queue-filters">
@@ -31,42 +33,88 @@ templ queuePage(page layout.Page, v queueView, csrf string) {
 		</div>
 		if len(v.Items) == 0 {
 			<div class="panel empty-card">
-				<h2>Nothing is waiting on you</h2>
-				<p class="muted">Scored sittings, lapsing invites, client questions, unsent shortlists and missing scorecards all land here.</p>
+				<h2>Nothing is waiting on anyone</h2>
+				<p class="muted">Every applicant has been read, every call booked, every exam reviewed, every client answered. New work lands here the moment it exists.</p>
 				<a class="btn btn-primary" href={ templ.SafeURL(intake.StartPath) }>Start a client intake</a>
 			</div>
 		} else {
-			<ul class="queue">
-				for _, item := range v.Items {
-					@queueRow(item, v.Back(), csrf)
-				}
-			</ul>
+			for _, g := range v.Groups() {
+				<section class="queue-company">
+					<header class="queue-company-head">
+						<h2>{ g.Name }</h2>
+						<span class="muted">
+							{ itoa(len(g.Items)) } waiting
+							if g.Late > 0 {
+								&middot; <span class="late">{ itoa(g.Late) } late</span>
+							}
+						</span>
+					</header>
+					<ul class="queue">
+						for _, item := range g.Items {
+							@queueRow(v, item, csrf)
+						}
+					</ul>
+				</section>
+			}
 		}
 	}
 }
 
-// queueRow is one action: what kind of work it is, who it concerns, where it
-// belongs, when it was due, and the two things that can be done about it.
-templ queueRow(item service.QueueItem, back string, csrf string) {
-	<li class="queue-row">
-		<span class={ "tag", "queue-kind", "queue-kind-" + string(item.Kind) }>{ kindLabel(item.Kind) }</span>
+// queueRow is one action: which step of the process it is, who it concerns,
+// which role, when it was due, and what can be done about it — a decision on
+// the row where the step allows one, else the link that resolves it, and a
+// snooze for the ones that can wait.
+templ queueRow(v queueView, item service.QueueItem, csrf string) {
+	<li class={ "queue-row", templ.KV("late", v.overdue(item)) }>
+		<div class="queue-step">
+			<span class={ "tag", "queue-kind", "queue-kind-" + string(item.Kind) }>{ kindLabel(item.Kind) }</span>
+			<span class="row-note">{ stepLabel(item.Kind) }</span>
+		</div>
 		<div class="queue-subject">
 			<span class="queue-who">{ item.Who }</span>
 			<span class="row-note">{ item.Detail }</span>
 		</div>
 		<div class="queue-where">
 			<span class="queue-job">{ item.JobTitle }</span>
-			<span class="row-note">{ item.ClientName }</span>
+			<span class={ "queue-due", "num", templ.KV("late", v.overdue(item)) }>{ v.due(item) }</span>
 		</div>
-		<span class={ "queue-due", "num", templ.KV("late", overdue(item)) }>{ due(item) }</span>
-		<div class="row-actions">
-			<a class="btn btn-primary" href={ templ.SafeURL(item.ActionURL) }>{ item.ActionLabel }</a>
+		<div class="row-actions queue-actions">
+			for _, a := range item.Actions {
+				if a.NeedsReason {
+					<details class="queue-reject" id={ rejectID(item) }>
+						<summary class="btn btn-quiet">{ a.Label }</summary>
+						<form method="post" action={ templ.SafeURL(DecidePath) } class="queue-reject-form">
+							@layout.CSRFField(csrf)
+							<input type="hidden" name="application_id" value={ item.ApplicationID.String() }/>
+							<input type="hidden" name="action" value={ a.Kind }/>
+							<input type="hidden" name="to_stage_id" value={ a.ToStageID.String() }/>
+							<input type="hidden" name="back" value={ v.Back() }/>
+							<input type="text" name="reason" placeholder="Why (the candidate never sees this)" required autofocus/>
+							<button class="btn btn-danger" type="submit">Reject and notify</button>
+						</form>
+					</details>
+				} else {
+					<form method="post" action={ templ.SafeURL(DecidePath) }>
+						@layout.CSRFField(csrf)
+						<input type="hidden" name="application_id" value={ item.ApplicationID.String() }/>
+						<input type="hidden" name="action" value={ a.Kind }/>
+						<input type="hidden" name="to_stage_id" value={ a.ToStageID.String() }/>
+						<input type="hidden" name="back" value={ v.Back() }/>
+						<button class="btn btn-primary" type="submit">{ a.Label }</button>
+					</form>
+				}
+			}
+			if len(item.Actions) == 0 {
+				<a class="btn btn-primary" href={ templ.SafeURL(item.ActionURL) }>{ item.ActionLabel }</a>
+			} else {
+				<a class="btn btn-quiet" href={ templ.SafeURL(item.ActionURL) }>{ item.ActionLabel }</a>
+			}
 			<form method="post" action={ templ.SafeURL(SnoozePath) }>
 				@layout.CSRFField(csrf)
 				<input type="hidden" name="kind" value={ string(item.Kind) }/>
 				<input type="hidden" name="subject_id" value={ item.SubjectID.String() }/>
-				<input type="hidden" name="back" value={ back }/>
-				<button class="btn btn-quiet" type="submit">Snooze 24h</button>
+				<input type="hidden" name="back" value={ v.Back() }/>
+				<button class="btn btn-quiet" type="submit" title="Hide for a day, for you only">Snooze</button>
 			</form>
 		</div>
 	</li>

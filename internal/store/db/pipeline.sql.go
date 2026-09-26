@@ -209,7 +209,7 @@ func (q *Queries) GetApplicationForUpdate(ctx context.Context, id uuid.UUID) (Ap
 }
 
 const getStage = `-- name: GetStage :one
-select id, org_id, job_id, position, name, kind, unblind, scorecard_rubric_id, default_vetter_id, assessment_id, terminal_status, interview_format, duration_minutes, round_seconds, break_seconds from stage where id = $1
+select id, org_id, job_id, position, name, kind, unblind, scorecard_rubric_id, default_vetter_id, assessment_id, terminal_status, interview_format, duration_minutes, round_seconds, break_seconds, pass_score, auto_advance, auto_reject from stage where id = $1
 `
 
 func (q *Queries) GetStage(ctx context.Context, id uuid.UUID) (Stage, error) {
@@ -231,6 +231,9 @@ func (q *Queries) GetStage(ctx context.Context, id uuid.UUID) (Stage, error) {
 		&i.DurationMinutes,
 		&i.RoundSeconds,
 		&i.BreakSeconds,
+		&i.PassScore,
+		&i.AutoAdvance,
+		&i.AutoReject,
 	)
 	return i, err
 }

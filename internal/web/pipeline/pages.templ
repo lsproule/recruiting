@@ -474,11 +474,9 @@ templ applicationAdmin(v candidateView, csrf string, problem moveProblem) {
 			<button type="submit">Assign</button>
 		</form>
 	}
-	<h2>Scorecards</h2>
 	<div hx-get={ scorecards.SummaryPath(v.Detail.Application.ID) } hx-trigger="load" hx-swap="outerHTML">
 		<p class="muted">Loading scorecards…</p>
 	</div>
-	<h2>Assessments</h2>
 	<div hx-get={ reviews.SummaryPath(v.Detail.Application.ID) } hx-trigger="load" hx-swap="outerHTML">
 		<p class="muted">Loading assessment results…</p>
 	</div>

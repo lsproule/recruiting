@@ -71,7 +71,7 @@ func (s Signature) ArgsOf(raw json.RawMessage) ([]any, error) {
 	}
 	var args []json.RawMessage
 	if err := json.Unmarshal(raw, &args); err != nil {
-		return nil, fmt.Errorf("args must be a JSON array: %v", err)
+		return nil, fmt.Errorf("args must be a JSON array: %w", err)
 	}
 	if len(args) != len(s.Params) {
 		return nil, fmt.Errorf("args holds %d values, the signature takes %d", len(args), len(s.Params))
@@ -80,7 +80,7 @@ func (s Signature) ArgsOf(raw json.RawMessage) ([]any, error) {
 	for i, a := range args {
 		v, err := DecodeTyped(s.Params[i].Type, a)
 		if err != nil {
-			return nil, fmt.Errorf("argument %q: %v", s.Params[i].Name, err)
+			return nil, fmt.Errorf("argument %q: %w", s.Params[i].Name, err)
 		}
 		out = append(out, v)
 	}
@@ -96,7 +96,7 @@ func DecodeTyped(typ string, raw json.RawMessage) (any, error) {
 	dec := json.NewDecoder(strings.NewReader(string(raw)))
 	dec.UseNumber()
 	if err := dec.Decode(&v); err != nil {
-		return nil, fmt.Errorf("not valid JSON: %v", err)
+		return nil, fmt.Errorf("not valid JSON: %w", err)
 	}
 	return coerce(typ, v)
 }
@@ -148,7 +148,7 @@ func coerce(typ string, v any) (any, error) {
 		for i, item := range list {
 			c, err := coerce(elem, item)
 			if err != nil {
-				return nil, fmt.Errorf("item %d: %v", i, err)
+				return nil, fmt.Errorf("item %d: %w", i, err)
 			}
 			out = append(out, c)
 		}
@@ -163,7 +163,7 @@ func coerce(typ string, v any) (any, error) {
 		for k, item := range m {
 			c, err := coerce(elem, item)
 			if err != nil {
-				return nil, fmt.Errorf("key %q: %v", k, err)
+				return nil, fmt.Errorf("key %q: %w", k, err)
 			}
 			out[k] = c
 		}

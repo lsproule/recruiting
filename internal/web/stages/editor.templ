@@ -142,6 +142,20 @@ templ kindFields(e Editor, s domain.Stage) {
 			<input type="number" name="break_seconds" min="0" max={ itoa(domain.MaxBreakSeconds) } value={ breakValue(s) }/>
 		</label>
 	</div>
+	<div class="stage-fields" x-show="kind === 'assessment'" x-cloak>
+		<label>
+			Pass mark (score out of 100; blank leaves every verdict to a person)
+			<input type="number" name="pass_score" min="0" max="100" value={ passScoreValue(s) }/>
+		</label>
+		<label class="option">
+			<input type="checkbox" name="auto_advance" value="1" checked?={ s.AutoAdvance }/>
+			Advance a candidate who scores at or above the mark to the next stage automatically
+		</label>
+		<label class="option">
+			<input type="checkbox" name="auto_reject" value="1" checked?={ s.AutoReject }/>
+			Reject a candidate who scores below the mark automatically (they get the rejection email)
+		</label>
+	</div>
 	<div class="stage-fields" x-show="kind === 'terminal'" x-cloak>
 		<label>
 			Closes the application as

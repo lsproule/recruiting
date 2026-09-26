@@ -72,7 +72,7 @@ func worker(ctx context.Context, logger *slog.Logger, cfg *config.Config) error 
 	}
 	workerClient, err := queue.NewWorker(st.Pool(), queue.Config{
 		Logger:   logger,
-		Handlers: handlers(logger, st, q, renderer, sender, runnerExec, blobStore, blobReader, cfg.BaseURL),
+		Handlers: handlers(logger, st, q, renderer, sender, runnerExec, blobStore, blobReader, cfg.BaseURL, jobPoster(logger, cfg)),
 	})
 	if err != nil {
 		return fmt.Errorf("worker: %w", err)
@@ -162,18 +162,31 @@ func queueSnapshotPurge(ctx context.Context, q *queue.Client, logger *slog.Logge
 // runner.execute, its duration reach the metrics registry — instrumentation
 // lives here rather than in internal/service, which stays free of metrics
 // concerns.
-func handlers(logger *slog.Logger, st *store.Store, q *queue.Client, r *mail.Renderer, sender mail.Sender, exec *runnerclient.Client, blobStore service.BlobStore, blobReader service.BlobReader, baseURL string) map[string]queue.Handler {
+func handlers(logger *slog.Logger, st *store.Store, q *queue.Client, r *mail.Renderer, sender mail.Sender, exec *runnerclient.Client, blobStore service.BlobStore, blobReader service.BlobReader, baseURL string, poster service.Poster) map[string]queue.Handler {
 	return map[string]queue.Handler{
+		queue.KindJobPostPublish:      service.JobPostPublishHandler(st, poster, logger),
 		queue.KindEmailSend:           instrumentEmail(queue.EmailHandler(st, r, sender, logger)),
 		queue.KindInterviewRemind:     service.RemindHandler(st, q, baseURL),
 		queue.KindAssessmentInvite:    service.AssessmentInviteHandler(st, q, baseURL),
 		queue.KindAssessmentRemind:    service.AssessmentRemindHandler(st, q, baseURL),
 		queue.KindRunnerExecute:       instrumentRunnerExecute(service.RunnerExecuteHandler(st, exec, logger)),
-		queue.KindAttemptFinalize:     service.AttemptFinalizeHandler(st, q, blobStore, logger),
+		queue.KindAttemptFinalize:     service.AttemptFinalizeHandler(st, q, blobStore, service.NewApplicationService(st, q, baseURL), logger),
 		queue.KindSignalsCompute:      service.SignalsComputeHandler(st, blobReader, logger),
 		queue.KindAttemptPurgePreview: service.AttemptPurgePreviewHandler(st, blobStore, logger),
 		queue.KindSnapshotPurge:       service.SnapshotPurgeHandler(st, blobStore, logger),
 	}
+}
+
+// jobPoster is the browser automation the worker posts jobs with, or nil
+// when JOBPOST_CMD is unset, in which case every posting fails with a
+// reason rather than hanging in the queue.
+func jobPoster(logger *slog.Logger, cfg *config.Config) service.Poster {
+	p := service.NewCLIPoster(cfg.JobPostCommand)
+	if p == nil {
+		logger.Warn("JOBPOST_CMD is not set; job postings will be recorded as failed until it is")
+		return nil
+	}
+	return p
 }
 
 // instrumentEmail counts email.send jobs whose handler returned an error,

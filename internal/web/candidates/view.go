@@ -2,6 +2,7 @@ package candidates
 
 import (
 	"strconv"
+	"strings"
 
 	"recruiting/internal/service"
 )
@@ -49,3 +50,38 @@ func resumeNote(r service.Resume) string {
 	}
 	return ""
 }
+
+// headline is the one line under a name: their network headline, else what
+// the row can say from the rest.
+func headline(c service.Candidate) string {
+	if c.Headline != "" {
+		if c.Location != "" {
+			return c.Headline + " · " + c.Location
+		}
+		return c.Headline
+	}
+	if c.Email != "" {
+		return c.Email
+	}
+	return ""
+}
+
+// networkLine sums up a profile's terms.
+func networkLine(n *service.NetworkProfile) string {
+	var parts []string
+	if n.Seniority != "" {
+		parts = append(parts, n.Seniority)
+	}
+	if n.Location != "" {
+		parts = append(parts, n.Location)
+	}
+	if n.RemotePolicy != "" {
+		parts = append(parts, n.RemotePolicy)
+	}
+	if !n.JoinedAt.IsZero() {
+		parts = append(parts, "joined "+n.JoinedAt.Format("2 Jan 2006"))
+	}
+	return strings.Join(parts, " · ")
+}
+
+func itoa(n int) string { return strconv.Itoa(n) }

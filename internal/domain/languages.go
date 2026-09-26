@@ -1,6 +1,9 @@
 package domain
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 // Language is one language a problem may be offered in. Kind tells a code
 // language (a function, or a program read from stdin) from the SQL one (a
@@ -69,6 +72,26 @@ func CodeLanguageIDs() []string {
 			out = append(out, l.ID)
 		}
 	}
+	return out
+}
+
+// OrderLanguages sorts language ids into registry order, so a screen that
+// offers them leads with Python rather than whatever sorts first
+// alphabetically; unknown ids keep their relative order at the end.
+func OrderLanguages(ids []string) []string {
+	rank := make(map[string]int, len(Languages))
+	for i, l := range Languages {
+		rank[l.ID] = i
+	}
+	out := append([]string(nil), ids...)
+	sort.SliceStable(out, func(i, j int) bool {
+		ri, oki := rank[NormalizeLanguageID(out[i])]
+		rj, okj := rank[NormalizeLanguageID(out[j])]
+		if oki != okj {
+			return oki
+		}
+		return ri < rj
+	})
 	return out
 }
 

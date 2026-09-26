@@ -32,7 +32,7 @@ TEST_DATABASE_NAME ?= recruiting_test
 TEST_DATABASE_URL ?= postgres://recruiting:recruiting@localhost:5433/$(TEST_DATABASE_NAME)?sslmode=disable
 PSQL_ADMIN = docker exec -i recruiting-postgres-1 psql -q -U recruiting -d postgres -v ON_ERROR_STOP=1
 
-.PHONY: check test test-integration test-e2e openapi-lint generate migrate migration dev-up dev-down dev-logs runner-images create-org seed-problems dev-serve dev-worker dev-runner fmt tidy build help
+.PHONY: check test test-integration test-e2e openapi-lint generate migrate migration dev-up dev-down dev-logs runner-images create-org seed-problems seed-demo dev-serve dev-worker dev-runner fmt tidy build help
 
 ## check: formatting, vet, lint, and build
 check: fmt
@@ -114,6 +114,10 @@ create-org:
 ## seed-problems: import the platform's built-in problem bank; needs `make dev-runner` running
 seed-problems:
 	set -a && . ./.env && set +a && $(GO) run ./cmd/recruiting admin seed-problems
+
+## seed-demo: fill a fresh demo org with clients, roles, candidates, sittings, interviews, sprints, shortlists; args="--name 'Acme Talent'" to vary it
+seed-demo:
+	set -a && . ./.env && set +a && $(GO) run ./cmd/recruiting admin seed-demo $(args)
 
 ## dev-serve: run `serve` with .env loaded
 dev-serve:

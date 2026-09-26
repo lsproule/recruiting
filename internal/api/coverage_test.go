@@ -31,7 +31,7 @@ type resource struct {
 var specResources = []resource{
 	{
 		Name: "jobs", List: "list-jobs", Get: "get-job", Create: "create-job",
-		Extra: []string{"update-job", "get-job-board"},
+		Extra: []string{"update-job", "get-job-board", "list-job-postings", "preview-job-postings", "create-job-posting"},
 	},
 	{
 		Name: "stages", List: "list-stages", Get: "get-stage", Create: "create-stage",

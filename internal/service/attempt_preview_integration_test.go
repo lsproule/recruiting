@@ -192,7 +192,7 @@ func TestAssessmentAllowedLanguagesNarrowTheSession(t *testing.T) {
 
 	if _, err := assessments.Update(ctx, rec, f.assessment.ID, service.AssessmentInput{
 		Name: "Backend screen", DurationMinutes: 30, InviteWindowDays: 5,
-		AllowedLanguages: []string{"haskell"}, ProblemIDs: []uuid.UUID{f.problem.ID},
+		AllowedLanguages: []string{"sql"}, ProblemIDs: []uuid.UUID{f.problem.ID},
 	}); !errors.Is(err, service.ErrNoLanguage) {
 		t.Fatalf("update with an impossible language set = %v, want ErrNoLanguage", err)
 	}
@@ -200,7 +200,7 @@ func TestAssessmentAllowedLanguagesNarrowTheSession(t *testing.T) {
 	want := f.problem.AllowedLanguages[0]
 	a, err := assessments.Update(ctx, rec, f.assessment.ID, service.AssessmentInput{
 		Name: "Backend screen", DurationMinutes: 30, InviteWindowDays: 5,
-		AllowedLanguages: []string{want, "haskell"},
+		AllowedLanguages: []string{want, "sql"},
 		Integrity:        service.IntegritySettings{Fullscreen: true, BlockPaste: true, Webcam: true},
 		ProblemIDs:       []uuid.UUID{f.problem.ID},
 	})

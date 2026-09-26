@@ -30,9 +30,16 @@ make migrate         # apply migrations (schema owner)
 make create-org name="Acme" admin_email=a@acme.example
 make dev-runner &    # runner, no gVisor required locally (RUNNER_ALLOW_INSECURE_RUNTIME=1)
 make seed-problems   # platform problem bank; runs through the runner above
+make seed-demo       # a demo agency: clients, roles, applicants at every step, sittings, interviews, sprints
 make dev-serve &
 make dev-worker &
 ```
+
+`seed-demo` prints the sign-ins it created (every account shares one demo
+password) and leaves the work queue with something at every step of the
+hiring process, so the product can be read from the first screen. Run it
+after `seed-problems` so the assessments carry the real problem bank; it
+creates its own org and refuses to touch one that exists.
 
 `create-org` and `seed-problems` connect as the schema owner (`DATABASE_URL`),
 same as `migrate`; `serve` and `worker` refuse that role and connect as
@@ -91,6 +98,7 @@ The following are optional; each has a default suited to local development.
 | `RUNNER_IMAGE_PREFIX` | `recruiting-runner-` | Prefix `runner` expects on its per-language execution images |
 | `RUNNER_SQL_URL` | unset | A Postgres URL with `CREATEDB`/`CREATEROLE`, used by `runner` to provision a throwaway database per SQL execution; SQL problems are disabled without it |
 | `RUNNER_MAX_CONCURRENT` | `2` | `runner`'s concurrent execution cap |
+| `JOBPOST_CMD` | unset | The command that runs the job-posting browser automation, e.g. `node tools/jobpost/cli.js`; unset records every posting as failed with a reason. Board credentials and the demo board address are read from the worker's environment (`tools/jobpost/README.md`) |
 | `RTC_ICE_SERVERS` | unset | JSON array of ICE servers interview rooms hand to the browser, e.g. `[{"urls":"stun:stun.example.org:3478"}]`; unset leaves host candidates only, which works on one network and needs STUN or TURN beyond it |
 
 ### Sandbox images
@@ -137,6 +145,7 @@ separate from the application's.
 | `runner-images` | Builds a sandbox image per language for `runner` |
 | `create-org` | Bootstraps an org and its first admin: `make create-org name="Acme" admin_email=a@acme.example` |
 | `seed-problems` | Imports the platform's built-in problem bank (needs `dev-runner` running) |
+| `seed-demo` | Fills a fresh demo org with a month of invented agency work; `args="--name 'Acme Talent' --candidates 80"` to vary it |
 | `dev-serve`, `dev-worker` | Run `serve`/`worker` with `.env` loaded |
 | `dev-runner` | Runs `runner` with `.env` loaded, `RUNNER_ALLOW_INSECURE_RUNTIME=1`, and `RUNNER_SQL_URL` set to the Compose Postgres |
 | `tidy` | `go mod tidy` |
@@ -190,6 +199,28 @@ that synthetic stream.
 
 The first run installs `@playwright/test` (pinned in `web/e2e/package.json`)
 and its Chromium build under `~/.cache/ms-playwright`.
+
+## The work queue
+
+`/app/queue` is the recruiter's home: for every client at once, the next
+thing a person has to do for each candidate, most overdue first, grouped by
+client. The rules follow the hiring process step by step: a résumé to read,
+a call not yet booked, feedback due after an interview, an exam sent or
+scored or reviewed, a candidate to forward to the client, a client who asked
+something or went quiet, a sprint to plan, a rating owed, a shortlist never
+sent, a decision to make. Where the step allows it the decision is on the
+row (advance, reject with a reason, forward to the client); the rest link to
+the screen that resolves them. Nothing is stored: a row disappears the moment
+the work behind it is done. `docs/specs/2026-09-26-work-queue.md` has the
+rules and their deadlines.
+
+Three things happen without a person. Closing an application as rejected,
+by anyone or anything, emails the candidate (an org setting turns it off).
+An assessment stage may carry a pass mark with auto-advance and/or
+auto-reject, and then decides on the score the moment the sitting is scored,
+recording the move as the system's with the score in the reason. Booking
+confirmations carry the interview as an `.ics` attachment and a Google
+Calendar link, for the candidate and the interviewer both.
 
 ## Hiring processes
 
@@ -246,6 +277,19 @@ their ratings and advances or rejects them from there; leaving a sprint
 stage needs at least one rating unless a recruiter overrides it with a
 reason. An unrated conversation lands in the work queue after five minutes.
 The API covers the whole lifecycle under `/api/v1/sprints`.
+
+## Job postings
+
+A job's *Postings* panel (`/app/jobs/{id}/postings`) writes an ad from the
+job's own fields (nothing invented: no salary line without a salary), shows
+it per board, and posts it with one click. The worker runs `tools/jobpost`,
+a Playwright tool that drives the board's own posting flow through a real
+browser (LinkedIn, Indeed, Glassdoor through Indeed, and a local demo board
+the e2e suite proves the whole path against), and records where the posting
+landed or why it failed. Applicants land on the job's public apply page, so
+every posting builds the org's candidate database. `POST
+/api/v1/jobs/{id}/postings` does the same from the API; `docs/api.md` has
+the shapes and `tools/jobpost/README.md` the adapters and credentials.
 
 ## The company API and the talent network
 

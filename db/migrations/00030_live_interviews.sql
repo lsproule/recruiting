@@ -179,6 +179,9 @@ alter table stage
     drop column if exists duration_minutes,
     drop column if exists round_seconds,
     drop column if exists break_seconds;
+-- Applications sitting in a sprint stage go with it; everything hanging off
+-- an application cascades or nulls.
+delete from application where stage_id in (select id from stage where kind = 'sprint');
 delete from stage where kind = 'sprint';
 alter table stage drop constraint stage_kind_check;
 alter table stage add constraint stage_kind_check

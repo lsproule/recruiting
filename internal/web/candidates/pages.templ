@@ -7,33 +7,70 @@ import (
 
 templ listPage(page layout.Page, query string, list []service.Candidate) {
 	@layout.Base(page) {
-		<h1>Candidates</h1>
-		<p><a href={ templ.SafeURL(Prefix + "/new") }>Add candidate</a></p>
+		<div class="page-head">
+			<div>
+				<div class="page-kicker">Database</div>
+				<h1>Candidates</h1>
+				<p class="muted">Everyone who applied to a role or joined the talent network, with where they stand. Search runs over names and résumé text.</p>
+			</div>
+			<div class="page-actions">
+				<a class="btn btn-primary" href={ templ.SafeURL(Prefix + "/new") }>Add candidate</a>
+			</div>
+		</div>
 		<form class="search" method="get" action={ templ.SafeURL(Prefix) }>
 			<label>
-				Search names and resumes
-				<input type="search" name="q" value={ query } placeholder="elixir, product manager, Berlin"/>
+				Search names and résumés
+				<input type="search" name="q" value={ query } placeholder="kubernetes, payments, Berlin"/>
 			</label>
 			<button type="submit">Search</button>
 		</form>
 		if len(list) == 0 {
 			if query == "" {
-				<p class="muted">No candidates yet.</p>
+				<div class="panel empty-card">
+					<h2>No candidates yet</h2>
+					<p class="muted">Post a job to the boards, share an apply link, or add someone by hand: they land here with their résumé.</p>
+					<a class="btn btn-primary" href={ templ.SafeURL(Prefix + "/new") }>Add candidate</a>
+				</div>
 			} else {
 				<p class="muted">Nothing matches that search.</p>
 			}
 		} else {
-			<table>
+			<p class="muted">{ itoa(len(list)) } candidates</p>
+			<table class="candidates">
 				<thead>
-					<tr><th>Name</th><th>Email</th><th>Phone</th><th>Applications</th></tr>
+					<tr><th>Candidate</th><th>Skills</th><th>Where they stand</th><th>Added</th></tr>
 				</thead>
 				<tbody>
 					for _, c := range list {
 						<tr>
-							<td><a href={ templ.SafeURL(candidatePath(c)) }>{ c.Name }</a></td>
-							<td>{ c.Email }</td>
-							<td>{ c.Phone }</td>
-							<td>{ applicationCount(c) }</td>
+							<td>
+								<a href={ templ.SafeURL(candidatePath(c)) }>{ c.Name }</a>
+								if c.InNetwork {
+									<span class="tag tag-accent">network</span>
+								}
+								<div class="row-note">{ headline(c) }</div>
+							</td>
+							<td>
+								if len(c.Skills) == 0 {
+									<span class="muted">—</span>
+								} else {
+									<span class="badges">
+										for _, s := range c.Skills {
+											<span class="tag">{ s }</span>
+										}
+									</span>
+								}
+							</td>
+							<td>
+								if len(c.Pipeline) == 0 {
+									<span class="muted">Not on a role yet</span>
+								} else {
+									for _, line := range c.Pipeline {
+										<div class="row-note pipeline-line">{ line }</div>
+									}
+								}
+							</td>
+							<td class="muted">{ c.CreatedAt.Format("2 Jan") }</td>
 						</tr>
 					}
 				</tbody>
@@ -44,39 +81,82 @@ templ listPage(page layout.Page, query string, list []service.Candidate) {
 
 templ detailPage(page layout.Page, d service.CandidateDetail) {
 	@layout.Base(page) {
-		<h1>{ d.Candidate.Name }</h1>
-		<p class="muted">{ d.Candidate.Email }</p>
-		if d.Candidate.Phone != "" {
-			<p class="muted">{ d.Candidate.Phone }</p>
-		}
-		if len(d.Candidate.Links) > 0 {
-			<ul>
-				for _, l := range d.Candidate.Links {
-					<li><a class="link" href={ templ.SafeURL(l) } rel="noreferrer noopener nofollow">{ l }</a></li>
-				}
-			</ul>
-		}
-		<h2>Applications</h2>
-		if len(d.Applications) == 0 {
-			<p class="muted">Not applied to anything yet.</p>
-		} else {
-			<table>
-				<thead><tr><th>Job</th><th>Stage</th><th>Status</th></tr></thead>
-				<tbody>
-					for _, a := range d.Applications {
-						<tr><td>{ a.JobTitle }</td><td>{ a.StageName }</td><td>{ a.Status }</td></tr>
+		<div class="page-head">
+			<div>
+				<div class="page-kicker">Candidate</div>
+				<h1>{ d.Candidate.Name }</h1>
+				<p class="muted">
+					{ d.Candidate.Email }
+					if d.Candidate.Phone != "" {
+						{ " · " } { d.Candidate.Phone }
 					}
-				</tbody>
-			</table>
-		}
-		<h2>Resumes</h2>
+					if d.Candidate.Location != "" {
+						{ " · " } { d.Candidate.Location }
+					}
+				</p>
+				if len(d.Candidate.Links) > 0 {
+					<p>
+						for i, l := range d.Candidate.Links {
+							if i > 0 {
+								{ " · " }
+							}
+							<a class="link" href={ templ.SafeURL(l) } rel="noreferrer noopener nofollow">{ l }</a>
+						}
+					</p>
+				}
+			</div>
+		</div>
+		<div class="grid-2 candidate-panels">
+			<section class="panel">
+				<h2>Roles</h2>
+				if len(d.Applications) == 0 {
+					<p class="muted">Not applied to anything yet.</p>
+				} else {
+					<table>
+						<thead><tr><th>Job</th><th>Stage</th><th>Status</th></tr></thead>
+						<tbody>
+							for _, a := range d.Applications {
+								<tr>
+									<td><a href={ templ.SafeURL("/app/applications/" + a.ID.String()) }>{ a.JobTitle }</a></td>
+									<td>{ a.StageName }</td>
+									<td><span class={ "tag", "status-" + a.Status }>{ a.Status }</span></td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				}
+			</section>
+			<section class="panel">
+				<h2>Talent network</h2>
+				if d.Network == nil {
+					<p class="muted">Has not joined the network. Their résumé is still searchable here.</p>
+				} else {
+					<p>
+						<strong>{ d.Network.Headline }</strong>
+						if d.Network.Withdrawn {
+							<span class="tag tag-outline">withdrawn</span>
+						} else {
+							<span class="tag tag-accent">open to offers</span>
+						}
+					</p>
+					<p class="muted">{ networkLine(d.Network) }</p>
+					<p class="badges">
+						for _, s := range d.Network.Skills {
+							<span class="tag">{ s }</span>
+						}
+					</p>
+				}
+			</section>
+		</div>
+		<h2>Résumés</h2>
 		if len(d.Resumes) == 0 {
-			<p class="muted">No resume on file.</p>
+			<p class="muted">No résumé on file.</p>
 		} else {
 			<ul>
 				for _, r := range d.Resumes {
 					<li>
 						<a href={ templ.SafeURL(resumePath(r)) }>{ r.Filename }</a>
+						<span class="muted">{ " · " + r.CreatedAt.Format("2 Jan 2006") }</span>
 						if resumeNote(r) != "" {
 							<span class="muted">{ " — " + resumeNote(r) }</span>
 						}

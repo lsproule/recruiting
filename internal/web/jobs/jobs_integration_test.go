@@ -111,7 +111,7 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatal(err)
 	}
 	layout.MountStatic(mux)
-	jobs.Mount(mux, jobs.Deps{Jobs: service.NewJobService(st), Org: service.NewOrgService(st)})
+	jobs.Mount(mux, jobs.Deps{Jobs: service.NewJobService(st), Postings: service.NewJobPostingService(st, nil, "https://example.test/"), Org: service.NewOrgService(st)})
 	f.srv = httptest.NewServer(mux)
 	t.Cleanup(f.srv.Close)
 	return f
@@ -511,4 +511,39 @@ func lockSchema(t *testing.T, ownerURL string) {
 		t.Fatalf("schema lock: %v", err)
 	}
 	t.Cleanup(func() { _ = conn.Close(context.Background()) })
+}
+
+// The postings panel shows the ad the platform wrote for each board and
+// queues a placement; the worker's browser does the rest, off the page.
+func TestPostingsPanelPreviewsAndQueuesAPlacement(t *testing.T) {
+	f := newFixture(t)
+	jobID := uuid.New()
+	if _, err := f.sys.Exec(context.Background(), `insert into job (id, org_id, client_company_id, title, slug, status, skills, seniority, location, remote_policy, salary_min, salary_max)
+		values ($1, $2, $3, 'Backend Engineer (Go)', 'backend-go', 'open', '{go,postgres}', 'senior', 'Berlin', 'hybrid', 85000, 105000)`, jobID, f.orgID, f.companyID); err != nil {
+		t.Fatal(err)
+	}
+	b := f.browser(t)
+	b.login(f.recruiterEmail)
+	res, body := b.get(jobs.Prefix + "/" + jobID.String() + "/postings")
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("GET postings = %d", res.StatusCode)
+	}
+	for _, want := range []string{"Post to LinkedIn", "Post to Demo board (local)", "Globex is hiring a senior backend engineer (Go).", "€85,000 to €105,000 a year", "Not posted anywhere yet"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the panel lacks %q", want)
+		}
+	}
+	// The post redirects back to the panel so a reload never posts twice.
+	res, _ = b.post(jobs.Prefix+"/"+jobID.String()+"/postings", url.Values{"board": {"demo"}})
+	if res.StatusCode != http.StatusSeeOther || !strings.Contains(res.Header.Get("Location"), "/postings?done=") {
+		t.Fatalf("POST posting = %d to %q, want a redirect to the panel", res.StatusCode, res.Header.Get("Location"))
+	}
+	res, body = b.get(res.Header.Get("Location"))
+	if res.StatusCode != http.StatusOK || !strings.Contains(body, "Queued for Demo board (local)") || !strings.Contains(body, "posting-queued") {
+		t.Fatalf("GET after posting = %d, body lacks the queued row", res.StatusCode)
+	}
+	res, body = b.post(jobs.Prefix+"/"+jobID.String()+"/postings", url.Values{"board": {"craigslist"}})
+	if res.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(body, "not a board") {
+		t.Fatalf("POST to an unknown board = %d", res.StatusCode)
+	}
 }

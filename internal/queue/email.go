@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -28,6 +29,28 @@ type EmailPayload struct {
 	To       string         `json:"to"`
 	OrgID    uuid.UUID      `json:"org_id"`
 	Data     map[string]any `json:"data"`
+	// Calendar, when set, attaches the event as an .ics file so either
+	// side of an interview can put it straight in their calendar.
+	Calendar *CalendarEvent `json:"calendar,omitempty"`
+}
+
+// CalendarEvent is the interview an email carries as an invitation.
+type CalendarEvent struct {
+	UID         string    `json:"uid"`
+	Summary     string    `json:"summary"`
+	Description string    `json:"description"`
+	Location    string    `json:"location"`
+	URL         string    `json:"url"`
+	Start       time.Time `json:"start"`
+	End         time.Time `json:"end"`
+}
+
+// attachment is the event as a file on the message.
+func (e CalendarEvent) attachment() mail.Attachment {
+	return mail.ICSAttachment(mail.Event{
+		UID: e.UID, Summary: e.Summary, Description: e.Description, Location: e.Location, URL: e.URL,
+		Start: e.Start, End: e.End,
+	})
 }
 
 // TenantStore is the slice of the store an email job needs: a transaction
@@ -125,6 +148,9 @@ func EmailHandler(st TenantStore, r *mail.Renderer, sender mail.Sender, logger *
 		}
 
 		msg.To = p.To
+		if p.Calendar != nil {
+			msg.Attachments = append(msg.Attachments, p.Calendar.attachment())
+		}
 		sendErr := sender.Send(ctx, msg)
 		status := EmailSent
 		if sendErr != nil {

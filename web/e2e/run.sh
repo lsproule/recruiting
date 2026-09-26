@@ -13,6 +13,7 @@ work="$here/.run"
 mkdir -p "$work"
 
 : "${E2E_LISTEN_PORT:=8090}"
+: "${E2E_BOARD_PORT:=8765}"
 : "${E2E_RUNNER_PORT:=8091}"
 : "${E2E_DATABASE_NAME:=recruiting_e2e}"
 : "${E2E_ADMIN_DATABASE_URL:=postgres://recruiting:recruiting@localhost:5433/recruiting?sslmode=disable}"
@@ -137,8 +138,17 @@ METRICS_ADDR=":$((E2E_LISTEN_PORT + 11))" "$bin" serve >"$work/serve.log" 2>&1 &
 pids+=($!)
 wait_http "$BASE_URL/app/login" serve "$work/serve.log"
 
+echo "==> demo job board on $E2E_BOARD_PORT"
+# The job-posting automation is proven against a local board the tool
+# ships, driven through the same browser path a real board would be.
+(cd "$root/tools/jobpost" && [ -d node_modules ] || npm ci --no-audit --no-fund >"$work/jobpost-npm.log" 2>&1)
+node "$root/tools/jobpost/fake-board.js" --port "$E2E_BOARD_PORT" >"$work/board.log" 2>&1 &
+pids+=($!)
+wait_http "http://127.0.0.1:$E2E_BOARD_PORT/jobs" "demo job board" "$work/board.log"
+export JOBPOST_DEMO_BOARD_URL="http://127.0.0.1:$E2E_BOARD_PORT"
+
 echo "==> worker"
-METRICS_ADDR=":$((E2E_LISTEN_PORT + 12))" "$bin" worker >"$work/worker.log" 2>&1 &
+METRICS_ADDR=":$((E2E_LISTEN_PORT + 12))" JOBPOST_CMD="node $root/tools/jobpost/cli.js" "$bin" worker >"$work/worker.log" 2>&1 &
 pids+=($!)
 
 echo "==> playwright"

@@ -10,9 +10,10 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
-	"recruiting/runner/wire"
 	"strings"
 	"time"
+
+	"recruiting/runner/wire"
 )
 
 // DockerExecutor runs the language harness in a fresh, hardened container per

@@ -6,6 +6,7 @@ import (
 
 	"github.com/a-h/templ"
 
+	"recruiting/internal/domain"
 	"recruiting/internal/service"
 	"recruiting/internal/web/markdown"
 )
@@ -64,7 +65,7 @@ func tryIslandConfig(p service.Problem, csrf string) (string, error) {
 	tp := tryProblem{
 		ID: p.ID.String(), Title: p.Title, Kind: p.Kind, Statement: p.Statement,
 		StatementHTML: markdown.ToHTML(p.Statement),
-		Languages:     p.AllowedLanguages, SQLSchema: p.SQLSchema,
+		Languages:     domain.OrderLanguages(p.AllowedLanguages), SQLSchema: p.SQLSchema,
 		Stubs:       p.Stubs(),
 		PublicTests: []tryTest{},
 	}

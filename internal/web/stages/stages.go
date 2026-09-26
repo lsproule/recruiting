@@ -69,7 +69,19 @@ func FromForm(r *http.Request) service.StageInput {
 			in.DefaultVetterID = id
 		}
 	}
+	in.PassScore, _ = strconv.Atoi(strings.TrimSpace(r.PostFormValue("pass_score")))
+	in.AutoAdvance = r.PostFormValue("auto_advance") == "1"
+	in.AutoReject = r.PostFormValue("auto_reject") == "1"
 	return in
+}
+
+// passScoreValue is the pass mark box's value: blank for a stage that sets
+// none rather than a misleading zero.
+func passScoreValue(s domain.Stage) string {
+	if s.PassScore == 0 {
+		return ""
+	}
+	return strconv.Itoa(s.PassScore)
 }
 
 // KindLabel names a kind the way the editor lists it.
@@ -113,6 +125,20 @@ func KindHint(k domain.StageKind) string {
 // Summary is the one-line reading of a stage's settings for a chip.
 func Summary(s domain.Stage) string {
 	switch s.Kind {
+	case domain.StageAssessment:
+		if s.PassScore == 0 {
+			return ""
+		}
+		note := "pass mark " + strconv.Itoa(s.PassScore)
+		switch {
+		case s.AutoAdvance && s.AutoReject:
+			note += " · decides on its own"
+		case s.AutoAdvance:
+			note += " · auto-advances"
+		case s.AutoReject:
+			note += " · auto-rejects"
+		}
+		return note
 	case domain.StageInterview:
 		format := "phone"
 		if s.InterviewFormat == domain.FormatVideo {

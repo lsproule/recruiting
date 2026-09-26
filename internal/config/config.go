@@ -31,6 +31,11 @@ type Config struct {
 	// to the browser; optional. Empty leaves the browser on host candidates,
 	// which works on one network and needs STUN or TURN beyond it.
 	RTCICEServers string
+	// JobPostCommand runs the browser automation that places job postings
+	// on external boards (tools/jobpost); optional. Empty records every
+	// posting as failed with a reason, so a worker without it still says
+	// what is missing.
+	JobPostCommand string
 }
 
 // MissingError reports environment variables that are required but unset.
@@ -76,6 +81,7 @@ func Load() (*Config, error) {
 	// but a fresh checkout should not have to spell out a second URL that
 	// only swaps the user/password of the one it already has.
 	cfg.RTCICEServers = strings.TrimSpace(os.Getenv("RTC_ICE_SERVERS"))
+	cfg.JobPostCommand = strings.TrimSpace(os.Getenv("JOBPOST_CMD"))
 	cfg.DatabaseURLApp = strings.TrimSpace(os.Getenv("DATABASE_URL_APP"))
 	if cfg.DatabaseURLApp == "" {
 		derived, err := deriveAppURL(cfg.DatabaseURL)

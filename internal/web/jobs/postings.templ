@@ -1,0 +1,98 @@
+package jobs
+
+import (
+	"recruiting/internal/web/layout"
+)
+
+// postingsPage is where a job goes out to the world: the copy the platform
+// wrote from the job's own fields, one board at a time, and the record of
+// every placement with where it landed. Applicants come back to the
+// platform's apply page, so every posting builds the org's own candidate
+// database.
+templ postingsPage(page layout.Page, v postingsView) {
+	@layout.Base(page) {
+		<div class="page-head">
+			<div>
+				<div class="page-kicker"><a href={ templ.SafeURL(Prefix + "/" + v.Job.ID.String()) }>{ v.Job.Title }</a></div>
+				<h1>Postings</h1>
+				<p class="muted">The platform writes the ad from the job as you filled it in and places it on each board through a real browser. Applicants land on this job's apply page and their résumés in your candidate database.</p>
+			</div>
+			<div class="page-actions">
+				<a class="btn btn-secondary" href={ templ.SafeURL(Prefix + "/" + v.Job.ID.String()) }>Edit the job</a>
+			</div>
+		</div>
+		if v.Error != "" {
+			<p class="flash flash-error" role="alert">{ v.Error }</p>
+		}
+		if len(v.Previews) > 0 {
+			<h2>Post it</h2>
+			<div class="boards">
+				for _, pv := range v.Previews {
+					<details class="board">
+						<summary>
+							<span class="board-name">{ pv.Board.Label }</span>
+							<span class="muted">{ pv.Posting.Title }</span>
+						</summary>
+						<pre class="statement posting-copy">{ pv.Posting.Body }</pre>
+						<form method="post" action={ templ.SafeURL(postingsPath(v.Job.ID)) }>
+							@layout.CSRFField(page.CSRF)
+							<input type="hidden" name="board" value={ pv.Board.ID }/>
+							<button type="submit" class="btn btn-primary">Post to { pv.Board.Label }</button>
+						</form>
+					</details>
+				}
+			</div>
+		}
+		<h2>Where it has been posted</h2>
+		if len(v.Postings) == 0 {
+			<p class="muted">Not posted anywhere yet. Open a board above to read the copy and post it.</p>
+		} else {
+			<table>
+				<thead>
+					<tr><th>Board</th><th>Status</th><th>Where</th><th>When</th><th></th></tr>
+				</thead>
+				<tbody>
+					for _, p := range v.Postings {
+						<tr class={ "posting", "posting-" + p.Status }>
+							<td>{ p.BoardLabel }</td>
+							<td>
+								<span class={ "tag", "posting-status-" + p.Status }>{ statusLabel(p) }</span>
+								if p.Error != "" {
+									<div class="row-note">{ p.Error }</div>
+								}
+							</td>
+							<td>
+								if p.ExternalURL != "" {
+									<a href={ templ.SafeURL(p.ExternalURL) } target="_blank" rel="noopener">{ p.ExternalURL }</a>
+								} else {
+									<span class="muted">—</span>
+								}
+							</td>
+							<td class="muted">
+								if !p.PostedAt.IsZero() {
+									{ p.PostedAt.Format("2 Jan 15:04") }
+								} else {
+									{ p.CreatedAt.Format("2 Jan 15:04") }
+								}
+							</td>
+							<td class="row-actions">
+								if p.Status == "failed" {
+									<form method="post" action={ templ.SafeURL(postingsPath(v.Job.ID) + "/" + p.ID.String() + "/retry") }>
+										@layout.CSRFField(page.CSRF)
+										<button type="submit" class="btn-link">Retry</button>
+									</form>
+								}
+								if p.Status == "posted" {
+									<form method="post" action={ templ.SafeURL(postingsPath(v.Job.ID) + "/" + p.ID.String() + "/remove") }>
+										@layout.CSRFField(page.CSRF)
+										<button type="submit" class="btn-link">Taken down</button>
+									</form>
+								}
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+	}
+}

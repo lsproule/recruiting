@@ -585,8 +585,9 @@ func hiddenValue(t *testing.T, body, name string) string {
 }
 
 // The bank lists a problem's size, which a listing has to count for itself:
-// the rows it loads carry no test cases.
-func TestBankListsTheCaseCount(t *testing.T) {
+// the rows it loads carry no test cases, and it says nothing about how many
+// there are or how long the problem "should" take: neither is a fact.
+func TestBankListsTheProblemWithoutEstimates(t *testing.T) {
 	f := newFixture(t, stubRunner{})
 	s := f.browser(t)
 	s.login(f.recruiterEmail)
@@ -594,8 +595,13 @@ func TestBankListsTheCaseCount(t *testing.T) {
 		t.Fatal("create failed")
 	}
 	res, body := s.get(problems.Prefix + "?q=Counted")
-	if res.StatusCode != http.StatusOK || !strings.Contains(body, "2 cases") {
+	if res.StatusCode != http.StatusOK || !strings.Contains(body, "Counted Adder") {
 		t.Fatalf("bank = %d, body %q", res.StatusCode, body)
+	}
+	for _, noise := range []string{" cases", " min</", "Quality"} {
+		if strings.Contains(body, noise) {
+			t.Errorf("the bank row still carries %q", noise)
+		}
 	}
 }
 

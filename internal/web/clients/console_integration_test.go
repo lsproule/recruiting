@@ -102,6 +102,10 @@ func newFixture(t *testing.T) *fixture {
 	if err := sys.QueryRow(ctx, `select id from stage where job_id = $1`, f.goJob).Scan(&goStage); err != nil {
 		t.Fatal(err)
 	}
+	// The Go job's one stage is the take-home, so its scored sitting is an
+	// exam waiting for review; the Rust job's is a plain first stage, so its
+	// applicant is a résumé to read.
+	exec(`update stage set kind = 'assessment', name = 'Take-home' where id = $1`, goStage)
 	var rustStage uuid.UUID
 	if err := sys.QueryRow(ctx, `select id from stage where job_id = $1`, f.rustJob).Scan(&rustStage); err != nil {
 		t.Fatal(err)
@@ -232,17 +236,19 @@ func TestWorkQueueScreenListsTheWorkWithItsAction(t *testing.T) {
 	mustContain(t, body,
 		"Ada Lovelace", "Go Engineer", "Globex",
 		"/app/reviews/"+f.scoredAttempt.String(),
-		"Snooze 24h",
+		"Bo Second", "Rust Engineer",
+		"Snooze",
 	)
-	// The sidebar badge comes from the same read, through the middleware.
-	mustContain(t, body, `<span class="nav-count">1</span>`)
+	// The sidebar badge comes from the same read, through the middleware:
+	// the exam to review and the résumé to read.
+	mustContain(t, body, `<span class="nav-count">2</span>`)
 }
 
 func TestWorkQueueSnoozeTakesTheRowOffTheScreen(t *testing.T) {
 	f := newFixture(t)
 	s := f.browser(t)
 	res, _ := s.post(workqueue.SnoozePath, url.Values{
-		"kind": {string(service.QueueReview)}, "subject_id": {f.scoredAttempt.String()},
+		"kind": {string(service.QueueExamReview)}, "subject_id": {f.scoredAttempt.String()},
 	})
 	if res.StatusCode != http.StatusSeeOther {
 		t.Fatalf("snooze = %d", res.StatusCode)
@@ -251,7 +257,8 @@ func TestWorkQueueSnoozeTakesTheRowOffTheScreen(t *testing.T) {
 	if strings.Contains(body, f.scoredAttempt.String()) {
 		t.Fatal("the snoozed row is still on the screen")
 	}
-	mustContain(t, body, "Nothing is waiting on you")
+	// The other row is untouched.
+	mustContain(t, body, "Bo Second")
 }
 
 func TestClientsScreenListsTheAccount(t *testing.T) {

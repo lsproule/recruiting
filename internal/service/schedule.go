@@ -604,7 +604,7 @@ func (s *ScheduleService) Book(ctx context.Context, p Principal, token string, s
 				return err
 			}
 		}
-		return s.confirm(ctx, tx, p.OrgID, b, slot.Start, tz, bookingURL)
+		return s.confirm(ctx, tx, p.OrgID, b, slot, tz, bookingURL)
 	})
 	if err != nil {
 		return BookedSlot{}, wrapBooking("book slot", err)
@@ -661,23 +661,53 @@ func (s *ScheduleService) cancelSlot(ctx context.Context, tx *store.Tx, slot db.
 
 // confirm sends the confirmation to both parties, each in their own zone and
 // told the other's.
-func (s *ScheduleService) confirm(ctx context.Context, tx *store.Tx, orgID uuid.UUID, b bookingContext, start time.Time, candTZ, bookingURL string) error {
+func (s *ScheduleService) confirm(ctx context.Context, tx *store.Tx, orgID uuid.UUID, b bookingContext, slot domain.Slot, candTZ, bookingURL string) error {
+	start := slot.Start
 	when := bothTimes(start, candTZ, b.vetter.Timezone)
-	if err := s.email(ctx, tx, orgID, mail.TemplateBookingConfirmation, b.card.CandidateEmail, map[string]any{
+	// Both sides get the interview as a calendar entry: the file for any
+	// calendar, and a Google link for a client that ignores attachments.
+	// The UID is the application and stage, so a rescheduled interview
+	// replaces the earlier entry rather than sitting beside it.
+	candidateEvent := queue.CalendarEvent{
+		UID:     "interview-" + b.app.ID.String() + "-" + b.stage.ID.String() + "@recruiting",
+		Summary: "Interview: " + b.card.JobTitle, Description: strings.TrimSpace("Interview for " + b.card.JobTitle + ".\n" + b.joinNote()),
+		Location: bookingURL, URL: bookingURL, Start: start, End: slot.End,
+	}
+	if err := s.emailWithCalendar(ctx, tx, orgID, mail.TemplateBookingConfirmation, b.card.CandidateEmail, map[string]any{
 		"CandidateName": b.card.CandidateName, "JobTitle": b.card.JobTitle,
 		"StartsAt": when, "Timezone": candTZ, "BookingURL": bookingURL, "JoinNote": b.joinNote(),
-	}); err != nil {
+		"CalendarURL": mail.GoogleCalendarURL(mailEvent(candidateEvent)),
+	}, candidateEvent); err != nil {
 		return err
 	}
 	vetterNote := ""
 	if b.video() {
 		vetterNote = "This interview is by video. Join the room from the application page or your interviews list when it opens."
 	}
-	return s.email(ctx, tx, orgID, mail.TemplateBookingConfirmation, b.vetter.Email, map[string]any{
+	applicationURL := s.baseURL + applicationPath + b.app.ID.String()
+	vetterEvent := candidateEvent
+	vetterEvent.Summary = "Interview: " + b.card.JobTitle + " with " + b.card.CandidateName
+	vetterEvent.Description = strings.TrimSpace("Interview with " + b.card.CandidateName + " for " + b.card.JobTitle + ".\n" + vetterNote)
+	vetterEvent.Location, vetterEvent.URL = applicationURL, applicationURL
+	return s.emailWithCalendar(ctx, tx, orgID, mail.TemplateBookingConfirmation, b.vetter.Email, map[string]any{
 		"CandidateName": b.vetter.Name, "JobTitle": b.card.JobTitle + " with " + b.card.CandidateName,
 		"StartsAt": bothTimes(start, b.vetter.Timezone, candTZ), "Timezone": b.vetter.Timezone,
-		"BookingURL": s.baseURL + applicationPath + b.app.ID.String(), "JoinNote": vetterNote,
-	})
+		"BookingURL": applicationURL, "JoinNote": vetterNote,
+		"CalendarURL": mail.GoogleCalendarURL(mailEvent(vetterEvent)),
+	}, vetterEvent)
+}
+
+// emailWithCalendar is email with the interview attached as an .ics file.
+func (s *ScheduleService) emailWithCalendar(ctx context.Context, tx *store.Tx, orgID uuid.UUID, template, to string, data map[string]any, ev queue.CalendarEvent) error {
+	if s.q == nil {
+		return nil
+	}
+	return enqueued(s.q.Enqueue(ctx, tx, queue.KindEmailSend, queue.EmailPayload{Template: template, To: to, OrgID: orgID, Data: data, Calendar: &ev}))
+}
+
+// mailEvent is the queue's event as the mail package reads it.
+func mailEvent(e queue.CalendarEvent) mail.Event {
+	return mail.Event{UID: e.UID, Summary: e.Summary, Description: e.Description, Location: e.Location, URL: e.URL, Start: e.Start, End: e.End}
 }
 
 // notifyChange tells both parties the current booking changed.

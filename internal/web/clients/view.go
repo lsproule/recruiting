@@ -77,10 +77,10 @@ func days(v *float64) string {
 	return strconv.FormatFloat(*v, 'f', 1, 64)
 }
 
-// sla is the contracted shortlist window, or a dash when none was agreed.
+// sla is the contracted shortlist window, or says none was agreed.
 func sla(n int) string {
 	if n <= 0 {
-		return "—"
+		return "not set"
 	}
 	return strconv.Itoa(n) + "d"
 }

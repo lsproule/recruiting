@@ -21,6 +21,7 @@ func TestKindsAreTheAgreedSet(t *testing.T) {
 		"attempt.purge_preview",
 		"email.send",
 		"interview.remind",
+		"jobpost.publish",
 		"runner.execute",
 		"signals.compute",
 		"snapshot.purge",

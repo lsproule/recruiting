@@ -64,7 +64,7 @@ func (s *ProblemService) Try(ctx context.Context, p Principal, id uuid.UUID, lan
 	}
 	res, err := s.exec.Execute(ctx, req)
 	if err != nil {
-		return TryResult{}, fmt.Errorf("%w: %v", ErrRunnerUnavailable, err)
+		return TryResult{}, fmt.Errorf("%w: %w", ErrRunnerUnavailable, err)
 	}
 	return tryResult(res, req, cases), nil
 }

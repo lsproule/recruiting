@@ -10,28 +10,40 @@ import (
 	"github.com/google/uuid"
 
 	"recruiting/internal/domain"
+	"recruiting/internal/queue"
 	"recruiting/internal/service"
 )
 
 // queueFixture is one org carrying exactly one item of every queue rule, so
-// each rule can be watched fire and clear on its own.
+// each rule can be watched fire and clear on its own. Each step rule gets an
+// application of its own, parked where that rule fires.
 type queueFixture struct {
 	*pipelineFixture
 	queue *service.WorkQueueService
 	exec  func(sql string, args ...any)
-	// the subject of each rule's row
-	scoredAttempt, invitedAttempt, waitingApp, draftPacket, overdueSlot, unratedPairing, waitingIntro uuid.UUID
+	// the applications behind each step rule; pf.appID itself sits in the
+	// first stage and is the résumé to review
+	callApp, feedbackApp, decisionApp, examSentApp, examReviewApp, forwardApp, silentApp, waitingApp, planApp uuid.UUID
+	// the subjects of the rules that are not applications
+	invitedAttempt, scoredAttempt, draftPacket, unratedPairing, waitingIntro uuid.UUID
+	feedbackSlot                                                             uuid.UUID
 	// the second recruiter, who shares the queue but not the snoozes
 	mateID uuid.UUID
-	// assessment the sittings belong to
-	assessmentID uuid.UUID
+	// assessment the sittings belong to, and the sprint stage
+	assessmentID, sprintStage uuid.UUID
 }
 
 func newQueueFixture(t *testing.T) *queueFixture {
 	t.Helper()
 	pf := newPipelineFixture(t)
 	ctx := context.Background()
+	q, err := queue.New(pf.st.Pool(), queue.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	f := &queueFixture{pipelineFixture: pf, queue: service.NewWorkQueueService(pf.st)}
+	f.queue.Apps = pf.apps
+	f.queue.Releases = service.NewReleaseService(pf.st, q, "https://example.test/")
 	f.exec = func(sql string, args ...any) {
 		t.Helper()
 		if _, err := pf.sys.Exec(ctx, sql, args...); err != nil {
@@ -46,33 +58,53 @@ func newQueueFixture(t *testing.T) *queueFixture {
 	f.assessmentID = uuid.New()
 	f.exec(`insert into problem (id, org_id, kind, title, statement) values ($1, $2, 'code', 'Adder', 'Add them')`, problemID, pf.orgID)
 	f.exec(`insert into assessment (id, org_id, name, duration_minutes) values ($1, $2, 'Screen', 60)`, f.assessmentID, pf.orgID)
+	f.sprintStage = uuid.New()
+	f.exec(`insert into stage (id, org_id, job_id, position, name, kind, round_seconds, break_seconds) values ($1, $2, $3, 7, 'Sprint', 'sprint', 300, 60)`,
+		f.sprintStage, pf.orgID, pf.jobID)
 
-	// review: a scored sitting nobody has reviewed.
-	f.scoredAttempt = f.attempt(t, "scored", map[string]any{"score": 88, "finished_at": time.Now().Add(-2 * time.Hour)})
-	// expiring: an invite that lapses within the day, never started.
-	f.invitedAttempt = f.attempt(t, "invited", map[string]any{"invite_expires_at": time.Now().Add(4 * time.Hour)})
-	// client_waiting: a question from the client with no answer after it.
-	f.waitingApp = pf.appID
+	// call_unbooked: in the interview stage with no slot.
+	f.callApp = f.application(t, "Call Candidate", pf.stages[domain.StageInterview])
+	// feedback: an interview that ended an hour ago with no scorecard.
+	f.feedbackApp = f.application(t, "Feedback Candidate", pf.stages[domain.StageInterview])
+	f.feedbackSlot = uuid.New()
+	f.exec(`insert into interview_slot (id, org_id, vetter_id, application_id, stage_id, starts_at, ends_at, status)
+		values ($1, $2, $3, $4, $5, now() - interval '2 hours', now() - interval '1 hour', 'completed')`,
+		f.feedbackSlot, pf.orgID, pf.userID, f.feedbackApp, pf.stages[domain.StageInterview])
+	// decision: an interview with its scorecard in.
+	f.decisionApp = f.application(t, "Decision Candidate", pf.stages[domain.StageInterview])
+	f.exec(`insert into interview_slot (id, org_id, vetter_id, application_id, stage_id, starts_at, ends_at, status)
+		values ($1, $2, $3, $4, $5, now() - interval '3 days', now() - interval '3 days' + interval '1 hour', 'completed')`,
+		uuid.New(), pf.orgID, pf.userID, f.decisionApp, pf.stages[domain.StageInterview])
+	f.exec(`insert into scorecard (org_id, application_id, stage_id, vetter_id, scores, overall) values ($1, $2, $3, $4, '[]', 'yes')`,
+		pf.orgID, f.decisionApp, pf.stages[domain.StageInterview], pf.userID)
+	// exam_unopened: an invite with hours left, never started.
+	f.examSentApp = f.application(t, "Exam Sent Candidate", pf.stages[domain.StageAssessment])
+	f.invitedAttempt = f.attempt(t, f.examSentApp, "invited", map[string]any{"invite_expires_at": time.Now().Add(4 * time.Hour)})
+	// exam_review: a scored sitting nobody has reviewed.
+	f.examReviewApp = f.application(t, "Exam Review Candidate", pf.stages[domain.StageAssessment])
+	f.scoredAttempt = f.attempt(t, f.examReviewApp, "scored", map[string]any{"score": 88, "finished_at": time.Now().Add(-2 * time.Hour)})
+	// forward: reached the client stage, not released.
+	f.forwardApp = f.application(t, "Forward Candidate", pf.stages[domain.StageClientReview])
+	// client_silent: released four days ago, nothing from the client since.
+	f.silentApp = f.application(t, "Silent Candidate", pf.stages[domain.StageClientReview])
+	f.exec(`update application set released_at = now() - interval '4 days' where id = $1`, f.silentApp)
+	// client_waiting: released, and the client asked a question.
+	f.waitingApp = f.application(t, "Waiting Candidate", pf.stages[domain.StageClientReview])
+	f.exec(`update application set released_at = now() - interval '1 day' where id = $1`, f.waitingApp)
 	f.exec(`insert into application_event (org_id, application_id, actor_kind, kind, reason) values ($1, $2, 'client_user', $3, 'Can they relocate?')`,
 		pf.orgID, f.waitingApp, service.EventRequestInfo)
+	// shortlist_plan: in the sprint stage with no sprint to be in.
+	f.planApp = f.application(t, "Plan Candidate", f.sprintStage)
 	// shortlist_draft: a packet built and never sent.
 	f.draftPacket = uuid.New()
 	f.exec(`insert into shortlist_packet (id, org_id, job_id, status, created_by) values ($1, $2, $3, 'draft', $4)`,
 		f.draftPacket, pf.orgID, pf.jobID, pf.userID)
 	f.exec(`insert into shortlist_pick (org_id, packet_id, application_id, rank) values ($1, $2, $3, 1)`,
 		pf.orgID, f.draftPacket, pf.appID)
-	// scorecard_overdue: an interview that ended two days ago.
-	f.overdueSlot = uuid.New()
-	f.exec(`insert into interview_slot (id, org_id, vetter_id, application_id, stage_id, starts_at, ends_at, status)
-		values ($1, $2, $3, $4, $5, now() - interval '2 days', now() - interval '2 days' + interval '1 hour', 'completed')`,
-		f.overdueSlot, pf.orgID, pf.userID, pf.appID, pf.stages[domain.StageInterview])
 	// sprint_rating: a sprint conversation that ended an hour ago, unrated.
-	sprintStage := uuid.New()
-	f.exec(`insert into stage (id, org_id, job_id, position, name, kind, round_seconds, break_seconds) values ($1, $2, $3, 7, 'Sprint', 'sprint', 300, 60)`,
-		sprintStage, pf.orgID, pf.jobID)
 	sprintID := uuid.New()
 	f.exec(`insert into sprint (id, org_id, job_id, stage_id, name, status, starts_at, round_seconds, break_seconds)
-		values ($1, $2, $3, $4, 'Sprint', 'scheduled', now() - interval '1 hour', 300, 60)`, sprintID, pf.orgID, pf.jobID, sprintStage)
+		values ($1, $2, $3, $4, 'Sprint', 'scheduled', now() - interval '1 hour', 300, 60)`, sprintID, pf.orgID, pf.jobID, f.sprintStage)
 	f.unratedPairing = uuid.New()
 	f.exec(`insert into sprint_pairing (id, sprint_id, org_id, round, interviewer_id, application_id) values ($1, $2, $3, 0, $4, $5)`,
 		f.unratedPairing, sprintID, pf.orgID, pf.userID, pf.appID)
@@ -90,13 +122,28 @@ func newQueueFixture(t *testing.T) *queueFixture {
 	return f
 }
 
-// attempt writes one sitting on the fixture's application in the given
-// status, with whatever columns the rule under test reads.
-func (f *queueFixture) attempt(t *testing.T, status string, cols map[string]any) uuid.UUID {
+// application writes one more candidate on the fixture's job, parked in the
+// given stage.
+func (f *queueFixture) application(t *testing.T, name string, stageID uuid.UUID) uuid.UUID {
+	t.Helper()
+	var companyID uuid.UUID
+	if err := f.sys.QueryRow(context.Background(), `select client_company_id from job where id = $1`, f.jobID).Scan(&companyID); err != nil {
+		t.Fatal(err)
+	}
+	candID, appID := uuid.New(), uuid.New()
+	f.exec(`insert into candidate (id, org_id, email, name) values ($1, $2, $3, $4)`, candID, f.orgID, candID.String()+"@example.com", name)
+	f.exec(`insert into application (id, org_id, job_id, candidate_id, client_company_id, stage_id) values ($1, $2, $3, $4, $5, $6)`,
+		appID, f.orgID, f.jobID, candID, companyID, stageID)
+	return appID
+}
+
+// attempt writes one sitting on an application in the assessment stage, in
+// the given status, with whatever columns the rule under test reads.
+func (f *queueFixture) attempt(t *testing.T, appID uuid.UUID, status string, cols map[string]any) uuid.UUID {
 	t.Helper()
 	id := uuid.New()
 	f.exec(`insert into attempt (id, org_id, application_id, assessment_id, stage_id, status) values ($1, $2, $3, $4, $5, $6)`,
-		id, f.orgID, f.appID, f.assessmentID, f.stages[domain.StageAssessment], status)
+		id, f.orgID, appID, f.assessmentID, f.stages[domain.StageAssessment], status)
 	for col, val := range cols {
 		f.exec(`update attempt set `+col+` = $2 where id = $1`, id, val)
 	}
@@ -125,10 +172,27 @@ func (f *queueFixture) subjects(t *testing.T, p service.Principal, kind service.
 	return out
 }
 
+// item is the one row a rule holds.
+func (f *queueFixture) item(t *testing.T, p service.Principal, kind service.QueueKind) service.QueueItem {
+	t.Helper()
+	items := f.list(t, p, kind)
+	if len(items) != 1 {
+		t.Fatalf("%s holds %d rows, want 1: %+v", kind, len(items), items)
+	}
+	return items[0]
+}
+
 func onlySubject(t *testing.T, got []uuid.UUID, want uuid.UUID) {
 	t.Helper()
 	if len(got) != 1 || got[0] != want {
 		t.Fatalf("subjects = %v, want exactly %v", got, want)
+	}
+}
+
+func none(t *testing.T, got []uuid.UUID, what string) {
+	t.Helper()
+	if len(got) != 0 {
+		t.Fatalf("%s: %v", what, got)
 	}
 }
 
@@ -138,42 +202,165 @@ func (f *queueFixture) mate() service.Principal {
 	return service.Principal{Kind: service.PrincipalOrgUser, OrgID: f.orgID, UserID: f.mateID, Roles: []string{service.RoleRecruiter}}
 }
 
-func TestQueueReviewRuleFiresUntilTheVerdictIsIn(t *testing.T) {
+func (f *queueFixture) stageOf(t *testing.T, appID uuid.UUID) (uuid.UUID, string) {
+	t.Helper()
+	var stage uuid.UUID
+	var status string
+	if err := f.sys.QueryRow(context.Background(), `select stage_id, status from application where id = $1`, appID).Scan(&stage, &status); err != nil {
+		t.Fatal(err)
+	}
+	return stage, status
+}
+
+func TestQueueResumeRuleOffersAdvanceAndRejectAndClearsOnTheMove(t *testing.T) {
 	f := newQueueFixture(t)
 	p := f.recruiter()
-	onlySubject(t, f.subjects(t, p, service.QueueReview), f.scoredAttempt)
-
-	f.exec(`insert into review (org_id, attempt_id, vetter_id, verdict) values ($1, $2, $3, 'pass')`, f.orgID, f.scoredAttempt, f.userID)
-	if got := f.subjects(t, p, service.QueueReview); len(got) != 0 {
-		t.Fatalf("a reviewed sitting still sits in the queue: %v", got)
+	item := f.item(t, p, service.QueueResume)
+	if item.ApplicationID != f.appID || len(item.Actions) != 2 {
+		t.Fatalf("résumé row = %+v, want the application with advance and reject", item)
+	}
+	advance, reject := item.Actions[0], item.Actions[1]
+	if advance.Kind != service.QueueActionAdvance || advance.ToStageID != f.stages[domain.StageInterview] {
+		t.Fatalf("advance = %+v, want the next stage", advance)
+	}
+	if reject.Kind != service.QueueActionReject || reject.ToStageID != f.reject || !reject.NeedsReason {
+		t.Fatalf("reject = %+v, want the rejected stage with a reason", reject)
+	}
+	if err := f.queue.Decide(context.Background(), p, service.DecideRequest{ApplicationID: f.appID, Action: advance.Kind, ToStageID: advance.ToStageID}); err != nil {
+		t.Fatalf("advance from the queue: %v", err)
+	}
+	none(t, f.subjects(t, p, service.QueueResume), "an advanced applicant still reads as a résumé to review")
+	if stage, _ := f.stageOf(t, f.appID); stage != f.stages[domain.StageInterview] {
+		t.Fatalf("after advance the application sits in %s", stage)
 	}
 }
 
-func TestQueueReviewIgnoresPreviewSittings(t *testing.T) {
-	f := newQueueFixture(t)
-	preview := uuid.New()
-	f.exec(`insert into attempt (id, org_id, assessment_id, status, preview, preview_user_id, score, finished_at)
-		values ($1, $2, $3, 'scored', true, $4, 91, now())`, preview, f.orgID, f.assessmentID, f.userID)
-	onlySubject(t, f.subjects(t, f.recruiter(), service.QueueReview), f.scoredAttempt)
-}
-
-func TestQueueExpiringRuleFiresUntilTheSittingStarts(t *testing.T) {
+func TestQueueRejectFromTheQueueNeedsAReasonAndEmailsTheCandidate(t *testing.T) {
 	f := newQueueFixture(t)
 	p := f.recruiter()
-	onlySubject(t, f.subjects(t, p, service.QueueExpiring), f.invitedAttempt)
+	req := service.DecideRequest{ApplicationID: f.appID, Action: service.QueueActionReject, ToStageID: f.reject}
+	if err := f.queue.Decide(context.Background(), p, req); err == nil {
+		t.Fatal("a reject without a reason went through")
+	}
+	req.Reason = "Looking for more backend depth"
+	if err := f.queue.Decide(context.Background(), p, req); err != nil {
+		t.Fatalf("reject with reason: %v", err)
+	}
+	if _, status := f.stageOf(t, f.appID); status != string(domain.StatusRejected) {
+		t.Fatalf("status after reject = %s", status)
+	}
+	var emails int
+	if err := f.sys.QueryRow(context.Background(), `select count(*) from river_job where kind = 'email.send' and args->>'payload' like '%application_rejected%' and args->>'payload' like '%'||$1||'%'`, f.orgID.String()).Scan(&emails); err != nil {
+		t.Fatal(err)
+	}
+	if emails != 1 {
+		t.Fatalf("rejection emails queued = %d, want 1", emails)
+	}
+}
 
+func TestQueueCallRuleFollowsTheBookingThroughToFeedbackAndDecision(t *testing.T) {
+	f := newQueueFixture(t)
+	p := f.recruiter()
+	onlySubject(t, f.subjects(t, p, service.QueueCallUnbooked), f.callApp)
+
+	// Booked for tomorrow: the ball is with the calendar, not a person.
+	slot := uuid.New()
+	f.exec(`insert into interview_slot (id, org_id, vetter_id, application_id, stage_id, starts_at, ends_at, status)
+		values ($1, $2, $3, $4, $5, now() + interval '1 day', now() + interval '1 day' + interval '30 minutes', 'booked')`,
+		slot, f.orgID, f.mateID, f.callApp, f.stages[domain.StageInterview])
+	none(t, f.subjects(t, p, service.QueueCallUnbooked), "a booked call still reads as unbooked")
+	for _, kind := range []service.QueueKind{service.QueueFeedback, service.QueueDecision} {
+		for _, item := range f.list(t, p, kind) {
+			if item.ApplicationID == f.callApp {
+				t.Fatalf("an upcoming call raised a %s row", kind)
+			}
+		}
+	}
+	// Once it has happened the feedback is due, at once.
+	f.exec(`update interview_slot set starts_at = now() - interval '1 hour', ends_at = now() - interval '30 minutes' where id = $1`, slot)
+	got := f.subjects(t, p, service.QueueFeedback)
+	if len(got) != 2 {
+		t.Fatalf("feedback rows = %v, want the fixture's and the call's", got)
+	}
+	// And with the feedback in, the decision is.
+	f.exec(`insert into scorecard (org_id, application_id, stage_id, vetter_id, scores, overall) values ($1, $2, $3, $4, '[]', 'no')`,
+		f.orgID, f.callApp, f.stages[domain.StageInterview], f.mateID)
+	if got := f.subjects(t, p, service.QueueFeedback); len(got) != 1 || got[0] != f.feedbackApp {
+		t.Fatalf("feedback rows after the scorecard = %v, want only the fixture's", got)
+	}
+	decisions := f.subjects(t, p, service.QueueDecision)
+	if len(decisions) != 2 {
+		t.Fatalf("decision rows = %v, want the fixture's and the call's", decisions)
+	}
+}
+
+func TestQueueExamRulesFollowTheSitting(t *testing.T) {
+	f := newQueueFixture(t)
+	p := f.recruiter()
+	sent := f.item(t, p, service.QueueExamUnopened)
+	if sent.ApplicationID != f.examSentApp || sent.Due == nil {
+		t.Fatalf("exam sent row = %+v, want the invited application with its expiry", sent)
+	}
+	// Opened: with the candidate.
 	f.exec(`update attempt set status = 'started', started_at = now() where id = $1`, f.invitedAttempt)
-	if got := f.subjects(t, p, service.QueueExpiring); len(got) != 0 {
-		t.Fatalf("a started sitting still sits in the queue: %v", got)
+	none(t, f.subjects(t, p, service.QueueExamUnopened), "a started exam still reads as unopened")
+	// An invite that lapsed unopened is a decision: re-invite or reject.
+	f.exec(`update attempt set status = 'invited', started_at = null, invite_expires_at = now() - interval '1 hour' where id = $1`, f.invitedAttempt)
+	var lapsed bool
+	for _, item := range f.list(t, p, service.QueueDecision) {
+		if item.ApplicationID == f.examSentApp && len(item.Actions) == 2 {
+			lapsed = true
+		}
+	}
+	if !lapsed {
+		t.Fatal("a lapsed invite raised no decision")
+	}
+
+	review := f.item(t, p, service.QueueExamReview)
+	if review.SubjectID != f.scoredAttempt || review.ActionURL != "/app/reviews/"+f.scoredAttempt.String() {
+		t.Fatalf("exam review row = %+v, want the scored attempt and its review link", review)
+	}
+	f.exec(`insert into review (org_id, attempt_id, vetter_id, verdict) values ($1, $2, $3, 'pass')`, f.orgID, f.scoredAttempt, f.userID)
+	none(t, f.subjects(t, p, service.QueueExamReview), "a reviewed sitting still waits for review")
+	var decided bool
+	for _, item := range f.list(t, p, service.QueueDecision) {
+		if item.ApplicationID == f.examReviewApp {
+			decided = true
+		}
+	}
+	if !decided {
+		t.Fatal("a reviewed exam raised no decision")
 	}
 }
 
-func TestQueueExpiringIgnoresInvitesWithRoomLeft(t *testing.T) {
+func TestQueueExamReviewIgnoresPreviewSittings(t *testing.T) {
 	f := newQueueFixture(t)
-	f.exec(`update attempt set invite_expires_at = now() + interval '5 days' where id = $1`, f.invitedAttempt)
-	if got := f.subjects(t, f.recruiter(), service.QueueExpiring); len(got) != 0 {
-		t.Fatalf("an invite with days left is queued: %v", got)
+	// A preview belongs to the recruiter who opened it, never to an
+	// application; it is scored like a real sitting and must raise nothing.
+	f.exec(`insert into attempt (id, org_id, assessment_id, status, preview, preview_user_id, score, finished_at)
+		values ($1, $2, $3, 'scored', true, $4, 91, now())`, uuid.New(), f.orgID, f.assessmentID, f.userID)
+	onlySubject(t, f.subjects(t, f.recruiter(), service.QueueExamReview), f.scoredAttempt)
+}
+
+func TestQueueForwardRuleReleasesFromTheRow(t *testing.T) {
+	f := newQueueFixture(t)
+	p := f.recruiter()
+	item := f.item(t, p, service.QueueForward)
+	if item.ApplicationID != f.forwardApp || len(item.Actions) != 1 || item.Actions[0].Kind != service.QueueActionRelease {
+		t.Fatalf("forward row = %+v, want the unreleased application with a release", item)
 	}
+	if err := f.queue.Decide(context.Background(), p, service.DecideRequest{ApplicationID: f.forwardApp, Action: service.QueueActionRelease}); err != nil {
+		t.Fatalf("release from the queue: %v", err)
+	}
+	none(t, f.subjects(t, p, service.QueueForward), "a released application still waits to be forwarded")
+}
+
+func TestQueueClientSilentClearsWhenTheClientSpeaks(t *testing.T) {
+	f := newQueueFixture(t)
+	p := f.recruiter()
+	onlySubject(t, f.subjects(t, p, service.QueueClientSilent), f.silentApp)
+	f.exec(`insert into application_event (org_id, application_id, actor_kind, kind, reason) values ($1, $2, 'client_user', 'moved', 'Advanced')`, f.orgID, f.silentApp)
+	none(t, f.subjects(t, p, service.QueueClientSilent), "a client who moved the candidate still reads as silent")
 }
 
 func TestQueueClientWaitingRuleClearsOnTheRecruitersReply(t *testing.T) {
@@ -183,9 +370,21 @@ func TestQueueClientWaitingRuleClearsOnTheRecruitersReply(t *testing.T) {
 
 	f.exec(`insert into application_event (org_id, application_id, actor_kind, actor_id, kind, reason) values ($1, $2, 'org_user', $3, 'moved', 'They can')`,
 		f.orgID, f.waitingApp, f.userID)
-	if got := f.subjects(t, p, service.QueueClientWaiting); len(got) != 0 {
-		t.Fatalf("an answered question still sits in the queue: %v", got)
+	none(t, f.subjects(t, p, service.QueueClientWaiting), "an answered question still sits in the queue")
+}
+
+func TestQueueShortlistPlanClearsOnceTheCandidateIsInASprint(t *testing.T) {
+	f := newQueueFixture(t)
+	p := f.recruiter()
+	item := f.item(t, p, service.QueueShortlistPlan)
+	if item.ApplicationID != f.planApp || item.ActionURL != "/app/jobs/"+f.jobID.String()+"/sprints" {
+		t.Fatalf("plan row = %+v", item)
 	}
+	sprintID := uuid.New()
+	f.exec(`insert into sprint (id, org_id, job_id, stage_id, name, status, starts_at, round_seconds, break_seconds)
+		values ($1, $2, $3, $4, 'Round robin', 'scheduled', now() + interval '1 day', 300, 60)`, sprintID, f.orgID, f.jobID, f.sprintStage)
+	f.exec(`insert into sprint_candidate (sprint_id, org_id, application_id, position) values ($1, $2, $3, 0)`, sprintID, f.orgID, f.planApp)
+	none(t, f.subjects(t, p, service.QueueShortlistPlan), "a candidate in a sprint still waits for a plan")
 }
 
 func TestQueueShortlistDraftRuleClearsWhenThePacketIsSent(t *testing.T) {
@@ -194,55 +393,41 @@ func TestQueueShortlistDraftRuleClearsWhenThePacketIsSent(t *testing.T) {
 	onlySubject(t, f.subjects(t, p, service.QueueShortlistDraft), f.draftPacket)
 
 	f.exec(`update shortlist_packet set status = 'sent', sent_at = now(), sent_by = $2 where id = $1`, f.draftPacket, f.userID)
-	if got := f.subjects(t, p, service.QueueShortlistDraft); len(got) != 0 {
-		t.Fatalf("a sent packet still sits in the queue: %v", got)
-	}
+	none(t, f.subjects(t, p, service.QueueShortlistDraft), "a sent packet still sits in the queue")
 }
 
-func TestQueueScorecardOverdueRuleClearsWhenTheCardIsFiled(t *testing.T) {
+func TestQueueFeedbackRuleClearsWhenTheCardIsFiled(t *testing.T) {
 	f := newQueueFixture(t)
 	p := f.recruiter()
-	onlySubject(t, f.subjects(t, p, service.QueueScorecardOverdue), f.overdueSlot)
+	onlySubject(t, f.subjects(t, p, service.QueueFeedback), f.feedbackApp)
 
 	f.exec(`insert into scorecard (org_id, application_id, stage_id, vetter_id, scores, overall) values ($1, $2, $3, $4, '[]', 'yes')`,
-		f.orgID, f.appID, f.stages[domain.StageInterview], f.userID)
-	if got := f.subjects(t, p, service.QueueScorecardOverdue); len(got) != 0 {
-		t.Fatalf("a filed scorecard still sits in the queue: %v", got)
-	}
-}
-
-func TestQueueScorecardOverdueIgnoresFreshInterviews(t *testing.T) {
-	f := newQueueFixture(t)
-	f.exec(`update interview_slot set starts_at = now() - interval '2 hours', ends_at = now() - interval '1 hour' where id = $1`, f.overdueSlot)
-	if got := f.subjects(t, f.recruiter(), service.QueueScorecardOverdue); len(got) != 0 {
-		t.Fatalf("an interview that ended an hour ago is overdue: %v", got)
-	}
+		f.orgID, f.feedbackApp, f.stages[domain.StageInterview], f.userID)
+	none(t, f.subjects(t, p, service.QueueFeedback), "a filed scorecard still sits in the queue")
 }
 
 func TestQueueSnoozeHidesTheItemForOneUserOnly(t *testing.T) {
 	f := newQueueFixture(t)
 	p, mate := f.recruiter(), f.mate()
 	until := time.Now().Add(service.SnoozeWindow)
-	if err := f.queue.Snooze(context.Background(), p, service.QueueReview, f.scoredAttempt, until); err != nil {
+	if err := f.queue.Snooze(context.Background(), p, service.QueueExamReview, f.scoredAttempt, until); err != nil {
 		t.Fatalf("snooze: %v", err)
 	}
-	if got := f.subjects(t, p, service.QueueReview); len(got) != 0 {
-		t.Fatalf("the snoozed item is still in its own queue: %v", got)
-	}
-	onlySubject(t, f.subjects(t, mate, service.QueueReview), f.scoredAttempt)
+	none(t, f.subjects(t, p, service.QueueExamReview), "the snoozed item is still in its own queue")
+	onlySubject(t, f.subjects(t, mate, service.QueueExamReview), f.scoredAttempt)
 
 	// A snooze that has run out stops hiding anything.
 	f.exec(`update queue_snooze set until = now() - interval '1 minute' where user_id = $1`, f.userID)
-	onlySubject(t, f.subjects(t, p, service.QueueReview), f.scoredAttempt)
+	onlySubject(t, f.subjects(t, p, service.QueueExamReview), f.scoredAttempt)
 }
 
 func TestQueueSnoozeIsPerSubject(t *testing.T) {
 	f := newQueueFixture(t)
 	p := f.recruiter()
-	if err := f.queue.Snooze(context.Background(), p, service.QueueReview, f.scoredAttempt, time.Now().Add(service.SnoozeWindow)); err != nil {
+	if err := f.queue.Snooze(context.Background(), p, service.QueueExamReview, f.scoredAttempt, time.Now().Add(service.SnoozeWindow)); err != nil {
 		t.Fatalf("snooze: %v", err)
 	}
-	onlySubject(t, f.subjects(t, p, service.QueueExpiring), f.invitedAttempt)
+	onlySubject(t, f.subjects(t, p, service.QueueExamUnopened), f.examSentApp)
 	onlySubject(t, f.subjects(t, p, service.QueueShortlistDraft), f.draftPacket)
 }
 
@@ -255,7 +440,7 @@ func TestQueueCountsMatchTheRows(t *testing.T) {
 	}
 	for _, kind := range service.QueueKinds {
 		if counts[kind] != 1 {
-			t.Fatalf("count for %s = %d, want 1", kind, counts[kind])
+			t.Fatalf("count for %s = %d, want 1 (%v)", kind, counts[kind], f.list(t, p, kind))
 		}
 	}
 	if got := len(f.list(t, p, "")); got != len(service.QueueKinds) {
@@ -273,7 +458,7 @@ func TestQueueCountsMatchTheRows(t *testing.T) {
 	}
 }
 
-func TestQueueRowsCarryTheirAction(t *testing.T) {
+func TestQueueRowsCarryTheirActionAndCompany(t *testing.T) {
 	f := newQueueFixture(t)
 	for _, item := range f.list(t, f.recruiter(), "") {
 		if item.ActionURL == "" || item.ActionLabel == "" {
@@ -281,6 +466,9 @@ func TestQueueRowsCarryTheirAction(t *testing.T) {
 		}
 		if item.JobTitle == "" || item.ClientName == "" {
 			t.Fatalf("%s row names no job or client: %+v", item.Kind, item)
+		}
+		if item.Kind.Step() < 1 || item.Kind.Step() > 9 {
+			t.Fatalf("%s is step %d", item.Kind, item.Kind.Step())
 		}
 	}
 }
@@ -291,6 +479,9 @@ func TestQueueRefusesClientUsers(t *testing.T) {
 	if _, err := f.queue.List(context.Background(), client, ""); err == nil {
 		t.Fatal("a client user read the recruiter's work queue")
 	}
+	if err := f.queue.Decide(context.Background(), client, service.DecideRequest{ApplicationID: f.appID, Action: service.QueueActionRelease}); err == nil {
+		t.Fatal("a client user decided from the recruiter's queue")
+	}
 }
 
 func TestQueueTalentIntroWaitsUntilSent(t *testing.T) {
@@ -298,11 +489,9 @@ func TestQueueTalentIntroWaitsUntilSent(t *testing.T) {
 	p := f.recruiter()
 	onlySubject(t, f.subjects(t, p, service.QueueTalentIntro), f.waitingIntro)
 	items := f.list(t, p, service.QueueTalentIntro)
-	if len(items) != 1 || items[0].ActionLabel != "Send opportunity" || items[0].Due == nil {
-		t.Fatalf("talent intro item = %+v", items)
+	if items[0].ActionLabel != "Send opportunity" {
+		t.Fatalf("intro row = %+v", items[0])
 	}
 	f.exec(`update talent_intro set status = 'sent', sent_at = now() where id = $1`, f.waitingIntro)
-	if got := f.subjects(t, p, service.QueueTalentIntro); len(got) != 0 {
-		t.Fatalf("a sent introduction is still queued: %v", got)
-	}
+	none(t, f.subjects(t, p, service.QueueTalentIntro), "a sent introduction still sits in the queue")
 }

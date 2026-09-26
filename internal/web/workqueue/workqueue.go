@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"recruiting/internal/domain"
 	"recruiting/internal/service"
 	"recruiting/internal/web/layout"
 	"recruiting/internal/web/middleware"
@@ -25,6 +27,10 @@ const Prefix = "/app/queue"
 
 // SnoozePath is where a row's "not now" posts.
 const SnoozePath = Prefix + "/snooze"
+
+// DecidePath is where a row's inline decision posts: advance, reject, or
+// forward to the client.
+const DecidePath = Prefix + "/decide"
 
 // filterParam names the rule the screen is narrowed to; absent means all.
 const filterParam = "kind"
@@ -47,6 +53,7 @@ func Mount(r chi.Router, d Deps) {
 		r.Use(middleware.RequireAuth("/app/login"))
 		r.Get(Prefix, h.show)
 		r.Post(SnoozePath, h.snooze)
+		r.Post(DecidePath, h.decide)
 	})
 }
 
@@ -84,8 +91,12 @@ func (h *handlers) displayName(r *http.Request, p service.Principal) string {
 }
 
 func (h *handlers) show(w http.ResponseWriter, r *http.Request) {
+	h.render(w, r, parseFilter(r.URL.Query().Get(filterParam)))
+}
+
+// render draws the queue as it stands, with any flash the last action left.
+func (h *handlers) render(w http.ResponseWriter, r *http.Request, filter service.QueueKind, flashes ...layout.Flash) {
 	p, _ := middleware.PrincipalFrom(r.Context())
-	filter := parseFilter(r.URL.Query().Get(filterParam))
 	items, err := h.d.Queue.List(r.Context(), p, filter)
 	if err != nil {
 		h.fail(w, r, err)
@@ -96,9 +107,67 @@ func (h *handlers) show(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	render(w, r, http.StatusOK, queuePage(h.page(r, "Work queue"), queueView{
+	render(w, r, http.StatusOK, queuePage(h.page(r, "Work queue", flashes...), queueView{
 		Items: items, Counts: counts, Filter: filter,
 	}, middleware.CSRFToken(r)))
+}
+
+// decide takes a row's inline decision and returns to the filter the
+// recruiter was reading. A refused decision (a reject without a reason, a
+// stage whose prerequisite is missing, a stale row) comes back as a flash on
+// the same screen rather than an error page.
+func (h *handlers) decide(w http.ResponseWriter, r *http.Request) {
+	p, _ := middleware.PrincipalFrom(r.Context())
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	appID, err := uuid.Parse(r.PostFormValue("application_id"))
+	if err != nil {
+		http.Error(w, "bad decision", http.StatusBadRequest)
+		return
+	}
+	req := service.DecideRequest{
+		ApplicationID: appID,
+		Action:        strings.TrimSpace(r.PostFormValue("action")),
+		Reason:        strings.TrimSpace(r.PostFormValue("reason")),
+	}
+	if to, err := uuid.Parse(r.PostFormValue("to_stage_id")); err == nil {
+		req.ToStageID = to
+	}
+	back := backTo(r.PostFormValue("back"))
+	if err := h.d.Queue.Decide(r.Context(), p, req); err != nil {
+		if status := decideStatus(err); status == http.StatusInternalServerError {
+			h.fail(w, r, err)
+			return
+		}
+		h.render(w, r, filterOf(back), layout.Flash{Kind: "error", Message: strings.TrimPrefix(err.Error(), "service: ")})
+		return
+	}
+	http.Redirect(w, r, back, http.StatusSeeOther)
+}
+
+// decideStatus sorts a refused decision from a failure: the rules' own
+// refusals are the recruiter's to read, anything else is ours.
+func decideStatus(err error) int {
+	switch {
+	case errors.Is(err, service.ErrForbidden), errors.Is(err, domain.ErrForbiddenMove):
+		return http.StatusForbidden
+	case errors.Is(err, service.ErrNotFound), errors.Is(err, service.ErrBadDecision):
+		return http.StatusNotFound
+	case errors.Is(err, domain.ErrReasonRequired), errors.Is(err, domain.ErrPrereqMissing),
+		errors.Is(err, domain.ErrTerminal), errors.Is(err, service.ErrStale):
+		return http.StatusUnprocessableEntity
+	}
+	return http.StatusInternalServerError
+}
+
+// filterOf reads the filter back out of a return URL.
+func filterOf(back string) service.QueueKind {
+	if u, err := url.Parse(back); err == nil {
+		return parseFilter(u.Query().Get(filterParam))
+	}
+	return ""
 }
 
 // snooze puts one row out of this user's sight for a day and returns to the

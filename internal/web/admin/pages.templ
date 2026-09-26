@@ -134,6 +134,10 @@ templ settingsPage(page layout.Page, s service.Settings) {
 				Webcam snapshot retention in days ({ service.SettingSnapshotRetentionDays })
 				<input type="number" name={ service.SettingSnapshotRetentionDays } min="1" value={ strconv.Itoa(s.SnapshotRetentionDays) } required/>
 			</label>
+			<label class="option">
+				<input type="checkbox" name={ service.SettingRejectionEmail } value="1" checked?={ s.RejectionEmail }/>
+				Email a candidate when their application is closed as rejected ({ service.SettingRejectionEmail }), whoever closes it: a recruiter, the client, or an assessment stage that decides on its score
+			</label>
 			<fieldset>
 				<legend>Integrity signal weights</legend>
 				<p class="muted">Weights scale each signal's contribution to the risk score. They never move an application on their own.</p>

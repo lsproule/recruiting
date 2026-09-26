@@ -279,6 +279,25 @@ type Job struct {
 	TemplateID      uuid.NullUUID
 }
 
+type JobPosting struct {
+	ID          uuid.UUID
+	OrgID       uuid.UUID
+	JobID       uuid.UUID
+	Board       string
+	Status      string
+	Title       string
+	Body        string
+	ApplyUrl    string
+	ExternalUrl *string
+	ExternalID  *string
+	Error       *string
+	Attempts    int32
+	PostedAt    pgtype.Timestamptz
+	CreatedBy   uuid.NullUUID
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+}
+
 type MagicLink struct {
 	ID        uuid.UUID
 	OrgID     uuid.UUID
@@ -363,6 +382,9 @@ type PipelineTemplateStage struct {
 	RoundSeconds    *int32
 	BreakSeconds    *int32
 	TerminalStatus  *string
+	PassScore       *int32
+	AutoAdvance     bool
+	AutoReject      bool
 }
 
 type Problem struct {
@@ -552,6 +574,9 @@ type Stage struct {
 	DurationMinutes   *int32
 	RoundSeconds      *int32
 	BreakSeconds      *int32
+	PassScore         *int32
+	AutoAdvance       bool
+	AutoReject        bool
 }
 
 type Submission struct {

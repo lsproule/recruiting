@@ -790,7 +790,7 @@ func sessionLanguages(a Assessment, p Problem) []string {
 	if a.LanguageOverride != "" && containsString(langs, a.LanguageOverride) {
 		return []string{a.LanguageOverride}
 	}
-	return langs
+	return domain.OrderLanguages(langs)
 }
 
 func (s *AttemptService) session(ctx context.Context, tx *store.Tx, att db.Attempt) (AttemptSession, error) {

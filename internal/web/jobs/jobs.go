@@ -29,7 +29,9 @@ const Prefix = "/app/jobs"
 // created for and the signed-in user's display name.
 type Deps struct {
 	Jobs *service.JobService
-	Org  *service.OrgService
+	// Postings places a job on external boards; nil hides the panel.
+	Postings *service.JobPostingService
+	Org      *service.OrgService
 	// Logger records the errors behind a 500; the visitor only ever sees a
 	// generic message. Nil disables that logging.
 	Logger *slog.Logger
@@ -51,6 +53,7 @@ func Mount(r chi.Router, d Deps) {
 		r.Get("/", h.list)
 		r.Get("/{id}", h.edit)
 		r.Get("/{id}/pipeline", h.pipeline)
+		r.Get("/{id}/postings", h.postings)
 		r.Group(func(r chi.Router) {
 			r.Use(requireRecruiter)
 			r.Get("/new", h.newJob)
@@ -60,6 +63,9 @@ func Mount(r chi.Router, d Deps) {
 			r.Post("/{id}/stages/order", h.reorderStages)
 			r.Post("/{id}/stages/{stageID}", h.updateStage)
 			r.Post("/{id}/stages/{stageID}/delete", h.deleteStage)
+			r.Post("/{id}/postings", h.post)
+			r.Post("/{id}/postings/{postingID}/retry", h.retryPosting)
+			r.Post("/{id}/postings/{postingID}/remove", h.removePosting)
 		})
 	})
 }
@@ -133,7 +139,10 @@ func statusFor(err error) int {
 		errors.Is(err, service.ErrSlugTaken),
 		errors.Is(err, service.ErrInvalidJob),
 		errors.Is(err, service.ErrCompanyRequired),
-		errors.Is(err, service.ErrNoTemplate):
+		errors.Is(err, service.ErrNoTemplate),
+		errors.Is(err, service.ErrBadBoard),
+		errors.Is(err, service.ErrPostingClosedJob),
+		errors.Is(err, service.ErrBadDecision):
 		return http.StatusUnprocessableEntity
 	}
 	return http.StatusInternalServerError
