@@ -27,6 +27,10 @@ type Config struct {
 	RunnerSecret   string
 	SessionSecret  string
 	BaseURL        string
+	// RTCICEServers is the JSON array of ICE servers interview rooms hand
+	// to the browser; optional. Empty leaves the browser on host candidates,
+	// which works on one network and needs STUN or TURN beyond it.
+	RTCICEServers string
 }
 
 // MissingError reports environment variables that are required but unset.
@@ -71,6 +75,7 @@ func Load() (*Config, error) {
 	// DATABASE_URL_APP is optional: serve/worker need the app_rw role (N1),
 	// but a fresh checkout should not have to spell out a second URL that
 	// only swaps the user/password of the one it already has.
+	cfg.RTCICEServers = strings.TrimSpace(os.Getenv("RTC_ICE_SERVERS"))
 	cfg.DatabaseURLApp = strings.TrimSpace(os.Getenv("DATABASE_URL_APP"))
 	if cfg.DatabaseURLApp == "" {
 		derived, err := deriveAppURL(cfg.DatabaseURL)

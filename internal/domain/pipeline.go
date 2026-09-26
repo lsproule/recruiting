@@ -16,11 +16,37 @@ const (
 	StageInterview    StageKind = "interview"
 	StageAssessment   StageKind = "assessment"
 	StageClientReview StageKind = "client_review"
-	StageTerminal     StageKind = "terminal"
+	// StageSprint is a screening sprint: every candidate in the stage meets
+	// every interviewer for a few minutes each, on a clock.
+	StageSprint   StageKind = "sprint"
+	StageTerminal StageKind = "terminal"
 )
 
 // StageKinds is every kind, in the order editors list them.
-var StageKinds = []StageKind{StageGeneric, StageInterview, StageAssessment, StageClientReview, StageTerminal}
+var StageKinds = []StageKind{StageGeneric, StageInterview, StageAssessment, StageSprint, StageClientReview, StageTerminal}
+
+// Interview formats: a phone call the platform only books, or a video room
+// it hosts with a shared editor.
+const (
+	FormatCall  = "call"
+	FormatVideo = "video"
+)
+
+// InterviewFormats is every format, in the order editors list them.
+var InterviewFormats = []string{FormatCall, FormatVideo}
+
+// Defaults a stage takes when its kind needs a number and the editor gave
+// none, and the bounds the editor is held to.
+const (
+	DefaultInterviewMinutes = 30
+	MinInterviewMinutes     = 5
+	MaxInterviewMinutes     = 8 * 60
+	DefaultRoundSeconds     = 5 * 60
+	MinRoundSeconds         = 15
+	MaxRoundSeconds         = 60 * 60
+	DefaultBreakSeconds     = 60
+	MaxBreakSeconds         = 60 * 60
+)
 
 // Valid reports whether k is one of the known kinds.
 func (k StageKind) Valid() bool {
@@ -66,6 +92,68 @@ type Stage struct {
 	// DefaultVetterID is the interviewer an interview stage assigns when the
 	// application names none; Nil when the stage has no default.
 	DefaultVetterID uuid.UUID
+	// InterviewFormat is FormatCall or FormatVideo on an interview stage and
+	// empty elsewhere; DurationMinutes is how long the interview is booked
+	// for.
+	InterviewFormat string
+	DurationMinutes int
+	// RoundSeconds and BreakSeconds are a sprint stage's round clock and
+	// zero elsewhere.
+	RoundSeconds int
+	BreakSeconds int
+}
+
+// NormalizeStage fills in the defaults a stage's kind needs and clears the
+// settings that belong to other kinds, so a stage stored after a kind change
+// carries nothing stale.
+func NormalizeStage(s Stage) Stage {
+	switch s.Kind {
+	case StageInterview:
+		if s.InterviewFormat == "" {
+			s.InterviewFormat = FormatCall
+		}
+		if s.DurationMinutes == 0 {
+			s.DurationMinutes = DefaultInterviewMinutes
+		}
+		s.RoundSeconds, s.BreakSeconds = 0, 0
+	case StageSprint:
+		if s.RoundSeconds == 0 {
+			s.RoundSeconds = DefaultRoundSeconds
+		}
+		if s.BreakSeconds == 0 {
+			s.BreakSeconds = DefaultBreakSeconds
+		}
+		s.InterviewFormat, s.DurationMinutes, s.DefaultVetterID = "", 0, uuid.Nil
+	default:
+		s.InterviewFormat, s.DurationMinutes, s.DefaultVetterID = "", 0, uuid.Nil
+		s.RoundSeconds, s.BreakSeconds = 0, 0
+	}
+	if s.Kind != StageTerminal {
+		s.Terminal = ""
+	}
+	return s
+}
+
+// ValidateStageSettings checks the numbers a kind carries against their
+// bounds. It expects a normalised stage.
+func ValidateStageSettings(s Stage) error {
+	switch s.Kind {
+	case StageInterview:
+		if s.InterviewFormat != FormatCall && s.InterviewFormat != FormatVideo {
+			return fmt.Errorf("%w: %q is not an interview format", ErrInvalidPipeline, s.InterviewFormat)
+		}
+		if s.DurationMinutes < MinInterviewMinutes || s.DurationMinutes > MaxInterviewMinutes {
+			return fmt.Errorf("%w: interview %q must last between %d and %d minutes", ErrInvalidPipeline, s.Name, MinInterviewMinutes, MaxInterviewMinutes)
+		}
+	case StageSprint:
+		if s.RoundSeconds < MinRoundSeconds || s.RoundSeconds > MaxRoundSeconds {
+			return fmt.Errorf("%w: sprint %q rounds must last between %d seconds and an hour", ErrInvalidPipeline, s.Name, MinRoundSeconds)
+		}
+		if s.BreakSeconds < 0 || s.BreakSeconds > MaxBreakSeconds {
+			return fmt.Errorf("%w: sprint %q breaks must be between zero and an hour", ErrInvalidPipeline, s.Name)
+		}
+	}
+	return nil
 }
 
 // Application is the subset of an application the move rules read.
@@ -75,8 +163,10 @@ type Application struct {
 	Status  ApplicationStatus
 }
 
-// Prereqs is what the source stage has collected for the application.
-type Prereqs struct{ HasScorecard, HasVerdict bool }
+// Prereqs is what the source stage has collected for the application: a
+// scorecard on an interview stage, a verdict on an assessment stage, at
+// least one interviewer's rating on a sprint stage.
+type Prereqs struct{ HasScorecard, HasVerdict, HasRating bool }
 
 // Satisfies reports whether leaving a stage of kind k needs nothing more.
 func (p Prereqs) Satisfies(k StageKind) bool {
@@ -85,6 +175,8 @@ func (p Prereqs) Satisfies(k StageKind) bool {
 		return p.HasScorecard
 	case StageAssessment:
 		return p.HasVerdict
+	case StageSprint:
+		return p.HasRating
 	}
 	return true
 }
@@ -129,7 +221,7 @@ func ValidateMove(actor ActorRole, app Application, from, to Stage, prereqs Prer
 		return ErrForbiddenMove
 	}
 	switch from.Kind {
-	case StageGeneric:
+	case StageGeneric, StageSprint:
 		if !owner {
 			return ErrForbiddenMove
 		}
@@ -172,6 +264,9 @@ func ValidatePipeline(stages []Stage) error {
 		}
 		if !s.Kind.Valid() {
 			return fmt.Errorf("%w: %q is not a stage kind", ErrInvalidPipeline, s.Kind)
+		}
+		if err := ValidateStageSettings(s); err != nil {
+			return err
 		}
 		if s.Kind != StageTerminal {
 			if s.Terminal != "" {

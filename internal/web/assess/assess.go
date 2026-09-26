@@ -160,12 +160,15 @@ func (h *handlers) renderSession(w http.ResponseWriter, r *http.Request, s servi
 type islandConfig struct {
 	// Mode tells the island which surface it is on; the candidate page is
 	// always an attempt, with the recorder and the timer running.
-	Mode      string          `json:"mode"`
-	AttemptID string          `json:"attempt_id"`
-	APIBase   string          `json:"api_base"`
-	BeaconURL string          `json:"beacon_url"`
-	CSRF      string          `json:"csrf"`
-	Status    string          `json:"status"`
+	Mode      string `json:"mode"`
+	AttemptID string `json:"attempt_id"`
+	APIBase   string `json:"api_base"`
+	BeaconURL string `json:"beacon_url"`
+	CSRF      string `json:"csrf"`
+	Status    string `json:"status"`
+	// Format is timed or take_home; the island shows a countdown for one
+	// and a deadline for the other.
+	Format    string          `json:"format"`
 	ExpiresAt int64           `json:"expires_at"`
 	Integrity islandIntegrity `json:"integrity"`
 	Problems  []islandProblem `json:"problems"`
@@ -208,7 +211,7 @@ func configFor(s service.AttemptSession) islandConfig {
 	integrity := s.Assessment.Integrity
 	out := islandConfig{
 		Mode: "attempt", AttemptID: s.Attempt.ID.String(), APIBase: APIBase, BeaconURL: BeaconPath,
-		Status: s.Attempt.Status, Problems: []islandProblem{},
+		Status: s.Attempt.Status, Format: s.Assessment.Format, Problems: []islandProblem{},
 		Integrity: islandIntegrity{
 			Fullscreen: integrity.Fullscreen, BlockPaste: integrity.BlockPaste, Webcam: integrity.Webcam,
 			WebcamEvery: integrity.WebcamEvery, PhotoID: integrity.PhotoID,

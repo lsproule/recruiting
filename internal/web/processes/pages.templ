@@ -1,0 +1,149 @@
+package processes
+
+import (
+	"recruiting/internal/domain"
+	"recruiting/internal/service"
+	"recruiting/internal/web/layout"
+	"recruiting/internal/web/stages"
+)
+
+// listPage is the org's library: every process as a card, the built-in
+// ones to copy from, and a form for a blank one.
+templ listPage(page layout.Page, v listView) {
+	@layout.Base(page) {
+		<div class="page-head">
+			<div>
+				<p class="page-kicker">Hiring processes</p>
+				<h1>How this org hires</h1>
+				<p class="muted">A process is the pipeline a job starts from. Jobs copy it when they are created and keep their own copy, so a process can change without moving anyone.</p>
+			</div>
+		</div>
+		<div class="process-grid">
+			for _, p := range v.Processes {
+				@processCard(p, v.CanEdit, page.CSRF)
+			}
+		</div>
+		if v.CanEdit {
+			<h2 class="section-title">Start another</h2>
+			<div class="process-grid process-library">
+				for _, spec := range v.Library {
+					@libraryCard(spec, page.CSRF)
+				}
+				<form class="panel process-card process-card-blank" method="post" action={ templ.SafeURL(Prefix) }>
+					@layout.CSRFField(page.CSRF)
+					<span class="card-kicker">From scratch</span>
+					<label>Name <input type="text" name="name" value={ v.Draft.Name } placeholder="Contract hire" required/></label>
+					<label>What it is for <input type="text" name="description" value={ v.Draft.Description } placeholder="Short engagements, no assessment"/></label>
+					<p class="muted">Starts with an Applied stage and the two closing stages; add the rest in the editor.</p>
+					<button type="submit" class="btn btn-primary">Create process</button>
+				</form>
+			</div>
+		}
+	}
+}
+
+// processCard is one of the org's processes: its chain of stages and what
+// can be done to it.
+templ processCard(p service.Process, canEdit bool, csrf string) {
+	<article class={ "panel", "process-card", templ.KV("process-default", p.IsDefault) }>
+		<div class="process-card-head">
+			<div>
+				<h2 class="process-name"><a href={ templ.SafeURL(Path(p.ID)) }>{ p.Name }</a></h2>
+				if p.Description != "" {
+					<p class="muted process-desc">{ p.Description }</p>
+				}
+			</div>
+			if p.IsDefault {
+				<span class="tag tag-accent">Default</span>
+			}
+		</div>
+		@chain(p.Stages)
+		<div class="process-card-foot">
+			<span class="muted">{ jobsLabel(p.Jobs) } &middot; { itoa(len(p.Stages)) } stages</span>
+			if canEdit {
+				<div class="row-actions">
+					<a class="btn btn-secondary" href={ templ.SafeURL(Path(p.ID)) }>Edit</a>
+					if !p.IsDefault {
+						<form method="post" action={ templ.SafeURL(Path(p.ID) + "/default") }>
+							@layout.CSRFField(csrf)
+							<button type="submit" class="btn btn-ghost">Make default</button>
+						</form>
+					}
+				</div>
+			}
+		</div>
+	</article>
+}
+
+// libraryCard is a built-in process, one click from becoming the org's own.
+templ libraryCard(spec domain.ProcessSpec, csrf string) {
+	<form class="panel process-card process-card-library" method="post" action={ templ.SafeURL(Prefix) }>
+		@layout.CSRFField(csrf)
+		<input type="hidden" name="library_key" value={ spec.Key }/>
+		<span class="card-kicker">Built in</span>
+		<h2 class="process-name">{ spec.Name }</h2>
+		<p class="muted process-desc">{ spec.Description }</p>
+		@chain(spec.PipelineStages())
+		<div class="process-card-foot">
+			<button type="submit" class="btn btn-secondary">Copy into this org</button>
+		</div>
+	</form>
+}
+
+// chain draws the stages as a row of chips, the way the board will read.
+templ chain(list []domain.Stage) {
+	<ol class="process-chain">
+		for _, s := range list {
+			<li class={ "process-step", "process-step-" + string(s.Kind) }>
+				<span class="process-step-name">{ s.Name }</span>
+				if note := stages.Summary(s); note != "" {
+					<span class="process-step-note">{ note }</span>
+				}
+			</li>
+		}
+	</ol>
+}
+
+// processPage is one process's editor.
+templ processPage(page layout.Page, p service.Process, editor stages.Editor, canEdit bool) {
+	@layout.Base(page) {
+		<div class="page-head">
+			<div>
+				<p class="page-kicker"><a href={ templ.SafeURL(Prefix) }>Hiring processes</a></p>
+				<h1>{ p.Name }</h1>
+				<p class="muted">
+					{ jobsLabel(p.Jobs) }
+					if p.IsDefault {
+						&middot; the default for new jobs
+					}
+					if p.LibraryKey != "" {
+						&middot; copied from the built-in { libraryName(p.LibraryKey) }
+					}
+				</p>
+			</div>
+			if canEdit {
+				<div class="page-actions">
+					if !p.IsDefault {
+						<form method="post" action={ templ.SafeURL(Path(p.ID) + "/default") }>
+							@layout.CSRFField(page.CSRF)
+							<button type="submit" class="btn btn-secondary">Make default</button>
+						</form>
+						<form method="post" action={ templ.SafeURL(Path(p.ID) + "/delete") }>
+							@layout.CSRFField(page.CSRF)
+							<button type="submit" class="btn btn-ghost" onclick="return confirm('Delete this process? Jobs built from it keep their stages.')">Delete</button>
+						</form>
+					}
+				</div>
+			}
+		</div>
+		if canEdit {
+			<form class="process-meta" method="post" action={ templ.SafeURL(Path(p.ID)) }>
+				@layout.CSRFField(page.CSRF)
+				<label>Name <input type="text" name="name" value={ p.Name } required/></label>
+				<label>What it is for <input type="text" name="description" value={ p.Description }/></label>
+				<button type="submit" class="btn btn-secondary">Save</button>
+			</form>
+		}
+		@stages.View(editor)
+	}
+}

@@ -20,7 +20,10 @@ alter table pipeline_template_stage
     add column interview_format text not null default 'call' check (interview_format in ('call', 'video')),
     add column duration_minutes integer,
     add column round_seconds integer,
-    add column break_seconds integer;
+    add column break_seconds integer,
+    -- Which outcome a terminal template stage closes with; rows seeded before
+    -- this column read it off their name, as jobs copied from them did.
+    add column terminal_status text check (terminal_status in ('hired', 'rejected'));
 -- Reordering rewrites every position in one transaction, so the key has to
 -- tolerate the intermediate collisions the way the job stage key does.
 alter table pipeline_template_stage drop constraint pipeline_template_stage_template_id_position_key;
@@ -165,7 +168,8 @@ alter table pipeline_template_stage
     drop column if exists interview_format,
     drop column if exists duration_minutes,
     drop column if exists round_seconds,
-    drop column if exists break_seconds;
+    drop column if exists break_seconds,
+    drop column if exists terminal_status;
 delete from pipeline_template_stage where kind = 'sprint';
 alter table pipeline_template_stage drop constraint pipeline_template_stage_kind_check;
 alter table pipeline_template_stage add constraint pipeline_template_stage_kind_check

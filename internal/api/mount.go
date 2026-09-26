@@ -46,6 +46,9 @@ type Deps struct {
 	Portal       *service.ClientPortalService
 	Shortlists   *service.ShortlistService
 	APITokens    *service.APITokenService
+	Processes    *service.ProcessService
+	Sprints      *service.SprintService
+	Rooms        *service.RoomService
 
 	// Resolve replaces the session-or-bearer resolution for every operation
 	// but the candidate's attempt routes and the booking link.
@@ -159,6 +162,9 @@ func mountAll(a huma.API, d Deps) map[string]guarded {
 	m.mountShortlists()
 	m.mountPortal()
 	m.mountAPITokens()
+	m.mountProcesses()
+	m.mountSprints()
+	m.mountRooms()
 
 	MountAttempts(a, AttemptsDeps{Attempts: d.Attempts, Resolve: d.AttemptResolve})
 	MountReplay(a, ReplayDeps{Reviews: d.Reviews, Resolve: d.resolve()})

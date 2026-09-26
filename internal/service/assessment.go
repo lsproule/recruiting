@@ -42,6 +42,24 @@ const (
 // IntegritySettings is what the session runs under: the measures the
 // candidate is told about before they start. It is stored as the
 // assessment's integrity object and boots the candidate island.
+// Assessment formats: a timed sitting, or a take-home the candidate may
+// leave and return to over days.
+const (
+	AssessmentTimed    = "timed"
+	AssessmentTakeHome = "take_home"
+)
+
+// AssessmentFormats is every format, in the order the form offers them.
+var AssessmentFormats = []string{AssessmentTimed, AssessmentTakeHome}
+
+// Take-home bounds: three days by default, a month at most; a timed sitting
+// stays within a day.
+const (
+	DefaultTakeHomeMinutes = 3 * 24 * 60
+	MaxTakeHomeMinutes     = 30 * 24 * 60
+	MaxTimedMinutes        = 24 * 60
+)
+
 type IntegritySettings struct {
 	Fullscreen  bool `json:"fullscreen"`
 	BlockPaste  bool `json:"block_paste"`
@@ -57,6 +75,7 @@ type Assessment struct {
 	ID               uuid.UUID
 	OrgID            uuid.UUID
 	Name             string
+	Format           string
 	DurationMinutes  int
 	LanguageOverride string
 	InviteWindowDays int
@@ -71,6 +90,7 @@ type Assessment struct {
 // AssessmentInput is what the recruiter's form posts.
 type AssessmentInput struct {
 	Name             string
+	Format           string
 	DurationMinutes  int
 	LanguageOverride string
 	InviteWindowDays int
@@ -92,8 +112,27 @@ func (in AssessmentInput) clean() (AssessmentInput, error) {
 	if in.Name == "" {
 		problems = append(problems, "name is required")
 	}
-	if in.DurationMinutes < 1 || in.DurationMinutes > 24*60 {
-		problems = append(problems, "duration must be between 1 minute and 24 hours")
+	in.Format = strings.TrimSpace(in.Format)
+	if in.Format == "" {
+		in.Format = AssessmentTimed
+	}
+	switch in.Format {
+	case AssessmentTimed:
+		if in.DurationMinutes < 1 || in.DurationMinutes > MaxTimedMinutes {
+			problems = append(problems, "duration must be between 1 minute and 24 hours")
+		}
+	case AssessmentTakeHome:
+		if in.DurationMinutes == 0 {
+			in.DurationMinutes = DefaultTakeHomeMinutes
+		}
+		if in.DurationMinutes < 60 || in.DurationMinutes > MaxTakeHomeMinutes {
+			problems = append(problems, "a take-home window must be between an hour and 30 days")
+		}
+		// A take-home is done at the kitchen table over days; proctoring
+		// it would record nothing meaningful.
+		in.Integrity = IntegritySettings{}
+	default:
+		problems = append(problems, "unknown format "+in.Format)
 	}
 	if in.InviteWindowDays < 1 {
 		problems = append(problems, "invite window must be at least 1 day")
@@ -277,7 +316,7 @@ func (s *AssessmentService) Create(ctx context.Context, p Principal, in Assessme
 		row, err := tx.Q.CreateAssessment(ctx, db.CreateAssessmentParams{
 			OrgID: p.OrgID, Name: in.Name, DurationMinutes: int32(in.DurationMinutes),
 			LanguageOverride: nullText(in.LanguageOverride), InviteWindowDays: int32(in.InviteWindowDays),
-			AllowedLanguages: nonNil(in.AllowedLanguages), Integrity: integrity,
+			AllowedLanguages: nonNil(in.AllowedLanguages), Integrity: integrity, Format: in.Format,
 		})
 		if err != nil {
 			return err
@@ -312,7 +351,7 @@ func (s *AssessmentService) Update(ctx context.Context, p Principal, id uuid.UUI
 		if _, err := tx.Q.UpdateAssessment(ctx, db.UpdateAssessmentParams{
 			ID: id, OrgID: p.OrgID, Name: in.Name, DurationMinutes: int32(in.DurationMinutes),
 			LanguageOverride: nullText(in.LanguageOverride), InviteWindowDays: int32(in.InviteWindowDays),
-			AllowedLanguages: nonNil(in.AllowedLanguages), Integrity: integrity,
+			AllowedLanguages: nonNil(in.AllowedLanguages), Integrity: integrity, Format: in.Format,
 		}); err != nil {
 			return err
 		}
@@ -470,7 +509,7 @@ func loadAssessment(ctx context.Context, tx *store.Tx, id uuid.UUID) (Assessment
 
 func toAssessment(r db.Assessment) Assessment {
 	out := Assessment{
-		ID: r.ID, OrgID: r.OrgID, Name: r.Name, DurationMinutes: int(r.DurationMinutes),
+		ID: r.ID, OrgID: r.OrgID, Name: r.Name, Format: r.Format, DurationMinutes: int(r.DurationMinutes),
 		LanguageOverride: text(r.LanguageOverride), InviteWindowDays: int(r.InviteWindowDays),
 		AllowedLanguages: r.AllowedLanguages,
 	}

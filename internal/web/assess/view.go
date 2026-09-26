@@ -1,6 +1,7 @@
 package assess
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -100,3 +101,19 @@ func expiryLabel(i service.AttemptInvite) string {
 }
 
 func day(t time.Time) string { return t.UTC().Format("2 Jan 2006") }
+
+// takeHomeWindow reads a take-home's window in days and hours.
+func takeHomeWindow(minutes int) string {
+	days, hours := minutes/(24*60), (minutes%(24*60))/60
+	switch {
+	case days > 0 && hours > 0:
+		return fmt.Sprintf("%d days and %d hours", days, hours)
+	case days == 1:
+		return "1 day"
+	case days > 0:
+		return fmt.Sprintf("%d days", days)
+	case hours == 1:
+		return "1 hour"
+	}
+	return fmt.Sprintf("%d hours", hours)
+}

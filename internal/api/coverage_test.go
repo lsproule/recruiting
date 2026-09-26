@@ -101,6 +101,19 @@ var specResources = []resource{
 		Why:   "the client portal is read-only",
 	},
 	{
+		Name: "processes", List: "list-processes", Get: "get-process", Create: "create-process",
+		Extra: []string{"update-process", "delete-process", "set-default-process", "list-process-library",
+			"create-process-stage", "update-process-stage", "delete-process-stage", "reorder-process-stages"},
+	},
+	{
+		Name: "sprints", List: "list-sprints", Get: "get-sprint", Create: "create-sprint",
+		Extra: []string{"update-sprint", "schedule-sprint", "start-sprint", "cancel-sprint", "rate-sprint-pairing", "get-sprint-summary"},
+	},
+	{
+		Name: "rooms", Get: "get-room-code",
+		Why: "a room is joined from a page with a browser session; the API only reads what its editor holds",
+	},
+	{
 		Name: "api-tokens", List: "list-api-tokens", Create: "create-api-token",
 		Extra: []string{"revoke-api-token"},
 		Why:   "a token's secret is shown once at creation and never read back, so there is no member read",

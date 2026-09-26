@@ -19,6 +19,7 @@ import (
 	"recruiting/internal/web/auth"
 	"recruiting/internal/web/layout"
 	"recruiting/internal/web/middleware"
+	"recruiting/internal/web/room"
 )
 
 // Prefix is where booking links land; the token follows it.
@@ -28,6 +29,9 @@ const Prefix = "/book"
 type Deps struct {
 	Schedule *service.ScheduleService
 	Links    *service.MagicLinkService
+	// Room mounts the video room a booked interview opens into, under the
+	// candidate's own link. A zero Room mounts none.
+	Room room.Deps
 	// Logger records the errors behind a 500; nil disables that logging.
 	Logger *slog.Logger
 }
@@ -43,6 +47,11 @@ func Mount(r chi.Router, d Deps) {
 		r.Get("/", h.show)
 		r.Post("/", h.book)
 		r.Post("/cancel", h.cancel)
+		if d.Room.Rooms != nil {
+			r.Route("/room/{roomID}", func(r chi.Router) {
+				room.MountCandidate(r, service.RoomSlot, d.Room)
+			})
+		}
 	})
 }
 

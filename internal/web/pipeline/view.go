@@ -114,6 +114,13 @@ type candidateView struct {
 	// ID hides that button.
 	Advance domain.Stage
 	Reject  domain.Stage
+	// Slot is the booked interview, RoomCode what was written in its room,
+	// and SprintRatings what interviewers filed in sprints; each nil or
+	// empty when there is none.
+	Slot          *service.InterviewRow
+	RoomCode      *service.RoomCode
+	SprintRatings []service.ApplicationSprintRating
+	Now           time.Time
 }
 
 // AssessmentSent reports whether an invite is already in flight, which is
@@ -217,3 +224,17 @@ func at(t time.Time) string {
 
 // num renders a plain number without trailing zeroes.
 func num(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
+
+func recommendationLabel(v string) string {
+	switch v {
+	case service.OverallStrongYes:
+		return "Strong yes"
+	case service.OverallYes:
+		return "Yes"
+	case service.OverallNo:
+		return "No"
+	case service.OverallStrongNo:
+		return "Strong no"
+	}
+	return v
+}

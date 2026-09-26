@@ -1,0 +1,116 @@
+package interviews
+
+import (
+	"recruiting/internal/service"
+	"recruiting/internal/web/layout"
+	"recruiting/internal/web/room"
+	"recruiting/internal/web/scorecards"
+	"recruiting/internal/web/sprints"
+)
+
+// listPage is the interviewer's day: what is on now, what is next, and the
+// way into each.
+templ listPage(page layout.Page, v listView) {
+	@layout.Base(page) {
+		<div class="page-head">
+			<div>
+				<p class="page-kicker">Interviews</p>
+				if v.Everyone {
+					<h1>Every interview on the calendar</h1>
+					<p class="muted">Booked slots across the org and the sprints you are part of. Video rooms open ten minutes before the start.</p>
+				} else {
+					<h1>Your interviews</h1>
+					<p class="muted">Booked slots with you as the interviewer, and the sprints you are in. Video rooms open ten minutes before the start.</p>
+				}
+			</div>
+			<div class="page-actions">
+				<a class="btn btn-secondary" href="/app/availability">Availability</a>
+				<a class="btn btn-secondary" href="/app/scorecards">Scorecards</a>
+			</div>
+		</div>
+		if len(v.Sprints) > 0 {
+			<h2 class="section-title">Screening sprints</h2>
+			<ul class="interview-list">
+				for _, s := range v.Sprints {
+					@sprintRow(s, v)
+				}
+			</ul>
+		}
+		<h2 class="section-title">Today</h2>
+		@slotList(v.today(), v, "Nothing booked for the rest of today.")
+		<h2 class="section-title">Coming up</h2>
+		@slotList(v.later(), v, "Nothing booked beyond today.")
+	}
+}
+
+templ slotList(rows []service.InterviewRow, v listView, empty string) {
+	if len(rows) == 0 {
+		<p class="muted">{ empty }</p>
+	} else {
+		<ul class="interview-list">
+			for _, s := range rows {
+				@slotRow(s, v)
+			}
+		</ul>
+	}
+}
+
+// slotRow is one booked interview: when, with whom, and the two things to
+// do about it.
+templ slotRow(s service.InterviewRow, v listView) {
+	<li class={ "interview-row", templ.KV("interview-live", s.RoomOpen(v.Now)) }>
+		<div class="interview-when">
+			<span class="interview-day">{ day(s.Start) }</span>
+			<span class="interview-time num">{ clock(s.Start) }–{ clock(s.End) }</span>
+		</div>
+		<div class="interview-who">
+			<a href={ templ.SafeURL("/app/applications/" + s.ApplicationID.String()) }>{ s.CandidateName }</a>
+			<span class="row-note">{ s.JobTitle } &middot; { s.StageName }</span>
+		</div>
+		<div class="interview-meta">
+			<span class={ "tag", formatTag(s) }>{ formatLabel(s) }</span>
+			if v.Everyone && s.VetterID != v.UserID {
+				<span class="row-note">with { s.VetterName }</span>
+			}
+			if s.Status != service.SlotBooked {
+				<span class="row-note">{ s.Status }</span>
+			}
+		</div>
+		<div class="row-actions">
+			if s.Video {
+				if s.RoomOpen(v.Now) {
+					<a class="btn btn-primary" href={ templ.SafeURL(room.SlotPath(s.ID)) }>Join room</a>
+				} else if s.Start.After(v.Now) {
+					<span class="muted">opens { clock(s.RoomOpensAt()) }</span>
+				}
+			}
+			if s.VetterID == v.UserID || s.HasScorecard {
+				<a class="btn btn-secondary" href={ templ.SafeURL(scorecards.FormPath(s.ApplicationID, s.StageID)) }>
+					if s.HasScorecard {
+						Scorecard filed
+					} else {
+						Scorecard
+					}
+				</a>
+			}
+		</div>
+	</li>
+}
+
+templ sprintRow(s service.SprintListItem, v listView) {
+	{{ state := s.Clock().At(v.Now) }}
+	<li class={ "interview-row", templ.KV("interview-live", string(state.Phase) == "round" || string(state.Phase) == "break") }>
+		<div class="interview-when">
+			<span class="interview-day">{ day(s.StartsAt) }</span>
+			<span class="interview-time num">{ clock(s.StartsAt) }–{ clock(s.Clock().EndsAt()) }</span>
+		</div>
+		<div class="interview-who">
+			<a href={ templ.SafeURL(sprints.Path(s.ID)) }>{ s.Name }</a>
+			<span class="row-note">{ s.JobTitle } &middot; { itoa(s.Candidates) } candidates &middot; { itoa(s.Rounds()) } rounds of { sprints.RoundLabel(s.RoundSeconds) }</span>
+		</div>
+		<div class="interview-meta"><span class="tag tag-accent">Sprint</span></div>
+		<div class="row-actions">
+			<a class="btn btn-primary" href={ templ.SafeURL(sprints.ConsolePath(s.ID)) }>Open console</a>
+		</div>
+	</li>
+}

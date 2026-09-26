@@ -13,6 +13,8 @@ import (
 
 type Querier interface {
 	AddOrgUserRole(ctx context.Context, arg AddOrgUserRoleParams) error
+	AddSprintCandidate(ctx context.Context, arg AddSprintCandidateParams) (SprintCandidate, error)
+	AddSprintInterviewer(ctx context.Context, arg AddSprintInterviewerParams) error
 	AppendAttemptEvent(ctx context.Context, arg AppendAttemptEventParams) error
 	// The candidate's best assessment score per problem tag, across every
 	// application they have. Derived, so re-running an upsert cannot drift.
@@ -27,6 +29,7 @@ type Querier interface {
 	// deleting the assessment it previewed.
 	CountAttemptsForAssessment(ctx context.Context, assessmentID uuid.UUID) (int64, error)
 	CountCandidateApplications(ctx context.Context, arg CountCandidateApplicationsParams) (int64, error)
+	CountJobsByTemplate(ctx context.Context, orgID uuid.UUID) ([]CountJobsByTemplateRow, error)
 	// The sidebar's non-queue counts, in one round trip.
 	CountNavSubjects(ctx context.Context, orgID uuid.UUID) (CountNavSubjectsRow, error)
 	CountPendingSubmissions(ctx context.Context, arg CountPendingSubmissionsParams) (int64, error)
@@ -58,6 +61,7 @@ type Querier interface {
 	CreatePreviewAttempt(ctx context.Context, arg CreatePreviewAttemptParams) (Attempt, error)
 	CreateProblem(ctx context.Context, arg CreateProblemParams) (Problem, error)
 	CreateProblemReference(ctx context.Context, arg CreateProblemReferenceParams) (ProblemReference, error)
+	CreateProcessStage(ctx context.Context, arg CreateProcessStageParams) (PipelineTemplateStage, error)
 	CreateResume(ctx context.Context, arg CreateResumeParams) (Resume, error)
 	CreateScorecardRubric(ctx context.Context, arg CreateScorecardRubricParams) (ScorecardRubric, error)
 	CreateSession(ctx context.Context, arg CreateSessionParams) (Session, error)
@@ -67,6 +71,8 @@ type Querier interface {
 	// its picks are limited to sent packets of their company by RLS.
 	CreateShortlistPacket(ctx context.Context, arg CreateShortlistPacketParams) (ShortlistPacket, error)
 	CreateShortlistPick(ctx context.Context, arg CreateShortlistPickParams) error
+	CreateSprint(ctx context.Context, arg CreateSprintParams) (Sprint, error)
+	CreateSprintPairing(ctx context.Context, arg CreateSprintPairingParams) (SprintPairing, error)
 	CreateStage(ctx context.Context, arg CreateStageParams) (Stage, error)
 	CreateSubmission(ctx context.Context, arg CreateSubmissionParams) (Submission, error)
 	CreateTestCase(ctx context.Context, arg CreateTestCaseParams) (TestCase, error)
@@ -81,13 +87,18 @@ type Querier interface {
 	DeleteIntegritySignals(ctx context.Context, attemptID uuid.UUID) error
 	DeleteMagicLinksForSubject(ctx context.Context, arg DeleteMagicLinksForSubjectParams) error
 	DeleteOrgUserRoles(ctx context.Context, orgUserID uuid.UUID) error
+	DeletePipelineTemplate(ctx context.Context, id uuid.UUID) (int64, error)
 	DeleteProblem(ctx context.Context, arg DeleteProblemParams) (int64, error)
 	DeleteProblemReferences(ctx context.Context, problemID uuid.UUID) error
+	DeleteProcessStage(ctx context.Context, id uuid.UUID) (int64, error)
 	DeleteSession(ctx context.Context, tokenHash string) error
 	DeleteSessionByID(ctx context.Context, id uuid.UUID) error
 	DeleteSessionsForClientUser(ctx context.Context, clientUserID uuid.NullUUID) error
 	DeleteSessionsForOrgUser(ctx context.Context, orgUserID uuid.NullUUID) error
 	DeleteShortlistPicks(ctx context.Context, packetID uuid.UUID) error
+	DeleteSprintCandidates(ctx context.Context, sprintID uuid.UUID) error
+	DeleteSprintInterviewers(ctx context.Context, sprintID uuid.UUID) error
+	DeleteSprintPairings(ctx context.Context, sprintID uuid.UUID) error
 	DeleteStage(ctx context.Context, id uuid.UUID) (int64, error)
 	DeleteTestCases(ctx context.Context, problemID uuid.UUID) error
 	// A revoked invite the candidate never opened: there is no work to close
@@ -125,7 +136,10 @@ type Querier interface {
 	GetDefaultPipelineTemplate(ctx context.Context, orgID uuid.UUID) (PipelineTemplate, error)
 	GetEmailLogByJob(ctx context.Context, jobID *int64) (EmailLog, error)
 	GetIntakeDraft(ctx context.Context, id uuid.UUID) (IntakeDraft, error)
+	GetInterviewRoom(ctx context.Context, arg GetInterviewRoomParams) (InterviewRoom, error)
 	GetInterviewSlot(ctx context.Context, id uuid.UUID) (InterviewSlot, error)
+	// A booked interview with everyone and everything a room needs to know.
+	GetInterviewSlotRoom(ctx context.Context, id uuid.UUID) (GetInterviewSlotRoomRow, error)
 	GetJob(ctx context.Context, id uuid.UUID) (Job, error)
 	GetJobBySlug(ctx context.Context, arg GetJobBySlugParams) (Job, error)
 	// Score and verdict only; the reviewer's notes stay internal.
@@ -153,12 +167,18 @@ type Querier interface {
 	GetShortlistPacket(ctx context.Context, id uuid.UUID) (ShortlistPacket, error)
 	GetShortlistPacketForUpdate(ctx context.Context, id uuid.UUID) (ShortlistPacket, error)
 	GetShortlistPick(ctx context.Context, arg GetShortlistPickParams) (GetShortlistPickRow, error)
+	GetSprint(ctx context.Context, id uuid.UUID) (Sprint, error)
+	GetSprintCandidate(ctx context.Context, id uuid.UUID) (GetSprintCandidateRow, error)
+	GetSprintForUpdate(ctx context.Context, id uuid.UUID) (Sprint, error)
+	GetSprintPairing(ctx context.Context, id uuid.UUID) (SprintPairing, error)
 	GetStage(ctx context.Context, id uuid.UUID) (Stage, error)
 	GetSubmission(ctx context.Context, arg GetSubmissionParams) (Submission, error)
 	GetSubmissionForUpdate(ctx context.Context, id uuid.UUID) (Submission, error)
 	GetTalentPoolEntry(ctx context.Context, id uuid.UUID) (GetTalentPoolEntryRow, error)
 	GetTalentPoolEntryForCandidate(ctx context.Context, arg GetTalentPoolEntryForCandidateParams) (TalentPoolEntry, error)
 	HasScorecardForStage(ctx context.Context, arg HasScorecardForStageParams) (bool, error)
+	// Whether any interviewer rated the application in a sprint of this stage.
+	HasSprintRatingForStage(ctx context.Context, arg HasSprintRatingForStageParams) (bool, error)
 	HasVerdictForStage(ctx context.Context, arg HasVerdictForStageParams) (bool, error)
 	LatestScorecardForCandidate(ctx context.Context, candidateID uuid.UUID) (LatestScorecardForCandidateRow, error)
 	ListAPITokens(ctx context.Context, orgID uuid.UUID) ([]ListAPITokensRow, error)
@@ -211,6 +231,9 @@ type Querier interface {
 	ListEditedProblems(ctx context.Context, attemptID uuid.UUID) ([]uuid.NullUUID, error)
 	ListIntegritySignals(ctx context.Context, attemptID uuid.UUID) ([]IntegritySignal, error)
 	ListInterviewSlots(ctx context.Context, arg ListInterviewSlotsParams) ([]InterviewSlot, error)
+	// Every booked or finished interview from a moment on, soonest first, for
+	// the interviews screen. A vetter's own list filters by vetter_id.
+	ListInterviewSlotsForOrg(ctx context.Context, arg ListInterviewSlotsForOrgParams) ([]ListInterviewSlotsForOrgRow, error)
 	// One row per application on a job, with what a board card or list row shows.
 	ListJobApplicationCards(ctx context.Context, jobID uuid.UUID) ([]ListJobApplicationCardsRow, error)
 	ListJobCandidateIDs(ctx context.Context, jobID uuid.UUID) ([]uuid.UUID, error)
@@ -247,6 +270,9 @@ type Querier interface {
 	// A packet was built and never sent; the client is waiting on a decision
 	// that has already been made.
 	ListQueueShortlistDrafts(ctx context.Context) ([]ListQueueShortlistDraftsRow, error)
+	// Conversations that ended more than five minutes ago and were never rated,
+	// on sprints that still stand.
+	ListQueueSprintRatingsMissing(ctx context.Context) ([]ListQueueSprintRatingsMissingRow, error)
 	ListReleasedApplications(ctx context.Context, jobID uuid.UUID) ([]ListReleasedApplicationsRow, error)
 	ListResumesByCandidate(ctx context.Context, candidateID uuid.UUID) ([]Resume, error)
 	ListScorecardsForApplication(ctx context.Context, applicationID uuid.UUID) ([]ListScorecardsForApplicationRow, error)
@@ -263,6 +289,16 @@ type Querier interface {
 	ListShortlistPool(ctx context.Context, jobID uuid.UUID) ([]ListShortlistPoolRow, error)
 	ListSnapshotOrgs(ctx context.Context, before pgtype.Timestamptz) ([]uuid.UUID, error)
 	ListSnapshotsTakenBefore(ctx context.Context, takenAt pgtype.Timestamptz) ([]AttemptSnapshot, error)
+	ListSprintCandidates(ctx context.Context, sprintID uuid.UUID) ([]ListSprintCandidatesRow, error)
+	ListSprintInterviewers(ctx context.Context, sprintID uuid.UUID) ([]ListSprintInterviewersRow, error)
+	// Every conversation of a sprint with both names and the rating if filed.
+	ListSprintPairings(ctx context.Context, sprintID uuid.UUID) ([]ListSprintPairingsRow, error)
+	ListSprintRatingsForApplication(ctx context.Context, applicationID uuid.UUID) ([]ListSprintRatingsForApplicationRow, error)
+	// Every sprint of the org, newest start first, with where it belongs.
+	ListSprints(ctx context.Context, orgID uuid.UUID) ([]ListSprintsRow, error)
+	// The sprints one user interviews in, soonest first.
+	ListSprintsForInterviewer(ctx context.Context, userID uuid.UUID) ([]ListSprintsForInterviewerRow, error)
+	ListSprintsForStage(ctx context.Context, stageID uuid.UUID) ([]Sprint, error)
 	ListStages(ctx context.Context, jobID uuid.UUID) ([]Stage, error)
 	ListStalePreviewAttempts(ctx context.Context, createdAt pgtype.Timestamptz) ([]Attempt, error)
 	ListStalePreviewOrgs(ctx context.Context, before pgtype.Timestamptz) ([]uuid.UUID, error)
@@ -306,6 +342,7 @@ type Querier interface {
 	RevokeAPIToken(ctx context.Context, id uuid.UUID) (int64, error)
 	RevokeBookLinks(ctx context.Context, subjectID uuid.UUID) error
 	RevokeMagicLink(ctx context.Context, id uuid.UUID) error
+	RevokeSprintLinks(ctx context.Context, sprintID uuid.UUID) error
 	SaveIntakeDraft(ctx context.Context, arg SaveIntakeDraftParams) (IntakeDraft, error)
 	// Only a closed attempt is scored, and only once: concurrent deliveries of
 	// attempt.finalize race here and the losers match no row.
@@ -327,24 +364,34 @@ type Querier interface {
 	// Only the slot's own vetter records how it went.
 	SetInterviewSlotOutcome(ctx context.Context, arg SetInterviewSlotOutcomeParams) (InterviewSlot, error)
 	SetInterviewSlotRemindJobs(ctx context.Context, arg SetInterviewSlotRemindJobsParams) error
+	SetJobTemplate(ctx context.Context, arg SetJobTemplateParams) error
 	SetOrgUserTimezone(ctx context.Context, arg SetOrgUserTimezoneParams) error
+	SetPipelineTemplateDefault(ctx context.Context, id uuid.UUID) error
+	SetProcessStagePosition(ctx context.Context, arg SetProcessStagePositionParams) error
+	SetSprintStartsAt(ctx context.Context, arg SetSprintStartsAtParams) (Sprint, error)
+	SetSprintStatus(ctx context.Context, arg SetSprintStatusParams) (Sprint, error)
 	SetStageAssessment(ctx context.Context, arg SetStageAssessmentParams) (int64, error)
 	SetStagePosition(ctx context.Context, arg SetStagePositionParams) error
 	SetStageRubric(ctx context.Context, arg SetStageRubricParams) error
 	StartAttempt(ctx context.Context, arg StartAttemptParams) (Attempt, error)
 	StartSubmission(ctx context.Context, id uuid.UUID) error
+	TouchPipelineTemplate(ctx context.Context, id uuid.UUID) error
 	TouchSession(ctx context.Context, arg TouchSessionParams) error
+	UnsetDefaultPipelineTemplates(ctx context.Context, orgID uuid.UUID) error
 	UpdateAssessment(ctx context.Context, arg UpdateAssessmentParams) (Assessment, error)
 	UpdateEmailLogStatus(ctx context.Context, arg UpdateEmailLogStatusParams) error
 	UpdateInterviewSlotStatus(ctx context.Context, arg UpdateInterviewSlotStatusParams) (InterviewSlot, error)
 	UpdateJob(ctx context.Context, arg UpdateJobParams) (Job, error)
+	UpdatePipelineTemplate(ctx context.Context, arg UpdatePipelineTemplateParams) (PipelineTemplate, error)
 	UpdateProblem(ctx context.Context, arg UpdateProblemParams) (Problem, error)
+	UpdateProcessStage(ctx context.Context, arg UpdateProcessStageParams) (PipelineTemplateStage, error)
 	// The vetter is part of the key so a card can only be rewritten by the
 	// interviewer who filed it, whatever the caller claims.
 	UpdateScorecardByAuthor(ctx context.Context, arg UpdateScorecardByAuthorParams) (Scorecard, error)
 	UpdateScorecardRubric(ctx context.Context, arg UpdateScorecardRubricParams) (ScorecardRubric, error)
 	// Only a draft is writable; a sent packet is what the client already read.
 	UpdateShortlistPacketNote(ctx context.Context, arg UpdateShortlistPacketNoteParams) (ShortlistPacket, error)
+	UpdateSprintDraft(ctx context.Context, arg UpdateSprintDraftParams) (Sprint, error)
 	UpdateStage(ctx context.Context, arg UpdateStageParams) (Stage, error)
 	UpdateTalentPoolEntry(ctx context.Context, arg UpdateTalentPoolEntryParams) (TalentPoolEntry, error)
 	// The beat is the session's own counter, so a frame uploaded twice replaces
@@ -358,6 +405,7 @@ type Querier interface {
 	UpsertCandidateFromApply(ctx context.Context, arg UpsertCandidateFromApplyParams) (UpsertCandidateFromApplyRow, error)
 	UpsertClientUserCredential(ctx context.Context, arg UpsertClientUserCredentialParams) error
 	UpsertEmailLogForJob(ctx context.Context, arg UpsertEmailLogForJobParams) (EmailLog, error)
+	UpsertInterviewRoom(ctx context.Context, arg UpsertInterviewRoomParams) (InterviewRoom, error)
 	UpsertOrgSetting(ctx context.Context, arg UpsertOrgSettingParams) error
 	UpsertOrgUserCredential(ctx context.Context, arg UpsertOrgUserCredentialParams) error
 	UpsertQueueSnooze(ctx context.Context, arg UpsertQueueSnoozeParams) error
@@ -369,6 +417,7 @@ type Querier interface {
 	// conflict target already carries, and the snapshot of what the interviewer
 	// was asked stays as it was filed.
 	UpsertScorecard(ctx context.Context, arg UpsertScorecardParams) (Scorecard, error)
+	UpsertSprintRating(ctx context.Context, arg UpsertSprintRatingParams) (SprintRating, error)
 	// One entry per candidate: a second pool-worthy event updates the aggregate
 	// the caller merged rather than filing another entry.
 	UpsertTalentPoolEntry(ctx context.Context, arg UpsertTalentPoolEntryParams) (TalentPoolEntry, error)

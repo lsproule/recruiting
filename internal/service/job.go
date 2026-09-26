@@ -97,6 +97,32 @@ type StageInput struct {
 	// DefaultVetterID names the interview stage's default interviewer; Nil
 	// clears it. It is ignored on stages of any other kind.
 	DefaultVetterID uuid.UUID
+	// InterviewFormat and DurationMinutes are an interview stage's; zero
+	// values take the domain defaults. Ignored on other kinds.
+	InterviewFormat string
+	DurationMinutes int
+	// RoundSeconds and BreakSeconds are a sprint stage's clock; zero values
+	// take the domain defaults. Ignored on other kinds.
+	RoundSeconds int
+	BreakSeconds int
+}
+
+// stage is the input as the domain reads it, normalised for its kind.
+func (in StageInput) stage() domain.Stage {
+	return domain.NormalizeStage(domain.Stage{
+		Name: in.Name, Kind: in.Kind, Terminal: in.Terminal, Unblind: in.Unblind, DefaultVetterID: in.DefaultVetterID,
+		InterviewFormat: in.InterviewFormat, DurationMinutes: in.DurationMinutes,
+		RoundSeconds: in.RoundSeconds, BreakSeconds: in.BreakSeconds,
+	})
+}
+
+// stageInputOf is the editor's view of a stored stage.
+func stageInputOf(s domain.Stage) StageInput {
+	return StageInput{
+		Name: s.Name, Kind: s.Kind, Terminal: s.Terminal, Unblind: s.Unblind, DefaultVetterID: s.DefaultVetterID,
+		InterviewFormat: s.InterviewFormat, DurationMinutes: s.DurationMinutes,
+		RoundSeconds: s.RoundSeconds, BreakSeconds: s.BreakSeconds,
+	}
 }
 
 // JobService is the recruiter surface: jobs and their pipelines.
@@ -218,7 +244,7 @@ func (s *JobService) CreateJob(ctx context.Context, p Principal, in NewJob) (Job
 		if err != nil {
 			return err
 		}
-		if err := copyTemplateStages(ctx, tx, p.OrgID, row.ID, uuid.Nil); err != nil {
+		if _, err := copyTemplateStages(ctx, tx, p.OrgID, row.ID, uuid.Nil); err != nil {
 			return err
 		}
 		out = toJob(row, company.Name)

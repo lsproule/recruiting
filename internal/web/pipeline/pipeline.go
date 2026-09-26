@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/a-h/templ"
 	"github.com/go-chi/chi/v5"
@@ -43,6 +44,12 @@ type Deps struct {
 	Attempts   *service.AttemptService
 	Pool       *service.PoolService
 	Candidates *service.CandidateService
+	// Interviews, Rooms, and Sprints fill in the booked interview and its
+	// room, what was written in it, and the sprint ratings. Any of them nil
+	// leaves that panel off.
+	Interviews *service.InterviewService
+	Rooms      *service.RoomService
+	Sprints    *service.SprintService
 	// Logger records the errors behind a 500; the visitor only ever sees a
 	// generic message. Nil disables that logging.
 	Logger *slog.Logger
@@ -232,7 +239,35 @@ func (h *handlers) renderApplication(w http.ResponseWriter, r *http.Request, id 
 			v.Resumes = cand.Resumes
 		}
 	}
+	h.interview(r, p, &v)
 	render(w, r, status, applicationPage(h.page(r, detail.Application.CandidateName, flashes...), v, middleware.CSRFToken(r), problem))
+}
+
+// interview loads the booked interview and its room, the code written in
+// it, and the sprint ratings, each only where the service is wired.
+func (h *handlers) interview(r *http.Request, p service.Principal, v *candidateView) {
+	v.Now = time.Now()
+	if h.d.Interviews != nil {
+		if rows, err := h.d.Interviews.Upcoming(r.Context(), p); err == nil {
+			for _, row := range rows {
+				if row.ApplicationID == v.Detail.Application.ID {
+					slot := row
+					v.Slot = &slot
+					break
+				}
+			}
+		}
+	}
+	if h.d.Rooms != nil && v.Slot != nil {
+		if code, err := h.d.Rooms.Code(r.Context(), p, service.RoomKey{Kind: service.RoomSlot, ID: v.Slot.ID}); err == nil && code.Source != "" {
+			v.RoomCode = &code
+		}
+	}
+	if h.d.Sprints != nil {
+		if ratings, err := h.d.Sprints.RatingsFor(r.Context(), p, v.Detail.Application.ID); err == nil {
+			v.SprintRatings = ratings
+		}
+	}
 }
 
 // assessment loads the sitting the screen replays: the latest attempt on the

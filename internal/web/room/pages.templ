@@ -1,0 +1,72 @@
+package room
+
+import "recruiting/internal/web/layout"
+
+// roomShell is the chrome of a room: the stylesheets and the island, no
+// navigation. A call wants the whole window.
+templ roomShell(title string) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ title }</title>
+			<link rel="stylesheet" href={ layout.NocturnePath }/>
+			<link rel="stylesheet" href={ layout.AppCSSPath }/>
+			<script src={ layout.RoomPath } defer></script>
+		</head>
+		<body class="room-body">
+			{ children... }
+		</body>
+	</html>
+}
+
+// roomPage mounts the island. Everything inside #room is drawn by it from
+// the boot JSON; the header and the leave link are the page's.
+templ roomPage(v pageView) {
+	@roomShell(v.Room.Title + " · room") {
+		if !v.Embed {
+			@roomHeader(v)
+		}
+		@ConfigScript("room-config", v.Config)
+		<div id="room" class={ "room", templ.KV("room-embed", v.Embed) } data-config="room-config"></div>
+		<noscript><p class="assess-banner">The room needs JavaScript enabled.</p></noscript>
+	}
+}
+
+templ roomHeader(v pageView) {
+		<header class="room-head">
+			<div>
+				<p class="page-kicker">{ v.Room.Subtitle }</p>
+				<h1 class="room-title">{ v.Room.Title }</h1>
+			</div>
+			<div class="room-head-meta">
+				<span class="tag tag-neutral">{ v.Room.Name } &middot; { v.Room.Role }</span>
+				if v.Back != "" {
+					<a class="btn btn-secondary" href={ templ.SafeURL(v.Back) }>Leave</a>
+				}
+			</div>
+		</header>
+}
+
+// waitingPage stands where the room will be until it opens, and reloads
+// itself to find out.
+templ waitingPage(v pageView) {
+	@roomShell(v.Room.Title + " · room") {
+		<header class="room-head">
+			<div>
+				<p class="page-kicker">{ v.Room.Subtitle }</p>
+				<h1 class="room-title">{ v.Room.Title }</h1>
+			</div>
+			if v.Back != "" {
+				<a class="btn btn-secondary" href={ templ.SafeURL(v.Back) }>Back</a>
+			}
+		</header>
+		<section class="room-waiting panel">
+			<span class="card-kicker">Not open yet</span>
+			<h2>{ v.Room.ClosedMessage(v.Now) }</h2>
+			<p class="muted">This page checks again every half minute. Have your camera and microphone ready; the browser will ask for them when you join.</p>
+		</section>
+		<meta http-equiv="refresh" content="30"/>
+	}
+}

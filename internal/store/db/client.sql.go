@@ -98,7 +98,7 @@ func (q *Queries) GetReleasedApplication(ctx context.Context, id uuid.UUID) (Get
 }
 
 const listClientJobs = `-- name: ListClientJobs :many
-select j.id, j.org_id, j.client_company_id, j.title, j.description, j.skills, j.seniority, j.location, j.remote_policy, j.salary_min, j.salary_max, j.blind_mode, j.status, j.created_by, j.created_at, j.updated_at, j.slug, (select count(*) from application a where a.job_id = j.id and a.released_at is not null)::int as released_count
+select j.id, j.org_id, j.client_company_id, j.title, j.description, j.skills, j.seniority, j.location, j.remote_policy, j.salary_min, j.salary_max, j.blind_mode, j.status, j.created_by, j.created_at, j.updated_at, j.slug, j.template_id, (select count(*) from application a where a.job_id = j.id and a.released_at is not null)::int as released_count
 from job j
 where j.client_company_id = $1 and j.status <> 'draft'
 order by j.created_at desc
@@ -122,6 +122,7 @@ type ListClientJobsRow struct {
 	CreatedAt       pgtype.Timestamptz
 	UpdatedAt       pgtype.Timestamptz
 	Slug            string
+	TemplateID      uuid.NullUUID
 	ReleasedCount   int32
 }
 
@@ -153,6 +154,7 @@ func (q *Queries) ListClientJobs(ctx context.Context, clientCompanyID uuid.UUID)
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Slug,
+			&i.TemplateID,
 			&i.ReleasedCount,
 		); err != nil {
 			return nil, err

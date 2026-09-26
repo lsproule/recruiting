@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/text/unicode/norm"
 
+	"recruiting/internal/domain"
 	"recruiting/internal/store"
 	"recruiting/internal/store/db"
 )
@@ -22,27 +23,22 @@ const PasswordSetTTL = 7 * 24 * time.Hour
 // DefaultPipelineTemplateName names the pipeline every new org starts with.
 const DefaultPipelineTemplateName = "Default"
 
-// StageSpec is one stage of a pipeline template.
+// StageSpec is one stage of a pipeline template as the bootstrap seeds it.
 type StageSpec struct {
 	Name    string
 	Kind    string
 	Unblind bool
 }
 
-// DefaultPipelineStages is the stage sequence seeded for a new org; jobs are
-// created from it until the org edits its templates.
-var DefaultPipelineStages = []StageSpec{
-	{Name: "Applied", Kind: "generic"},
-	{Name: "Screened", Kind: "generic"},
-	{Name: "Phone Interview", Kind: "interview"},
-	{Name: "Assessment", Kind: "assessment"},
-	{Name: "Shortlist", Kind: "generic"},
-	{Name: "Client Review", Kind: "client_review"},
-	{Name: "Client Interview", Kind: "client_review", Unblind: true},
-	{Name: "Offer", Kind: "client_review"},
-	{Name: "Hired", Kind: "terminal"},
-	{Name: "Rejected", Kind: "terminal"},
-}
+// DefaultPipelineStages is the stage sequence a new org's default process
+// carries: the first entry of the built-in library.
+var DefaultPipelineStages = func() []StageSpec {
+	out := make([]StageSpec, 0, len(domain.ProcessLibrary[0].Stages))
+	for _, s := range domain.ProcessLibrary[0].Stages {
+		out = append(out, StageSpec{Name: s.Name, Kind: string(s.Kind), Unblind: s.Unblind})
+	}
+	return out
+}()
 
 var ErrOrgIncomplete = errors.New("service: org name and admin email are required")
 
@@ -95,20 +91,19 @@ func BootstrapOrg(ctx context.Context, tx *store.Tx, in NewOrg) (BootstrapResult
 		return BootstrapResult{}, err
 	}
 
-	tmpl, err := tx.Q.CreatePipelineTemplate(ctx, db.CreatePipelineTemplateParams{
-		OrgID: org.ID, Name: DefaultPipelineTemplateName, IsDefault: true,
-	})
-	if err != nil {
-		return BootstrapResult{}, fmt.Errorf("create pipeline template: %w", err)
-	}
-	res.TemplateID = tmpl.ID
-	for i, s := range DefaultPipelineStages {
-		_, err := tx.Q.CreatePipelineTemplateStage(ctx, db.CreatePipelineTemplateStageParams{
-			OrgID: org.ID, TemplateID: tmpl.ID, Position: int32(i + 1),
-			Name: s.Name, Kind: s.Kind, Unblind: s.Unblind,
-		})
+	// Every built-in process is seeded; the first is the default, under the
+	// name the org's jobs have always been built from.
+	for i, spec := range domain.ProcessLibrary {
+		name := spec.Name
+		if i == 0 {
+			name = DefaultPipelineTemplateName
+		}
+		tmpl, err := seedProcess(ctx, tx, org.ID, name, spec, i == 0)
 		if err != nil {
-			return BootstrapResult{}, fmt.Errorf("create template stage %q: %w", s.Name, err)
+			return BootstrapResult{}, err
+		}
+		if i == 0 {
+			res.TemplateID = tmpl
 		}
 	}
 

@@ -12,7 +12,7 @@ import (
 	"path"
 )
 
-//go:embed *.css *.js assess/*.js replay/*.js
+//go:embed *.css *.js assess/*.js replay/*.js room/*.js
 var FS embed.FS
 
 // Asset is one embedded file, with the validator computed from its bytes.

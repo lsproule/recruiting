@@ -1,14 +1,17 @@
 package pipeline
 
 import (
+	"recruiting/internal/domain"
 	"github.com/google/uuid"
 
 	"recruiting/internal/service"
 	"recruiting/internal/web/layout"
 	"recruiting/internal/web/pool"
 	"recruiting/internal/web/reviews"
+	"recruiting/internal/web/room"
 	"recruiting/internal/web/scorecards"
 	"recruiting/internal/web/shortlist"
+	"recruiting/internal/web/sprints"
 )
 
 templ boardPage(page layout.Page, board service.Board, csrf string, problem moveProblem) {
@@ -40,7 +43,12 @@ templ boardView(board service.Board, csrf string, problem moveProblem) {
 					@dragover.prevent
 					@drop.prevent={ "drop('" + col.Stage.ID.String() + "')" }
 				>
-					<h3>{ col.Stage.Name } <span class="muted">{ count(len(col.Cards)) }</span></h3>
+					<h3>
+						{ col.Stage.Name } <span class="muted">{ count(len(col.Cards)) }</span>
+						if col.Stage.Kind == domain.StageSprint {
+							<a class="column-action" href={ templ.SafeURL(sprints.NewPath(board.Job.ID, col.Stage.ID)) }>Set up sprint</a>
+						}
+					</h3>
 					for _, a := range col.Cards {
 						<article
 							class={ "board-card", templ.KV("closed", !a.Active()) }
@@ -199,6 +207,8 @@ templ applicationPage(page layout.Page, v candidateView, csrf string, problem mo
 				}
 			</div>
 			<aside class="detail-side">
+				@interviewPanel(v)
+				@sprintPanel(v)
 				@fitPanel(v)
 				@resumePanel(v)
 			</aside>
@@ -331,6 +341,71 @@ templ submissionPanels(v candidateView) {
 				</div>
 			</section>
 		</div>
+	}
+}
+
+// interviewPanel is the booked interview: when, with whom, the way into its
+// room while it is open, and what was written there afterwards.
+templ interviewPanel(v candidateView) {
+	if v.Slot != nil {
+		<section class="panel interview-panel">
+			<div class="panel-head">
+				<span class="panel-title">Interview</span>
+				<span class="muted">{ v.Slot.StageName }</span>
+			</div>
+			<div class="panel-body">
+				<p><strong>{ when(v.Slot.Start) }</strong> <span class="muted">with { v.Slot.VetterName }</span></p>
+				if v.Slot.Video {
+					if v.Slot.RoomOpen(v.Now) {
+						<a class="btn btn-primary" href={ templ.SafeURL(room.SlotPath(v.Slot.ID)) }>Join room</a>
+					} else if v.Slot.Start.After(v.Now) {
+						<p class="muted">Video room. Opens at { when(v.Slot.RoomOpensAt()) }.</p>
+					} else {
+						<p class="muted">Video room, now closed.</p>
+					}
+				} else {
+					<p class="muted">Phone call.</p>
+				}
+				if v.Slot.HasScorecard {
+					<p class="muted">Scorecard filed.</p>
+				} else {
+					<a class="btn-link" href={ templ.SafeURL(scorecards.FormPath(v.Slot.ApplicationID, v.Slot.StageID)) }>File the scorecard</a>
+				}
+			</div>
+			if v.RoomCode != nil {
+				<div class="panel-head">
+					<span class="panel-title">Written in the interview</span>
+					<span class="muted">{ v.RoomCode.Language } &middot; { when(v.RoomCode.UpdatedAt) }</span>
+				</div>
+				<pre class="code-final interview-code">{ v.RoomCode.Source }</pre>
+			}
+		</section>
+	}
+}
+
+// sprintPanel is what interviewers filed about the candidate in sprints.
+templ sprintPanel(v candidateView) {
+	if len(v.SprintRatings) > 0 {
+		<section class="panel">
+			<div class="panel-head">
+				<span class="panel-title">Sprint ratings</span>
+				<span class="muted">{ count(len(v.SprintRatings)) } filed</span>
+			</div>
+			<ul class="sprint-ratings">
+				for _, r := range v.SprintRatings {
+					<li>
+						<span class="sprint-score num">{ count(r.Score) }</span>
+						<span>
+							<span class="sprint-rating-rec">{ recommendationLabel(r.Recommendation) }</span>
+							<span class="row-note">{ r.InterviewerName } &middot; <a href={ templ.SafeURL(sprints.Path(r.SprintID)) }>{ r.SprintName }</a></span>
+							if r.Note != "" {
+								<span class="row-note">{ r.Note }</span>
+							}
+						</span>
+					</li>
+				}
+			</ul>
+		</section>
 	}
 }
 

@@ -32,6 +32,7 @@ const (
 	TemplateClientRequestInfo   = "client_request_info"
 	TemplateClientShortlist     = "client_shortlist"
 	TemplatePasswordReset       = "password_reset"
+	TemplateSprintInvite        = "sprint_invite"
 )
 
 // ErrUnknownTemplate is returned for a name no template file answers to.

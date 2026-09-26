@@ -20,7 +20,7 @@ type queueFixture struct {
 	queue *service.WorkQueueService
 	exec  func(sql string, args ...any)
 	// the subject of each rule's row
-	scoredAttempt, invitedAttempt, waitingApp, draftPacket, overdueSlot uuid.UUID
+	scoredAttempt, invitedAttempt, waitingApp, draftPacket, overdueSlot, unratedPairing uuid.UUID
 	// the second recruiter, who shares the queue but not the snoozes
 	mateID uuid.UUID
 	// assessment the sittings belong to
@@ -66,6 +66,16 @@ func newQueueFixture(t *testing.T) *queueFixture {
 	f.exec(`insert into interview_slot (id, org_id, vetter_id, application_id, stage_id, starts_at, ends_at, status)
 		values ($1, $2, $3, $4, $5, now() - interval '2 days', now() - interval '2 days' + interval '1 hour', 'completed')`,
 		f.overdueSlot, pf.orgID, pf.userID, pf.appID, pf.stages[domain.StageInterview])
+	// sprint_rating: a sprint conversation that ended an hour ago, unrated.
+	sprintStage := uuid.New()
+	f.exec(`insert into stage (id, org_id, job_id, position, name, kind, round_seconds, break_seconds) values ($1, $2, $3, 7, 'Sprint', 'sprint', 300, 60)`,
+		sprintStage, pf.orgID, pf.jobID)
+	sprintID := uuid.New()
+	f.exec(`insert into sprint (id, org_id, job_id, stage_id, name, status, starts_at, round_seconds, break_seconds)
+		values ($1, $2, $3, $4, 'Sprint', 'scheduled', now() - interval '1 hour', 300, 60)`, sprintID, pf.orgID, pf.jobID, sprintStage)
+	f.unratedPairing = uuid.New()
+	f.exec(`insert into sprint_pairing (id, sprint_id, org_id, round, interviewer_id, application_id) values ($1, $2, $3, 0, $4, $5)`,
+		f.unratedPairing, sprintID, pf.orgID, pf.userID, pf.appID)
 	return f
 }
 

@@ -37,14 +37,18 @@ import (
 	clientweb "recruiting/internal/web/client"
 	clientsweb "recruiting/internal/web/clients"
 	"recruiting/internal/web/intake"
+	"recruiting/internal/web/interviews"
 	"recruiting/internal/web/jobs"
 	"recruiting/internal/web/layout"
 	"recruiting/internal/web/pipeline"
 	"recruiting/internal/web/pool"
 	"recruiting/internal/web/problems"
+	"recruiting/internal/web/processes"
 	"recruiting/internal/web/reviews"
+	"recruiting/internal/web/room"
 	"recruiting/internal/web/scorecards"
 	"recruiting/internal/web/shortlist"
+	"recruiting/internal/web/sprints"
 	"recruiting/internal/web/workqueue"
 )
 
@@ -193,6 +197,11 @@ func appHandler(ctx context.Context, logger *slog.Logger, cfg *config.Config, st
 	apiTokens := service.NewAPITokenService(st)
 	clientAccounts := service.NewClientService(st, applications)
 	workQueue := service.NewWorkQueueService(st)
+	processService := service.NewProcessService(st)
+	sprintService := service.NewSprintService(st, q, cfg.BaseURL)
+	interviewService := service.NewInterviewService(st)
+	roomService := service.NewRoomService(st, runnerExec)
+	roomDeps := room.Deps{Rooms: roomService, Org: org, ICEServers: cfg.RTCICEServers, Logger: logger}
 
 	// The sidebar's badges are computed once per request, and only when a
 	// page actually draws the sidebar.
@@ -204,7 +213,15 @@ func appHandler(ctx context.Context, logger *slog.Logger, cfg *config.Config, st
 	pipeline.Mount(app, pipeline.Deps{
 		Applications: applications, Release: releases, Schedule: schedule, Org: org,
 		Reviews: reviewService, Attempts: attempts, Pool: poolService, Candidates: candidates,
+		Interviews: interviewService, Rooms: roomService, Sprints: sprintService,
 		Logger: logger,
+	})
+	processes.Mount(app, processes.Deps{Processes: processService, Org: org, Logger: logger})
+	interviews.Mount(app, interviews.Deps{Interviews: interviewService, Sprints: sprintService, Org: org, Logger: logger})
+	room.Mount(app, roomDeps)
+	sprints.Mount(app, sprints.Deps{
+		Sprints: sprintService, Applications: applications, Jobs: jobService, Org: org, Links: links,
+		Room: roomDeps, Logger: logger,
 	})
 	applyweb.Mount(app, applyweb.Deps{Candidates: candidates, Logger: logger})
 	candidatesweb.Mount(app, candidatesweb.Deps{Candidates: candidates, Jobs: jobService, Org: org, Logger: logger})
@@ -214,7 +231,7 @@ func appHandler(ctx context.Context, logger *slog.Logger, cfg *config.Config, st
 		// wrapper only ever looks at the method and the status book.go
 		// already writes for that case, never at the request body.
 		g.Use(bookingConflictMetrics)
-		book.Mount(g, book.Deps{Schedule: schedule, Links: links, Logger: logger})
+		book.Mount(g, book.Deps{Schedule: schedule, Links: links, Room: roomDeps, Logger: logger})
 	})
 	scorecards.Mount(app, scorecards.Deps{Scorecards: scorecardService, Org: org, Logger: logger})
 	clientweb.Mount(app, clientweb.Deps{Portal: portal, Shortlists: shortlists, Logger: logger})
@@ -256,6 +273,9 @@ func appHandler(ctx context.Context, logger *slog.Logger, cfg *config.Config, st
 		Portal:       portal,
 		Shortlists:   shortlists,
 		APITokens:    apiTokens,
+		Processes:    processService,
+		Sprints:      sprintService,
+		Rooms:        roomService,
 	})
 
 	go observe.PollQueueDepth(ctx, st.Pool(), queueDepthPollInterval, logger)

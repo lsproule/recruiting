@@ -108,8 +108,8 @@ select * from pipeline_template where org_id = $1 order by is_default desc, name
 select * from pipeline_template where id = $1 and org_id = $2;
 
 -- name: CreatePipelineTemplateStage :one
-insert into pipeline_template_stage (org_id, template_id, position, name, kind, unblind, interview_format, duration_minutes, round_seconds, break_seconds)
-values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning *;
+insert into pipeline_template_stage (org_id, template_id, position, name, kind, unblind, interview_format, duration_minutes, round_seconds, break_seconds, terminal_status)
+values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) returning *;
 
 -- name: ListPipelineTemplateStages :many
 select * from pipeline_template_stage where template_id = $1 order by position;

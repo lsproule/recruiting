@@ -184,17 +184,25 @@ func (q *Queries) CreateOrgUser(ctx context.Context, arg CreateOrgUserParams) (O
 }
 
 const createPipelineTemplate = `-- name: CreatePipelineTemplate :one
-insert into pipeline_template (org_id, name, is_default) values ($1, $2, $3) returning id, org_id, name, is_default, created_at
+insert into pipeline_template (org_id, name, is_default, description, library_key) values ($1, $2, $3, $4, $5) returning id, org_id, name, is_default, created_at, description, library_key, updated_at
 `
 
 type CreatePipelineTemplateParams struct {
-	OrgID     uuid.UUID
-	Name      string
-	IsDefault bool
+	OrgID       uuid.UUID
+	Name        string
+	IsDefault   bool
+	Description string
+	LibraryKey  *string
 }
 
 func (q *Queries) CreatePipelineTemplate(ctx context.Context, arg CreatePipelineTemplateParams) (PipelineTemplate, error) {
-	row := q.db.QueryRow(ctx, createPipelineTemplate, arg.OrgID, arg.Name, arg.IsDefault)
+	row := q.db.QueryRow(ctx, createPipelineTemplate,
+		arg.OrgID,
+		arg.Name,
+		arg.IsDefault,
+		arg.Description,
+		arg.LibraryKey,
+	)
 	var i PipelineTemplate
 	err := row.Scan(
 		&i.ID,
@@ -202,22 +210,30 @@ func (q *Queries) CreatePipelineTemplate(ctx context.Context, arg CreatePipeline
 		&i.Name,
 		&i.IsDefault,
 		&i.CreatedAt,
+		&i.Description,
+		&i.LibraryKey,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
 
 const createPipelineTemplateStage = `-- name: CreatePipelineTemplateStage :one
-insert into pipeline_template_stage (org_id, template_id, position, name, kind, unblind)
-values ($1, $2, $3, $4, $5, $6) returning id, org_id, template_id, position, name, kind, unblind
+insert into pipeline_template_stage (org_id, template_id, position, name, kind, unblind, interview_format, duration_minutes, round_seconds, break_seconds, terminal_status)
+values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) returning id, org_id, template_id, position, name, kind, unblind, interview_format, duration_minutes, round_seconds, break_seconds, terminal_status
 `
 
 type CreatePipelineTemplateStageParams struct {
-	OrgID      uuid.UUID
-	TemplateID uuid.UUID
-	Position   int32
-	Name       string
-	Kind       string
-	Unblind    bool
+	OrgID           uuid.UUID
+	TemplateID      uuid.UUID
+	Position        int32
+	Name            string
+	Kind            string
+	Unblind         bool
+	InterviewFormat string
+	DurationMinutes *int32
+	RoundSeconds    *int32
+	BreakSeconds    *int32
+	TerminalStatus  *string
 }
 
 func (q *Queries) CreatePipelineTemplateStage(ctx context.Context, arg CreatePipelineTemplateStageParams) (PipelineTemplateStage, error) {
@@ -228,6 +244,11 @@ func (q *Queries) CreatePipelineTemplateStage(ctx context.Context, arg CreatePip
 		arg.Name,
 		arg.Kind,
 		arg.Unblind,
+		arg.InterviewFormat,
+		arg.DurationMinutes,
+		arg.RoundSeconds,
+		arg.BreakSeconds,
+		arg.TerminalStatus,
 	)
 	var i PipelineTemplateStage
 	err := row.Scan(
@@ -238,6 +259,11 @@ func (q *Queries) CreatePipelineTemplateStage(ctx context.Context, arg CreatePip
 		&i.Name,
 		&i.Kind,
 		&i.Unblind,
+		&i.InterviewFormat,
+		&i.DurationMinutes,
+		&i.RoundSeconds,
+		&i.BreakSeconds,
+		&i.TerminalStatus,
 	)
 	return i, err
 }
@@ -319,7 +345,7 @@ func (q *Queries) GetClientCompany(ctx context.Context, arg GetClientCompanyPara
 }
 
 const getDefaultPipelineTemplate = `-- name: GetDefaultPipelineTemplate :one
-select id, org_id, name, is_default, created_at from pipeline_template where org_id = $1 and is_default
+select id, org_id, name, is_default, created_at, description, library_key, updated_at from pipeline_template where org_id = $1 and is_default
 `
 
 func (q *Queries) GetDefaultPipelineTemplate(ctx context.Context, orgID uuid.UUID) (PipelineTemplate, error) {
@@ -331,6 +357,9 @@ func (q *Queries) GetDefaultPipelineTemplate(ctx context.Context, orgID uuid.UUI
 		&i.Name,
 		&i.IsDefault,
 		&i.CreatedAt,
+		&i.Description,
+		&i.LibraryKey,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -447,7 +476,7 @@ func (q *Queries) GetOrgUserCredential(ctx context.Context, orgUserID uuid.UUID)
 }
 
 const getPipelineTemplate = `-- name: GetPipelineTemplate :one
-select id, org_id, name, is_default, created_at from pipeline_template where id = $1 and org_id = $2
+select id, org_id, name, is_default, created_at, description, library_key, updated_at from pipeline_template where id = $1 and org_id = $2
 `
 
 type GetPipelineTemplateParams struct {
@@ -464,6 +493,9 @@ func (q *Queries) GetPipelineTemplate(ctx context.Context, arg GetPipelineTempla
 		&i.Name,
 		&i.IsDefault,
 		&i.CreatedAt,
+		&i.Description,
+		&i.LibraryKey,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -646,7 +678,7 @@ func (q *Queries) ListOrgUsers(ctx context.Context, orgID uuid.UUID) ([]OrgUser,
 }
 
 const listPipelineTemplateStages = `-- name: ListPipelineTemplateStages :many
-select id, org_id, template_id, position, name, kind, unblind from pipeline_template_stage where template_id = $1 order by position
+select id, org_id, template_id, position, name, kind, unblind, interview_format, duration_minutes, round_seconds, break_seconds, terminal_status from pipeline_template_stage where template_id = $1 order by position
 `
 
 func (q *Queries) ListPipelineTemplateStages(ctx context.Context, templateID uuid.UUID) ([]PipelineTemplateStage, error) {
@@ -666,6 +698,11 @@ func (q *Queries) ListPipelineTemplateStages(ctx context.Context, templateID uui
 			&i.Name,
 			&i.Kind,
 			&i.Unblind,
+			&i.InterviewFormat,
+			&i.DurationMinutes,
+			&i.RoundSeconds,
+			&i.BreakSeconds,
+			&i.TerminalStatus,
 		); err != nil {
 			return nil, err
 		}
@@ -678,7 +715,7 @@ func (q *Queries) ListPipelineTemplateStages(ctx context.Context, templateID uui
 }
 
 const listPipelineTemplates = `-- name: ListPipelineTemplates :many
-select id, org_id, name, is_default, created_at from pipeline_template where org_id = $1 order by is_default desc, name
+select id, org_id, name, is_default, created_at, description, library_key, updated_at from pipeline_template where org_id = $1 order by is_default desc, name
 `
 
 // The default first, so a picker that takes the head takes the org's default.
@@ -697,6 +734,9 @@ func (q *Queries) ListPipelineTemplates(ctx context.Context, orgID uuid.UUID) ([
 			&i.Name,
 			&i.IsDefault,
 			&i.CreatedAt,
+			&i.Description,
+			&i.LibraryKey,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}

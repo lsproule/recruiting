@@ -95,9 +95,16 @@ func AppNav(p service.Principal, current string) []NavItem {
 // AppMenu is the sidebar footer menu: the role-gated screens that sit outside
 // the five primary destinations.
 func AppMenu(p service.Principal, current string) []NavItem {
-	items := []NavItem{{Key: "jobs", Label: "Jobs", Href: "/app/jobs"}}
+	items := []NavItem{
+		{Key: "jobs", Label: "Jobs", Href: "/app/jobs"},
+		{Key: "interviews", Label: "Interviews", Href: "/app/interviews"},
+	}
 	if p.HasRole(service.RoleRecruiter) || p.HasRole(service.RoleAdmin) {
-		items = append(items, NavItem{Key: "pool", Label: "Talent pool", Href: "/app/pool"})
+		items = append(items,
+			NavItem{Key: "processes", Label: "Hiring processes", Href: "/app/processes"},
+			NavItem{Key: "sprints", Label: "Sprints", Href: "/app/sprints"},
+			NavItem{Key: "pool", Label: "Talent pool", Href: "/app/pool"},
+		)
 	}
 	if p.HasRole(service.RoleVetter) {
 		items = append(items,

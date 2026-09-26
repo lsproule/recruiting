@@ -136,6 +136,8 @@ func defaultPrereqs(ctx context.Context, tx *store.Tx, app domain.Application, f
 		p.HasScorecard, err = tx.Q.HasScorecardForStage(ctx, db.HasScorecardForStageParams{ApplicationID: app.ID, StageID: from.ID})
 	case domain.StageAssessment:
 		p.HasVerdict, err = tx.Q.HasVerdictForStage(ctx, db.HasVerdictForStageParams{ApplicationID: app.ID, StageID: from.ID})
+	case domain.StageSprint:
+		p.HasRating, err = tx.Q.HasSprintRatingForStage(ctx, db.HasSprintRatingForStageParams{ApplicationID: app.ID, StageID: from.ID})
 	}
 	return p, err
 }

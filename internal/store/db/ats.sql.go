@@ -115,7 +115,7 @@ func (q *Queries) CreateApplicationEvent(ctx context.Context, arg CreateApplicat
 
 const createJob = `-- name: CreateJob :one
 insert into job (org_id, client_company_id, title, slug, description, skills, seniority, location, remote_policy, salary_min, salary_max, blind_mode, status, created_by)
-values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) returning id, org_id, client_company_id, title, description, skills, seniority, location, remote_policy, salary_min, salary_max, blind_mode, status, created_by, created_at, updated_at, slug
+values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) returning id, org_id, client_company_id, title, description, skills, seniority, location, remote_policy, salary_min, salary_max, blind_mode, status, created_by, created_at, updated_at, slug, template_id
 `
 
 type CreateJobParams struct {
@@ -171,13 +171,15 @@ func (q *Queries) CreateJob(ctx context.Context, arg CreateJobParams) (Job, erro
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Slug,
+		&i.TemplateID,
 	)
 	return i, err
 }
 
 const createStage = `-- name: CreateStage :one
-insert into stage (org_id, job_id, position, name, kind, terminal_status, unblind, scorecard_rubric_id, default_vetter_id, assessment_id)
-values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning id, org_id, job_id, position, name, kind, unblind, scorecard_rubric_id, default_vetter_id, assessment_id, terminal_status
+insert into stage (org_id, job_id, position, name, kind, terminal_status, unblind, scorecard_rubric_id, default_vetter_id, assessment_id,
+    interview_format, duration_minutes, round_seconds, break_seconds)
+values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) returning id, org_id, job_id, position, name, kind, unblind, scorecard_rubric_id, default_vetter_id, assessment_id, terminal_status, interview_format, duration_minutes, round_seconds, break_seconds
 `
 
 type CreateStageParams struct {
@@ -191,6 +193,10 @@ type CreateStageParams struct {
 	ScorecardRubricID uuid.NullUUID
 	DefaultVetterID   uuid.NullUUID
 	AssessmentID      uuid.NullUUID
+	InterviewFormat   string
+	DurationMinutes   *int32
+	RoundSeconds      *int32
+	BreakSeconds      *int32
 }
 
 func (q *Queries) CreateStage(ctx context.Context, arg CreateStageParams) (Stage, error) {
@@ -205,6 +211,10 @@ func (q *Queries) CreateStage(ctx context.Context, arg CreateStageParams) (Stage
 		arg.ScorecardRubricID,
 		arg.DefaultVetterID,
 		arg.AssessmentID,
+		arg.InterviewFormat,
+		arg.DurationMinutes,
+		arg.RoundSeconds,
+		arg.BreakSeconds,
 	)
 	var i Stage
 	err := row.Scan(
@@ -219,6 +229,10 @@ func (q *Queries) CreateStage(ctx context.Context, arg CreateStageParams) (Stage
 		&i.DefaultVetterID,
 		&i.AssessmentID,
 		&i.TerminalStatus,
+		&i.InterviewFormat,
+		&i.DurationMinutes,
+		&i.RoundSeconds,
+		&i.BreakSeconds,
 	)
 	return i, err
 }
@@ -293,7 +307,7 @@ func (q *Queries) GetCandidate(ctx context.Context, id uuid.UUID) (GetCandidateR
 }
 
 const getJob = `-- name: GetJob :one
-select id, org_id, client_company_id, title, description, skills, seniority, location, remote_policy, salary_min, salary_max, blind_mode, status, created_by, created_at, updated_at, slug from job where id = $1
+select id, org_id, client_company_id, title, description, skills, seniority, location, remote_policy, salary_min, salary_max, blind_mode, status, created_by, created_at, updated_at, slug, template_id from job where id = $1
 `
 
 func (q *Queries) GetJob(ctx context.Context, id uuid.UUID) (Job, error) {
@@ -317,12 +331,13 @@ func (q *Queries) GetJob(ctx context.Context, id uuid.UUID) (Job, error) {
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Slug,
+		&i.TemplateID,
 	)
 	return i, err
 }
 
 const getJobBySlug = `-- name: GetJobBySlug :one
-select id, org_id, client_company_id, title, description, skills, seniority, location, remote_policy, salary_min, salary_max, blind_mode, status, created_by, created_at, updated_at, slug from job where org_id = $1 and slug = $2
+select id, org_id, client_company_id, title, description, skills, seniority, location, remote_policy, salary_min, salary_max, blind_mode, status, created_by, created_at, updated_at, slug, template_id from job where org_id = $1 and slug = $2
 `
 
 type GetJobBySlugParams struct {
@@ -351,6 +366,7 @@ func (q *Queries) GetJobBySlug(ctx context.Context, arg GetJobBySlugParams) (Job
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Slug,
+		&i.TemplateID,
 	)
 	return i, err
 }
@@ -432,7 +448,7 @@ func (q *Queries) ListApplicationsByJob(ctx context.Context, jobID uuid.UUID) ([
 }
 
 const listJobs = `-- name: ListJobs :many
-select id, org_id, client_company_id, title, description, skills, seniority, location, remote_policy, salary_min, salary_max, blind_mode, status, created_by, created_at, updated_at, slug from job where org_id = $1 order by created_at desc
+select id, org_id, client_company_id, title, description, skills, seniority, location, remote_policy, salary_min, salary_max, blind_mode, status, created_by, created_at, updated_at, slug, template_id from job where org_id = $1 order by created_at desc
 `
 
 func (q *Queries) ListJobs(ctx context.Context, orgID uuid.UUID) ([]Job, error) {
@@ -462,6 +478,7 @@ func (q *Queries) ListJobs(ctx context.Context, orgID uuid.UUID) ([]Job, error) 
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Slug,
+			&i.TemplateID,
 		); err != nil {
 			return nil, err
 		}
@@ -474,7 +491,7 @@ func (q *Queries) ListJobs(ctx context.Context, orgID uuid.UUID) ([]Job, error) 
 }
 
 const listStages = `-- name: ListStages :many
-select id, org_id, job_id, position, name, kind, unblind, scorecard_rubric_id, default_vetter_id, assessment_id, terminal_status from stage where job_id = $1 order by position
+select id, org_id, job_id, position, name, kind, unblind, scorecard_rubric_id, default_vetter_id, assessment_id, terminal_status, interview_format, duration_minutes, round_seconds, break_seconds from stage where job_id = $1 order by position
 `
 
 func (q *Queries) ListStages(ctx context.Context, jobID uuid.UUID) ([]Stage, error) {
@@ -498,6 +515,10 @@ func (q *Queries) ListStages(ctx context.Context, jobID uuid.UUID) ([]Stage, err
 			&i.DefaultVetterID,
 			&i.AssessmentID,
 			&i.TerminalStatus,
+			&i.InterviewFormat,
+			&i.DurationMinutes,
+			&i.RoundSeconds,
+			&i.BreakSeconds,
 		); err != nil {
 			return nil, err
 		}
@@ -599,7 +620,7 @@ const updateJob = `-- name: UpdateJob :one
 update job set client_company_id = $2, title = $3, slug = $4, description = $5, skills = $6,
     seniority = $7, location = $8, remote_policy = $9, salary_min = $10, salary_max = $11,
     blind_mode = $12, status = $13, updated_at = now()
-where id = $1 returning id, org_id, client_company_id, title, description, skills, seniority, location, remote_policy, salary_min, salary_max, blind_mode, status, created_by, created_at, updated_at, slug
+where id = $1 returning id, org_id, client_company_id, title, description, skills, seniority, location, remote_policy, salary_min, salary_max, blind_mode, status, created_by, created_at, updated_at, slug, template_id
 `
 
 type UpdateJobParams struct {
@@ -653,12 +674,15 @@ func (q *Queries) UpdateJob(ctx context.Context, arg UpdateJobParams) (Job, erro
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Slug,
+		&i.TemplateID,
 	)
 	return i, err
 }
 
 const updateStage = `-- name: UpdateStage :one
-update stage set name = $2, kind = $3, terminal_status = $4, unblind = $5, default_vetter_id = $6 where id = $1 returning id, org_id, job_id, position, name, kind, unblind, scorecard_rubric_id, default_vetter_id, assessment_id, terminal_status
+update stage set name = $2, kind = $3, terminal_status = $4, unblind = $5, default_vetter_id = $6,
+    interview_format = $7, duration_minutes = $8, round_seconds = $9, break_seconds = $10
+where id = $1 returning id, org_id, job_id, position, name, kind, unblind, scorecard_rubric_id, default_vetter_id, assessment_id, terminal_status, interview_format, duration_minutes, round_seconds, break_seconds
 `
 
 type UpdateStageParams struct {
@@ -668,6 +692,10 @@ type UpdateStageParams struct {
 	TerminalStatus  *string
 	Unblind         bool
 	DefaultVetterID uuid.NullUUID
+	InterviewFormat string
+	DurationMinutes *int32
+	RoundSeconds    *int32
+	BreakSeconds    *int32
 }
 
 func (q *Queries) UpdateStage(ctx context.Context, arg UpdateStageParams) (Stage, error) {
@@ -678,6 +706,10 @@ func (q *Queries) UpdateStage(ctx context.Context, arg UpdateStageParams) (Stage
 		arg.TerminalStatus,
 		arg.Unblind,
 		arg.DefaultVetterID,
+		arg.InterviewFormat,
+		arg.DurationMinutes,
+		arg.RoundSeconds,
+		arg.BreakSeconds,
 	)
 	var i Stage
 	err := row.Scan(
@@ -692,6 +724,10 @@ func (q *Queries) UpdateStage(ctx context.Context, arg UpdateStageParams) (Stage
 		&i.DefaultVetterID,
 		&i.AssessmentID,
 		&i.TerminalStatus,
+		&i.InterviewFormat,
+		&i.DurationMinutes,
+		&i.RoundSeconds,
+		&i.BreakSeconds,
 	)
 	return i, err
 }

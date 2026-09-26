@@ -132,7 +132,7 @@ where purpose = 'sprint' and revoked_at is null
 -- on sprints that still stand.
 select p.id as pairing_id, s.id as sprint_id, s.name as sprint_name,
     u.name as interviewer_name, c.name as candidate_name, j.title as job_title, cc.name as client_name,
-    s.starts_at + make_interval(secs => (p.round + 1) * (s.round_seconds + s.break_seconds) - s.break_seconds) as ended_at
+    (s.starts_at + make_interval(secs => (p.round + 1) * (s.round_seconds + s.break_seconds) - s.break_seconds))::timestamptz as ended_at
 from sprint_pairing p
 join sprint s on s.id = p.sprint_id
 join org_user u on u.id = p.interviewer_id

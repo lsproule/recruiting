@@ -358,7 +358,7 @@ func (s *IntakeService) Create(ctx context.Context, p Principal, id uuid.UUID) (
 			return err
 		}
 		out.JobID = job.ID
-		if err := copyTemplateStages(ctx, tx, p.OrgID, job.ID, in.Job.TemplateID); err != nil {
+		if _, err := copyTemplateStages(ctx, tx, p.OrgID, job.ID, in.Job.TemplateID); err != nil {
 			return err
 		}
 		stages, err := listStages(ctx, tx, job.ID)
@@ -433,6 +433,7 @@ func (s *IntakeService) createAssessment(ctx context.Context, tx *store.Tx, p Pr
 		InviteWindowDays: int32(DefaultSettings().AssessmentInviteDays),
 		AllowedLanguages: []string{},
 		Integrity:        integrity,
+		Format:           AssessmentTimed,
 	})
 	if err != nil {
 		return uuid.Nil, err

@@ -16,6 +16,7 @@ var (
 	assess    = domain.Stage{ID: uuid.New(), Position: 3, Name: "Assessment", Kind: domain.StageAssessment}
 	review    = domain.Stage{ID: uuid.New(), Position: 4, Name: "Client Review", Kind: domain.StageClientReview}
 	review2   = domain.Stage{ID: uuid.New(), Position: 5, Name: "Client Onsite", Kind: domain.StageClientReview}
+	sprint    = domain.Stage{ID: uuid.New(), Position: 3, Name: "Sprint", Kind: domain.StageSprint, RoundSeconds: 300, BreakSeconds: 60}
 	hired     = domain.Stage{ID: uuid.New(), Position: 6, Name: "Hired", Kind: domain.StageTerminal, Terminal: domain.StatusHired}
 	rejected  = domain.Stage{ID: uuid.New(), Position: 7, Name: "Rejected", Kind: domain.StageTerminal, Terminal: domain.StatusRejected}
 )
@@ -61,6 +62,13 @@ func TestValidateMoveMatrix(t *testing.T) {
 		{"admin overrides missing verdict", domain.ActorAdmin, assess, review, none, domain.MoveRequest{OverridePrereq: true, Reason: "reviewed by hand"}, nil},
 		{"vetter advances after verdict", domain.ActorVetter, assess, review, domain.Prereqs{HasVerdict: true}, domain.MoveRequest{}, nil},
 		{"vetter blocked without verdict", domain.ActorVetter, assess, review, none, domain.MoveRequest{}, domain.ErrPrereqMissing},
+
+		// sprint: the recruiter's decision, once someone has rated the candidate.
+		{"recruiter advances from a rated sprint", domain.ActorRecruiter, sprint, review, domain.Prereqs{HasRating: true}, domain.MoveRequest{}, nil},
+		{"recruiter blocked from an unrated sprint", domain.ActorRecruiter, sprint, review, none, domain.MoveRequest{}, domain.ErrPrereqMissing},
+		{"recruiter overrides an unrated sprint", domain.ActorRecruiter, sprint, review, none, domain.MoveRequest{OverridePrereq: true, Reason: "met them in person"}, nil},
+		{"vetter cannot leave a sprint", domain.ActorVetter, sprint, review, domain.Prereqs{HasRating: true}, domain.MoveRequest{}, domain.ErrForbiddenMove},
+		{"client cannot leave a sprint", domain.ActorClient, sprint, review, domain.Prereqs{HasRating: true}, domain.MoveRequest{}, domain.ErrForbiddenMove},
 
 		// client_review: client moves only to another client review or to rejected.
 		{"client advances to the next client review", domain.ActorClient, review, review2, none, domain.MoveRequest{}, nil},
