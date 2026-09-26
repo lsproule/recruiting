@@ -81,6 +81,8 @@ func kindLabel(kind service.QueueKind) string {
 		return "Scorecard due"
 	case service.QueueSprintRating:
 		return "Rating due"
+	case service.QueueTalentIntro:
+		return "Introduction"
 	}
 	return string(kind)
 }

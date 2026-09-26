@@ -49,6 +49,7 @@ import (
 	"recruiting/internal/web/scorecards"
 	"recruiting/internal/web/shortlist"
 	"recruiting/internal/web/sprints"
+	talentweb "recruiting/internal/web/talent"
 	"recruiting/internal/web/workqueue"
 )
 
@@ -201,6 +202,7 @@ func appHandler(ctx context.Context, logger *slog.Logger, cfg *config.Config, st
 	sprintService := service.NewSprintService(st, q, cfg.BaseURL)
 	interviewService := service.NewInterviewService(st)
 	roomService := service.NewRoomService(st, runnerExec)
+	talentService := service.NewTalentService(st, resumes, links, q, cfg.BaseURL)
 	roomDeps := room.Deps{Rooms: roomService, Org: org, ICEServers: cfg.RTCICEServers, Logger: logger}
 
 	// The sidebar's badges are computed once per request, and only when a
@@ -234,7 +236,11 @@ func appHandler(ctx context.Context, logger *slog.Logger, cfg *config.Config, st
 		book.Mount(g, book.Deps{Schedule: schedule, Links: links, Room: roomDeps, Logger: logger})
 	})
 	scorecards.Mount(app, scorecards.Deps{Scorecards: scorecardService, Org: org, Logger: logger})
-	clientweb.Mount(app, clientweb.Deps{Portal: portal, Shortlists: shortlists, Logger: logger})
+	clientweb.Mount(app, clientweb.Deps{
+		Portal: portal, Shortlists: shortlists, Talent: talentService, Tokens: apiTokens, BaseURL: cfg.BaseURL, Logger: logger,
+	})
+	talentweb.Mount(app, talentweb.Deps{Talent: talentService, Links: links, Logger: logger})
+	talentweb.MountApp(app, talentweb.Deps{Talent: talentService, Org: org, Logger: logger})
 	// pool.Mount and shortlist.Mount must come after jobs.Mount: their
 	// per-job screens share jobs's subrouter.
 	pool.Mount(app, pool.Deps{Pool: poolService, Org: org, Logger: logger})
@@ -276,6 +282,7 @@ func appHandler(ctx context.Context, logger *slog.Logger, cfg *config.Config, st
 		Processes:    processService,
 		Sprints:      sprintService,
 		Rooms:        roomService,
+		Talent:       talentService,
 	})
 
 	go observe.PollQueueDepth(ctx, st.Pool(), queueDepthPollInterval, logger)

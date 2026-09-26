@@ -97,6 +97,82 @@ func (q *Queries) GetReleasedApplication(ctx context.Context, id uuid.UUID) (Get
 	return i, err
 }
 
+const listClientEvents = `-- name: ListClientEvents :many
+select e.seq, e.id, e.application_id, e.kind, e.actor_kind, e.reason, e.created_at,
+    a.job_id, j.title as job_title,
+    f.name as from_stage, t.name as to_stage
+from application_event e
+join application a on a.id = e.application_id
+join job j on j.id = a.job_id
+left join stage f on f.id = e.from_stage_id
+left join stage t on t.id = e.to_stage_id
+where a.client_company_id = $1::uuid
+  and a.released_at is not null
+  -- The release event is written in the transaction that sets released_at
+  -- from the application clock, so it can predate the stamp by a moment
+  -- and is named rather than compared.
+  and (e.kind = 'released' or e.created_at >= a.released_at)
+  and e.seq > $2::bigint
+order by e.seq
+limit $3::int
+`
+
+type ListClientEventsParams struct {
+	ClientCompanyID uuid.UUID
+	AfterSeq        int64
+	RowLimit        int32
+}
+
+type ListClientEventsRow struct {
+	Seq           *int64
+	ID            uuid.UUID
+	ApplicationID uuid.UUID
+	Kind          string
+	ActorKind     string
+	Reason        *string
+	CreatedAt     pgtype.Timestamptz
+	JobID         uuid.UUID
+	JobTitle      string
+	FromStage     *string
+	ToStage       *string
+}
+
+// The company's change feed: every event on a released application from
+// the moment it was released, in sequence order, after a cursor. The
+// sequence is global and monotonic, so a caller that remembers the last
+// seq it saw reads exactly what happened since.
+func (q *Queries) ListClientEvents(ctx context.Context, arg ListClientEventsParams) ([]ListClientEventsRow, error) {
+	rows, err := q.db.Query(ctx, listClientEvents, arg.ClientCompanyID, arg.AfterSeq, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListClientEventsRow{}
+	for rows.Next() {
+		var i ListClientEventsRow
+		if err := rows.Scan(
+			&i.Seq,
+			&i.ID,
+			&i.ApplicationID,
+			&i.Kind,
+			&i.ActorKind,
+			&i.Reason,
+			&i.CreatedAt,
+			&i.JobID,
+			&i.JobTitle,
+			&i.FromStage,
+			&i.ToStage,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listClientJobs = `-- name: ListClientJobs :many
 select j.id, j.org_id, j.client_company_id, j.title, j.description, j.skills, j.seniority, j.location, j.remote_policy, j.salary_min, j.salary_max, j.blind_mode, j.status, j.created_by, j.created_at, j.updated_at, j.slug, j.template_id, (select count(*) from application a where a.job_id = j.id and a.released_at is not null)::int as released_count
 from job j
@@ -337,6 +413,105 @@ func (q *Queries) ListReleasedApplications(ctx context.Context, jobID uuid.UUID)
 	items := []ListReleasedApplicationsRow{}
 	for rows.Next() {
 		var i ListReleasedApplicationsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.JobID,
+			&i.StageID,
+			&i.Status,
+			&i.ReleasedAt,
+			&i.RecruiterSummary,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.CandidateID,
+			&i.CandidateName,
+			&i.CandidateEmail,
+			&i.CandidatePhone,
+			&i.CandidateLinks,
+			&i.StageName,
+			&i.StagePosition,
+			&i.StageKind,
+			&i.StageUnblind,
+			&i.JobTitle,
+			&i.JobBlindMode,
+			&i.ClientCompanyID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listReleasedApplicationsByCompany = `-- name: ListReleasedApplicationsByCompany :many
+select a.id, a.job_id, a.stage_id, a.status, a.released_at, a.recruiter_summary, a.created_at, a.updated_at,
+    c.id as candidate_id, c.name as candidate_name, c.email as candidate_email, c.phone as candidate_phone, c.links as candidate_links,
+    s.name as stage_name, s.position as stage_position, s.kind as stage_kind, s.unblind as stage_unblind,
+    j.title as job_title, j.blind_mode as job_blind_mode, j.client_company_id
+from application a
+join candidate c on c.id = a.candidate_id
+join stage s on s.id = a.stage_id
+join job j on j.id = a.job_id
+where a.client_company_id = $1::uuid and a.released_at is not null
+  and ($2::uuid = '00000000-0000-0000-0000-000000000000'::uuid or a.job_id = $2::uuid)
+  and ($3::text = '' or a.status = $3::text)
+  and ($4::timestamptz is null or a.updated_at >= $4::timestamptz)
+order by a.updated_at desc, a.id
+limit $6::int offset $5::int
+`
+
+type ListReleasedApplicationsByCompanyParams struct {
+	ClientCompanyID uuid.UUID
+	JobID           uuid.UUID
+	Status          string
+	UpdatedSince    pgtype.Timestamptz
+	RowOffset       int32
+	RowLimit        int32
+}
+
+type ListReleasedApplicationsByCompanyRow struct {
+	ID               uuid.UUID
+	JobID            uuid.UUID
+	StageID          uuid.UUID
+	Status           string
+	ReleasedAt       pgtype.Timestamptz
+	RecruiterSummary *string
+	CreatedAt        pgtype.Timestamptz
+	UpdatedAt        pgtype.Timestamptz
+	CandidateID      uuid.UUID
+	CandidateName    string
+	CandidateEmail   string
+	CandidatePhone   *string
+	CandidateLinks   []byte
+	StageName        string
+	StagePosition    int32
+	StageKind        string
+	StageUnblind     bool
+	JobTitle         string
+	JobBlindMode     bool
+	ClientCompanyID  uuid.UUID
+}
+
+// Every application released to the company, across its jobs, for the API's
+// collection read. Filters are optional; a zero uuid or empty string is "any".
+func (q *Queries) ListReleasedApplicationsByCompany(ctx context.Context, arg ListReleasedApplicationsByCompanyParams) ([]ListReleasedApplicationsByCompanyRow, error) {
+	rows, err := q.db.Query(ctx, listReleasedApplicationsByCompany,
+		arg.ClientCompanyID,
+		arg.JobID,
+		arg.Status,
+		arg.UpdatedSince,
+		arg.RowOffset,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListReleasedApplicationsByCompanyRow{}
+	for rows.Next() {
+		var i ListReleasedApplicationsByCompanyRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.JobID,

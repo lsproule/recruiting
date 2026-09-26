@@ -11,7 +11,7 @@ import (
 )
 
 // TestPortalAccessIsExactlyTheClientReads pins the token scoping rule: a
-// client user's credential reaches the portal reads and nothing else.
+// client user's credential reaches the /portal operations and nothing else.
 func TestPortalAccessIsExactlyTheClientReads(t *testing.T) {
 	r := NewRouter()
 	ops := mountAll(r.API, Deps{})

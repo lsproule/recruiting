@@ -90,6 +90,11 @@ var statusErrors = map[int][]error{
 		service.ErrRatingTooEarly,
 		service.ErrRoomClosed,
 		service.ErrProcessDefault,
+		service.ErrTokenLimit,
+		service.ErrTalentRequestClosed,
+		service.ErrIntroRequested,
+		service.ErrIntroNotWaiting,
+		service.ErrIntroNotSent,
 	},
 	http.StatusGone: {
 		service.ErrLinkExpired,
@@ -119,6 +124,11 @@ var statusErrors = map[int][]error{
 		service.ErrNoExecutor,
 	},
 	http.StatusUnprocessableEntity: {
+		service.ErrTalentConsent,
+		service.ErrTalentSkills,
+		service.ErrTalentTitle,
+		service.ErrIntroJob,
+		service.ErrTalentJobRequired,
 		service.ErrSprintEmpty,
 		service.ErrSprintStage,
 		service.ErrSprintCandidate,

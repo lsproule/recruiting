@@ -1273,7 +1273,7 @@ main:has(> .try-editor) {
   color: var(--color-neutral-300);
 }
 /* The two rules a client is waiting on read as the client's, not ours. */
-.queue-kind-client_waiting, .queue-kind-shortlist_draft {
+.queue-kind-client_waiting, .queue-kind-shortlist_draft, .queue-kind-talent_intro {
   background: var(--color-accent-800);
   color: var(--color-accent-200);
 }
@@ -1649,3 +1649,79 @@ main:has(> .try-editor) {
 .console-frame { width: 100%; height: 34rem; border: 0; border-radius: var(--radius-md); background: var(--color-surface); box-shadow: 0 0 0 1px var(--color-divider); }
 @media (min-width: 1100px) { .room-embed { height: 34rem; } }
 .room-saved { font-size: 12px; color: var(--color-neutral-500); }
+
+/* ── Talent network: the public join page, matches, and the developer page ─ */
+.join { max-width: 46rem; }
+.join-head { margin-bottom: var(--space-6); }
+.join-head h1 { margin: var(--space-1) 0 var(--space-3); }
+.join-form { display: grid; gap: var(--space-5); }
+.join-section {
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-md);
+  padding: var(--space-4) var(--space-5) var(--space-5);
+  display: grid;
+  gap: var(--space-4);
+  margin: 0;
+}
+.join-section legend { padding: 0 var(--space-2); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-accent); }
+.join-form label { font-size: 13px; display: grid; gap: var(--space-1); }
+.join-form .grid-2 label { min-width: 0; }
+.consent { display: flex; gap: var(--space-3); align-items: flex-start; font-size: 13px; }
+.consent input { margin-top: 3px; }
+.consent span { color: var(--color-neutral-300); }
+.join-form .btn { justify-self: start; }
+.standing-on { color: var(--color-accent-300); }
+.profile-actions { margin-bottom: var(--space-5); }
+.profile-actions form { margin: 0; }
+.opportunity-answer { display: flex; gap: var(--space-3); margin: var(--space-5) 0 var(--space-3); }
+.opportunity .panel { max-width: none; margin-bottom: var(--space-4); }
+
+.talent-layout { display: grid; grid-template-columns: minmax(0, 1fr) 24rem; gap: var(--space-6); align-items: start; }
+.talent-layout aside { position: sticky; top: var(--space-6); }
+.talent-form { max-width: none; margin-top: 0; padding: var(--space-5); }
+.talent-form label { font-size: 12px; }
+.talent-form textarea { width: 100%; }
+.stack-sections { display: grid; gap: var(--space-4); }
+.stack-sections .panel { max-width: none; margin: 0; }
+.talent-requests .row-note, .intro-table .row-note { display: block; }
+
+.match-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(20rem, 1fr)); gap: var(--space-4); margin-top: var(--space-4); }
+.match-card { display: flex; flex-direction: column; gap: var(--space-3); max-width: none; margin: 0; }
+.match-head { display: flex; gap: var(--space-3); align-items: flex-start; }
+.match-head > div { min-width: 0; }
+.match-head p { margin: 0; }
+.match-score {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 3.2rem;
+  height: 3.2rem;
+  border-radius: var(--radius-md);
+  background: var(--color-accent-800);
+  color: var(--color-accent-100);
+  font-family: var(--font-heading);
+  font-size: 15px;
+}
+.match-headline { font-size: 14px; }
+.match-skills { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+.match-parts { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--space-2); margin: 0; }
+.match-parts div { display: grid; gap: 2px; }
+.match-parts dt { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-neutral-500); }
+.match-parts dd { margin: 0; font-size: 13px; }
+.match-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); margin-top: auto; font-size: 12px; }
+.match-foot form { margin: 0; }
+
+.secret-notice { display: grid; gap: var(--space-2); }
+.secret { word-break: break-all; font-size: 12px; user-select: all; }
+.token-form { margin-top: var(--space-4); }
+.api-examples { display: grid; gap: var(--space-3); }
+.api-examples p { margin: 0; }
+.api-examples pre { margin: 0; font-size: 12px; }
+.send-form { display: flex; gap: var(--space-2); align-items: center; }
+.send-form select { width: auto; }
+
+@media (max-width: 900px) {
+  .talent-layout { grid-template-columns: 1fr; }
+  .talent-layout aside { position: static; }
+  .join-form .grid-2 { grid-template-columns: 1fr; }
+}

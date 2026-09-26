@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -48,6 +49,7 @@ type fixture struct {
 	st                     *store.Store
 	release                *service.ReleaseService
 	shortlists             *service.ShortlistService
+	tokens                 *service.APITokenService
 	orgID, jobID           uuid.UUID
 	companyID              uuid.UUID
 	draftJobID             uuid.UUID
@@ -153,7 +155,11 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatal(err)
 	}
 	layout.MountStatic(mux)
-	client.Mount(mux, client.Deps{Portal: portal, Shortlists: f.shortlists})
+	f.tokens = service.NewAPITokenService(st)
+	client.Mount(mux, client.Deps{
+		Portal: portal, Shortlists: f.shortlists, Tokens: f.tokens, BaseURL: "https://example.test",
+		Talent: service.NewTalentService(st, resumes, service.NewMagicLinkService(st), q, "https://example.test"),
+	})
 	f.srv = httptest.NewServer(mux)
 	t.Cleanup(f.srv.Close)
 	return f
@@ -504,5 +510,74 @@ func TestReleaseRollsBackWhenTheNoticeCannotBeQueued(t *testing.T) {
 	}
 	if n := f.count(t, `select count(*) from application_event where application_id = $1 and kind = 'released'`, f.hiddenAppID); n != 0 {
 		t.Fatal("released event written although the notice failed")
+	}
+}
+
+func TestClientPortalTalentAndDeveloperPages(t *testing.T) {
+	f := newFixture(t)
+	s := f.browser(t, f.clientEmail)
+
+	// Talent requests: the form files one, the page lists it, and the
+	// request page reads matches (none yet) and closes it.
+	res, body := s.get(client.TalentPath)
+	if res.StatusCode != http.StatusOK || !strings.Contains(body, "Who are you looking for?") || !strings.Contains(body, "Senior Go Engineer") {
+		t.Fatalf("talent page: %d %s", res.StatusCode, body[:200])
+	}
+	res, body = s.post(client.TalentPath, url.Values{"title": {"Staff engineer"}, "skills": {""}})
+	if res.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(body, "at least one skill") {
+		t.Fatalf("no skills: %d", res.StatusCode)
+	}
+	res, _ = s.post(client.TalentPath, url.Values{"title": {"Staff engineer"}, "skills": {"go, postgres"}, "seniority": {"staff"}, "job_id": {f.jobID.String()}})
+	if res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("create: %d", res.StatusCode)
+	}
+	loc := res.Header.Get("Location")
+	res, body = s.get(loc)
+	if res.StatusCode != http.StatusOK || !strings.Contains(body, "Staff engineer") || !strings.Contains(body, "Nobody in the network fits this yet") || !strings.Contains(body, "joins Senior Go Engineer") {
+		t.Fatalf("request page: %d %s", res.StatusCode, body[:300])
+	}
+	assertNone(t, body, secrets...)
+	if res, _ = s.post(loc+"/close", url.Values{}); res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("close: %d", res.StatusCode)
+	}
+	if _, body = s.get(loc + "?did=close"); !strings.Contains(body, "The request is closed") || strings.Contains(body, "Request introduction") {
+		t.Fatalf("closed request still offers matches")
+	}
+	// Another company sees none of it.
+	rival := f.browser(t, f.rivalMail)
+	if res, _ := rival.get(loc); res.StatusCode != http.StatusNotFound {
+		t.Fatalf("rival on the request: %d, want 404", res.StatusCode)
+	}
+
+	// Developer: a token is issued, shown once, listed by prefix, and revoked.
+	res, body = s.get(client.DeveloperPath)
+	if res.StatusCode != http.StatusOK || !strings.Contains(body, "/api/v1/docs") || !strings.Contains(body, "No tokens yet") {
+		t.Fatalf("developer page: %d %s", res.StatusCode, body[:200])
+	}
+	res, body = s.post(client.DeveloperPath+"/tokens", url.Values{"name": {"ATS sync"}, "expires_on": {"2030-01-01"}})
+	if res.StatusCode != http.StatusOK || !strings.Contains(body, "Copy this token now") {
+		t.Fatalf("issue: %d %s", res.StatusCode, body[:300])
+	}
+	secret := regexp.MustCompile(`<code class="secret">([^<]+)</code>`).FindStringSubmatch(body)
+	if secret == nil {
+		t.Fatal("no secret on the page")
+	}
+	p, err := f.tokens.ResolveToken(context.Background(), secret[1])
+	if err != nil || p.Kind != service.PrincipalClientUser || p.ClientCompanyID != f.companyID {
+		t.Fatalf("resolved = %+v, %v", p, err)
+	}
+	_, body = s.get(client.DeveloperPath)
+	if !strings.Contains(body, "ATS sync") || strings.Contains(body, secret[1]) || !strings.Contains(body, "1 Jan 2030") {
+		t.Fatalf("developer page after issue: %s", body[:300])
+	}
+	id := regexp.MustCompile(`/client/developer/tokens/([0-9a-f-]{36})/revoke`).FindStringSubmatch(body)
+	if id == nil {
+		t.Fatal("no revoke form")
+	}
+	if res, _ = s.post(client.DeveloperPath+"/tokens/"+id[1]+"/revoke", url.Values{}); res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("revoke: %d", res.StatusCode)
+	}
+	if _, err := f.tokens.ResolveToken(context.Background(), secret[1]); err == nil {
+		t.Fatal("a revoked token still resolves")
 	}
 }

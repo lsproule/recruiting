@@ -123,7 +123,8 @@ export default async function globalSetup() {
   const baseURL = process.env.E2E_BASE_URL;
   const passwordSetURL = process.env.E2E_PASSWORD_SET_URL;
   const adminEmail = process.env.E2E_ADMIN_EMAIL;
-  if (!baseURL || !passwordSetURL || !adminEmail) {
+  const orgSlug = process.env.E2E_ORG_SLUG;
+  if (!baseURL || !passwordSetURL || !adminEmail || !orgSlug) {
     throw new Error("run the suite through web/e2e/run.sh; it boots the app and bootstraps the org");
   }
   fs.mkdirSync(runDir, { recursive: true });
@@ -248,6 +249,7 @@ export default async function globalSetup() {
     baseURL,
     adminEmail,
     adminPassword: ADMIN_PASSWORD,
+    orgSlug,
     clientEmail,
     clientPassword: CLIENT_PASSWORD,
     apiToken: token,

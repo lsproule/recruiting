@@ -1,0 +1,539 @@
+package talent
+
+import (
+	"strconv"
+	"strings"
+
+	"recruiting/internal/service"
+	"recruiting/internal/web/layout"
+)
+
+// joinPage is the public opt-in: who you are, what you do, what you want,
+// and your consent to be approached. Nothing here is shown to a company
+// before you say yes to a specific introduction.
+templ joinPage(page layout.Page, org service.PublicOrg, f joinForm) {
+	@layout.Base(page) {
+		<div class="join">
+			<header class="join-head">
+				<p class="page-kicker">{ org.Name }</p>
+				<h1>Join the talent network</h1>
+				<p class="muted">Tell us what you do and what you are looking for. When a company we work with wants someone like you, a recruiter asks you first. Companies see your skills and preferences, never your name or contact details, until you say yes.</p>
+			</header>
+			if f.Error != "" {
+				<p class="flash flash-error" role="alert">{ f.Error }</p>
+			}
+			<form class="join-form" method="post" action={ templ.SafeURL(JoinPath(org.Slug)) } enctype="multipart/form-data">
+				@layout.CSRFField(page.CSRF)
+				<fieldset class="join-section">
+					<legend>About you</legend>
+					<div class="grid-2">
+						<label>Your name <input type="text" name="name" value={ f.Name } required autocomplete="name"/></label>
+						<label>Email <input type="email" name="email" value={ f.Email } required autocomplete="email"/></label>
+					</div>
+					<div class="grid-2">
+						<label>Phone <input type="text" name="phone" value={ f.Phone } autocomplete="tel"/></label>
+						<label>Links <input type="text" name="links" value={ f.Links } placeholder="https://github.com/you, https://you.example"/></label>
+					</div>
+					<label>Résumé (PDF or Word .docx, up to 10 MB) <input type="file" name="resume" accept=".pdf,.docx"/></label>
+				</fieldset>
+				<fieldset class="join-section">
+					<legend>What you do</legend>
+					<label>One line about you <input type="text" name="headline" value={ f.Headline } placeholder="Backend engineer, ten years of Go and Postgres" maxlength="500"/></label>
+					<label>Skills <input type="text" name="skills" value={ f.Skills } placeholder="go, postgres, kubernetes" required/></label>
+					<div class="grid-2">
+						<label>
+							Seniority
+							<select name="seniority">
+								<option value="">Prefer not to say</option>
+								for _, s := range service.Seniorities {
+									<option value={ s } selected?={ s == f.Seniority }>{ s }</option>
+								}
+							</select>
+						</label>
+						<label>Roles you want <input type="text" name="roles" value={ f.Roles } placeholder="staff engineer, tech lead"/></label>
+					</div>
+				</fieldset>
+				<fieldset class="join-section">
+					<legend>What you are looking for</legend>
+					<div class="grid-2">
+						<label>Location <input type="text" name="location" value={ f.Location } placeholder="Berlin"/></label>
+						<label>
+							Remote
+							<select name="remote_policy">
+								<option value="">No preference</option>
+								for _, s := range service.RemotePolicies {
+									<option value={ s } selected?={ s == f.RemotePolicy }>{ s }</option>
+								}
+							</select>
+						</label>
+					</div>
+					<div class="grid-2">
+						<label>Salary floor (yearly, your currency) <input type="number" name="salary_min" value={ f.SalaryMin } min="0" step="1000"/></label>
+						<label>Available from <input type="date" name="available_from" value={ f.AvailableFrom }/></label>
+					</div>
+				</fieldset>
+				<label class="consent">
+					if f.Consent {
+						<input type="checkbox" name="consent" value="1" checked required/>
+					} else {
+						<input type="checkbox" name="consent" value="1" required/>
+					}
+					<span>{ org.Name } may keep this profile and my résumé and contact me about roles that match it. I can update or withdraw at any time from the link they email me.</span>
+				</label>
+				<button type="submit" class="btn btn-primary">Join the network</button>
+			</form>
+		</div>
+	}
+}
+
+// joinedPage confirms the profile and points at the email.
+templ joinedPage(page layout.Page, org service.PublicOrg, email string) {
+	@layout.Base(page) {
+		<div class="join">
+			<h1>You are in</h1>
+			<p>Thank you. We emailed <strong>{ email }</strong> a link to your profile, where you can change what you are looking for or leave the network at any time.</p>
+			<p class="muted">When a company we work with is looking for someone like you, a recruiter from { org.Name } will get in touch about that role before anyone sees your details.</p>
+		</div>
+	}
+}
+
+// profilePage is the member's own page: standing, preferences, and the
+// two ways out and back in.
+templ profilePage(page layout.Page, v profileView) {
+	@layout.Base(page) {
+		<div class="join">
+			<header class="join-head">
+				<p class="page-kicker">Talent network</p>
+				<h1>Hi { v.Profile.Name }</h1>
+				if v.Profile.Withdrawn {
+					<p class="muted standing standing-off">You have left the network. Your details are kept so you can come back, but nobody is approached about you.</p>
+				} else {
+					<p class="muted standing standing-on">You are in the network since { v.Profile.ConsentAt.Format("2 January 2006") }. Companies see what you do and want, not who you are, until you accept an introduction.</p>
+				}
+			</header>
+			if v.Error != "" {
+				<p class="flash flash-error" role="alert">{ v.Error }</p>
+			}
+			<div class="profile-actions">
+				if v.Profile.Withdrawn {
+					<form method="post" action={ templ.SafeURL(v.Action + "/rejoin") }>
+						@layout.CSRFField(page.CSRF)
+						<button type="submit" class="btn btn-primary">Rejoin the network</button>
+					</form>
+				} else {
+					<form method="post" action={ templ.SafeURL(v.Action + "/withdraw") }>
+						@layout.CSRFField(page.CSRF)
+						<button type="submit" class="btn btn-ghost">Leave the network</button>
+					</form>
+				}
+			</div>
+			<form class="join-form" method="post" action={ templ.SafeURL(v.Action) } enctype="multipart/form-data">
+				@layout.CSRFField(page.CSRF)
+				<fieldset class="join-section">
+					<legend>Contact</legend>
+					<p class="muted">{ v.Profile.Email }</p>
+					<div class="grid-2">
+						<label>Phone <input type="text" name="phone" value={ v.Profile.Phone }/></label>
+						<label>Links <input type="text" name="links" value={ strings.Join(v.Profile.Links, ", ") }/></label>
+					</div>
+					<label>
+						if v.Profile.HasResume {
+							Replace your résumé
+						} else {
+							Add a résumé (PDF or Word .docx)
+						}
+						<input type="file" name="resume" accept=".pdf,.docx"/>
+					</label>
+				</fieldset>
+				<fieldset class="join-section">
+					<legend>What you do</legend>
+					<label>One line about you <input type="text" name="headline" value={ v.Profile.Headline } maxlength="500"/></label>
+					<label>Skills <input type="text" name="skills" value={ strings.Join(v.Profile.Skills, ", ") } required/></label>
+					<div class="grid-2">
+						<label>
+							Seniority
+							<select name="seniority">
+								<option value="">Prefer not to say</option>
+								for _, s := range service.Seniorities {
+									<option value={ s } selected?={ s == v.Profile.Seniority }>{ s }</option>
+								}
+							</select>
+						</label>
+						<label>Roles you want <input type="text" name="roles" value={ strings.Join(v.Profile.Roles, ", ") }/></label>
+					</div>
+				</fieldset>
+				<fieldset class="join-section">
+					<legend>What you are looking for</legend>
+					<div class="grid-2">
+						<label>Location <input type="text" name="location" value={ v.Profile.Location }/></label>
+						<label>
+							Remote
+							<select name="remote_policy">
+								<option value="">No preference</option>
+								for _, s := range service.RemotePolicies {
+									<option value={ s } selected?={ s == v.Profile.RemotePolicy }>{ s }</option>
+								}
+							</select>
+						</label>
+					</div>
+					<div class="grid-2">
+						<label>Salary floor <input type="number" name="salary_min" value={ salaryValue(v.Profile) } min="0" step="1000"/></label>
+						<label>Available from <input type="date" name="available_from" value={ dateValue(v.Profile) }/></label>
+					</div>
+				</fieldset>
+				<button type="submit" class="btn btn-primary">Save changes</button>
+			</form>
+		</div>
+	}
+}
+
+// opportunityPage is the one-click answer: the role, who it is with, and
+// yes or no.
+templ opportunityPage(page layout.Page, op service.Opportunity, action string) {
+	@layout.Base(page) {
+		<div class="join opportunity">
+			<header class="join-head">
+				<p class="page-kicker">{ op.OrgName } &middot; an opportunity for you</p>
+				<h1>{ op.JobTitle } at { op.ClientCompanyName }</h1>
+				<p class="muted">Hi { op.CandidateName }. { op.ClientCompanyName } asked { op.OrgName } to introduce them to someone with your background. They have not seen your name or details; that only happens if you say yes.</p>
+			</header>
+			if op.JobDescription != "" {
+				<section class="panel">
+					<div class="panel-head"><span class="panel-title">About the role</span></div>
+					<div class="panel-body prose">{ op.JobDescription }</div>
+				</section>
+			}
+			switch op.Status {
+				case service.IntroSent:
+					<form class="opportunity-answer" method="post" action={ templ.SafeURL(action) }>
+						@layout.CSRFField(page.CSRF)
+						<button type="submit" class="btn btn-primary" name="answer" value="yes">I&#39;m interested</button>
+						<button type="submit" class="btn btn-ghost" name="answer" value="no">No thanks</button>
+					</form>
+					<p class="muted">Saying yes puts you forward for the role and lets { op.ClientCompanyName } see your profile and résumé. Saying no closes this and nothing is shared.</p>
+				case service.IntroAccepted:
+					<section class="panel empty-card">
+						<h2>You are in the running</h2>
+						<p class="muted">{ op.ClientCompanyName } can now see your profile. The recruiter will be in touch about next steps.</p>
+					</section>
+				case service.IntroDeclined:
+					<section class="panel empty-card">
+						<h2>Thanks for letting us know</h2>
+						<p class="muted">Nothing was shared with { op.ClientCompanyName }. You stay in the network for other roles unless you leave it from your profile page.</p>
+					</section>
+				default:
+					<section class="panel empty-card">
+						<h2>This opportunity is closed</h2>
+						<p class="muted">The role is no longer open for introductions.</p>
+					</section>
+			}
+		</div>
+	}
+}
+
+templ notFoundPage(page layout.Page) {
+	@layout.Base(page) {
+		<div class="join">
+			<h1>Not found</h1>
+			<p>There is no talent network at this address.</p>
+		</div>
+	}
+}
+
+// listPage is the recruiter's overview: what companies asked for, with the
+// introductions waiting on the desk, and the network itself.
+templ listPage(page layout.Page, v listView) {
+	@layout.Base(page) {
+		<div class="page-head">
+			<div>
+				<p class="page-kicker">Talent network</p>
+				<h1>People who asked to be found</h1>
+				<p class="muted">Companies describe who they want and read anonymised matches; you make the introductions. Everyone here consented to be approached, or is a past applicant the desk rates highly.</p>
+			</div>
+		</div>
+		<h2 class="section-title">Requests from companies</h2>
+		if len(v.Requests) == 0 {
+			<p class="muted">No company has filed a request yet. They do it from the portal's Talent requests page or the API.</p>
+		} else {
+			<table>
+				<thead><tr><th>Request</th><th>Company</th><th>Skills</th><th>Introductions</th><th>Waiting</th><th>Status</th></tr></thead>
+				<tbody>
+					for _, r := range v.Requests {
+						<tr>
+							<td><a href={ templ.SafeURL(RequestPath(r.ID)) }>{ r.Title }</a></td>
+							<td class="muted">{ r.ClientCompanyName }</td>
+							<td class="muted">{ strings.Join(r.Skills, ", ") }</td>
+							<td class="num">{ strconv.Itoa(r.IntroCount) }</td>
+							<td class="num">
+								if r.WaitingCount > 0 {
+									<span class="tag tag-accent">{ strconv.Itoa(r.WaitingCount) } to send</span>
+								} else {
+									—
+								}
+							</td>
+							<td><span class={ "tag", requestTag(r) }>{ r.Status }</span></td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+		<h2 class="section-title">The network</h2>
+		<form class="search" method="get" action={ templ.SafeURL(AppPrefix) }>
+			<label>
+				Search names, headlines, skills, roles, and résumés
+				<input type="search" name="q" value={ v.Query } placeholder="go, Berlin, tech lead"/>
+			</label>
+			<button type="submit" class="btn btn-secondary">Search</button>
+		</form>
+		if len(v.Profiles) == 0 {
+			if v.Query == "" {
+				<p class="muted">Nobody has joined yet. The join page is public: <code>/talent/&lt;org slug&gt;</code>.</p>
+			} else {
+				<p class="muted">Nothing matches that search.</p>
+			}
+		} else {
+			<table>
+				<thead><tr><th>Member</th><th>Skills</th><th>Wants</th><th>Joined</th></tr></thead>
+				<tbody>
+					for _, m := range v.Profiles {
+						<tr>
+							<td>
+								<a href={ templ.SafeURL(ProfilePath(m.ID)) }>{ m.Name }</a>
+								if m.Headline != "" {
+									<span class="row-note">{ m.Headline }</span>
+								}
+							</td>
+							<td class="muted">{ strings.Join(m.Skills, ", ") }</td>
+							<td class="muted">{ wants(m) }</td>
+							<td class="muted num">{ m.ConsentAt.Format("2 Jan 2006") }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+	}
+}
+
+// requestPage is one request as the recruiter works it: the named
+// introductions and, for each one waiting, the job to send it for.
+templ requestPage(page layout.Page, d service.RecruiterRequest) {
+	@layout.Base(page) {
+		<p><a href={ templ.SafeURL(AppPrefix) }>&larr; Talent network</a></p>
+		<div class="page-head detail-head">
+			<div>
+				<p class="page-kicker">{ d.Request.ClientCompanyName } asked for</p>
+				<div class="detail-title">
+					<h1>{ d.Request.Title }</h1>
+					<span class={ "tag", requestTag(d.Request) }>{ d.Request.Status }</span>
+				</div>
+				<p class="muted">{ requestSummary(d.Request) }</p>
+				if d.Request.Note != "" {
+					<p class="muted">&ldquo;{ d.Request.Note }&rdquo;</p>
+				}
+			</div>
+		</div>
+		<h2 class="section-title">Introductions</h2>
+		if len(d.Intros) == 0 {
+			<p class="muted">The company has not asked to meet anyone yet.</p>
+		} else {
+			<table class="intro-table">
+				<thead><tr><th>Person</th><th>Fit</th><th>Status</th><th>Asked</th><th></th></tr></thead>
+				<tbody>
+					for _, i := range d.Intros {
+						<tr>
+							<td>
+								{ i.CandidateName }
+								<span class="row-note">{ i.CandidateEmail } &middot; { sourceLabel(i.Source) }</span>
+							</td>
+							<td class="num">{ percent(i.Score) }</td>
+							<td><span class={ "tag", introTag(i.Status) }>{ introLabel(i.Status) }</span></td>
+							<td class="muted num">{ i.RequestedAt.UTC().Format("2 Jan 15:04") }</td>
+							<td class="row-actions">
+								if i.Status == service.IntroRequested {
+									<form class="send-form" method="post" action={ templ.SafeURL(RequestPath(d.Request.ID) + "/introductions/" + i.ID.String() + "/send") }>
+										@layout.CSRFField(page.CSRF)
+										<select name="job_id" aria-label="Job">
+											for _, j := range d.Jobs {
+												<option value={ j.ID.String() } selected?={ j.ID == d.Request.JobID }>{ j.Title }</option>
+											}
+										</select>
+										<button type="submit" class="btn btn-primary">Send opportunity</button>
+									</form>
+									<form method="post" action={ templ.SafeURL(RequestPath(d.Request.ID) + "/introductions/" + i.ID.String() + "/dismiss") }>
+										@layout.CSRFField(page.CSRF)
+										<button type="submit" class="btn btn-ghost">Don&#39;t</button>
+									</form>
+								}
+								if i.Status == service.IntroAccepted {
+									<a href={ templ.SafeURL("/app/applications/" + i.ApplicationID.String()) }>Application</a>
+								}
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+			if len(d.Jobs) == 0 {
+				<p class="muted">{ d.Request.ClientCompanyName } has no open job to send an opportunity for. Open one first.</p>
+			}
+		}
+	}
+}
+
+// memberPage is one member as the recruiter reads them.
+templ memberPage(page layout.Page, m service.TalentProfile) {
+	@layout.Base(page) {
+		<p><a href={ templ.SafeURL(AppPrefix) }>&larr; Talent network</a></p>
+		<div class="page-head">
+			<div>
+				<p class="page-kicker">Talent network member</p>
+				<h1>{ m.Name }</h1>
+				<p class="muted">{ m.Email }
+					if m.Phone != "" {
+						&middot; { m.Phone }
+					}
+				</p>
+			</div>
+		</div>
+		<div class="grid-2">
+			<section class="panel">
+				<div class="panel-head"><span class="panel-title">What they do</span></div>
+				<div class="panel-body">
+					if m.Headline != "" {
+						<p>{ m.Headline }</p>
+					}
+					<p><strong>Skills:</strong> { strings.Join(m.Skills, ", ") }</p>
+					if len(m.Roles) > 0 {
+						<p><strong>Roles wanted:</strong> { strings.Join(m.Roles, ", ") }</p>
+					}
+					if m.Seniority != "" {
+						<p><strong>Seniority:</strong> { m.Seniority }</p>
+					}
+					if len(m.Links) > 0 {
+						<ul>
+							for _, l := range m.Links {
+								<li><a href={ templ.URL(l) } rel="noopener">{ l }</a></li>
+							}
+						</ul>
+					}
+					<p class="muted">
+						if m.HasResume {
+							Résumé on file; see the candidate record.
+						} else {
+							No résumé sent.
+						}
+						<a href={ templ.SafeURL("/app/candidates/" + m.CandidateID.String()) }>Candidate record</a>
+					</p>
+				</div>
+			</section>
+			<section class="panel">
+				<div class="panel-head"><span class="panel-title">What they want</span></div>
+				<div class="panel-body">
+					<p><strong>Location:</strong> { orDash(m.Location) } &middot; <strong>Remote:</strong> { orDash(m.RemotePolicy) }</p>
+					if m.SalaryMin > 0 {
+						<p><strong>Salary floor:</strong> { strconv.Itoa(m.SalaryMin) }</p>
+					}
+					if m.AvailableFrom != nil {
+						<p><strong>Available from:</strong> { m.AvailableFrom.Format("2 January 2006") }</p>
+					}
+					if m.Withdrawn {
+						<p class="tag tag-neutral">Withdrew from the network</p>
+					} else {
+						<p class="muted">Consented on { m.ConsentAt.Format("2 January 2006") }</p>
+					}
+				</div>
+			</section>
+		</div>
+	}
+}
+
+func salaryValue(p service.TalentProfile) string {
+	if p.SalaryMin == 0 {
+		return ""
+	}
+	return strconv.Itoa(p.SalaryMin)
+}
+
+func dateValue(p service.TalentProfile) string {
+	if p.AvailableFrom == nil {
+		return ""
+	}
+	return p.AvailableFrom.Format("2006-01-02")
+}
+
+func requestTag(r service.TalentRequest) string {
+	if r.Open() {
+		return "tag-accent"
+	}
+	return "tag-neutral"
+}
+
+func requestSummary(r service.TalentRequest) string {
+	parts := []string{strings.Join(r.Skills, ", ")}
+	for _, p := range []string{r.Seniority, r.Location, r.RemotePolicy} {
+		if p != "" {
+			parts = append(parts, p)
+		}
+	}
+	if r.JobTitle != "" {
+		parts = append(parts, "joins "+r.JobTitle)
+	}
+	return strings.Join(parts, " · ")
+}
+
+func wants(m service.TalentProfile) string {
+	parts := []string{}
+	for _, p := range []string{m.Seniority, m.Location, m.RemotePolicy} {
+		if p != "" {
+			parts = append(parts, p)
+		}
+	}
+	if len(m.Roles) > 0 {
+		parts = append(parts, strings.Join(m.Roles, ", "))
+	}
+	if len(parts) == 0 {
+		return "—"
+	}
+	return strings.Join(parts, " · ")
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "—"
+	}
+	return s
+}
+
+func percent(f float64) string { return strconv.Itoa(int(f*100+0.5)) + "%" }
+
+func sourceLabel(source string) string {
+	if source == "pool" {
+		return "past applicant"
+	}
+	return "talent network"
+}
+
+func introTag(status string) string {
+	switch status {
+	case service.IntroAccepted:
+		return "tag-accent"
+	case service.IntroDeclined, service.IntroDismissed:
+		return "tag-neutral"
+	}
+	return "tag-outline"
+}
+
+func introLabel(status string) string {
+	switch status {
+	case service.IntroRequested:
+		return "To send"
+	case service.IntroSent:
+		return "Sent"
+	case service.IntroAccepted:
+		return "Accepted"
+	case service.IntroDeclined:
+		return "Declined"
+	case service.IntroDismissed:
+		return "Not made"
+	}
+	return status
+}

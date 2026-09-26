@@ -19,7 +19,7 @@ type APIToken struct {
 	Prefix    string     `json:"prefix" doc:"Leading characters of the secret, to tell tokens apart"`
 	UserID    uuid.UUID  `json:"user_id"`
 	UserEmail string     `json:"user_email,omitempty"`
-	IsClient  bool       `json:"is_client" doc:"A client user's token, which reaches only the portal reads"`
+	IsClient  bool       `json:"is_client" doc:"A client user's token, which reaches only the company surface under /portal"`
 	CreatedAt time.Time  `json:"created_at"`
 	ExpiresAt *time.Time `json:"expires_at,omitempty" doc:"Absent when the token does not expire"`
 }

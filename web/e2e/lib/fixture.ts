@@ -7,6 +7,8 @@ export interface Fixture {
   baseURL: string;
   adminEmail: string;
   adminPassword: string;
+  /** The org's URL slug: the public talent-network page lives under it. */
+  orgSlug: string;
   clientEmail: string;
   clientPassword: string;
   apiToken: string;

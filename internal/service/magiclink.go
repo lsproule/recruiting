@@ -39,7 +39,7 @@ func NewMagicLinkService(st *store.Store) *MagicLinkService { return &MagicLinkS
 // and the link id (for revocation).
 func (m *MagicLinkService) Issue(ctx context.Context, p Principal, purpose string, subject uuid.UUID, ttl time.Duration) (string, uuid.UUID, error) {
 	switch purpose {
-	case LinkApply, LinkBook, LinkAssessment, LinkSprint:
+	case LinkApply, LinkBook, LinkAssessment, LinkSprint, LinkProfile, LinkOpportunity:
 	default:
 		return "", uuid.Nil, fmt.Errorf("issue link: bad purpose %q", purpose)
 	}

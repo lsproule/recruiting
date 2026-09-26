@@ -38,6 +38,7 @@ var (
 	ErrNotMigrated     = errors.New("store: schema missing; run migrations first")
 	ErrNoLookup        = errors.New("store: lookup has neither token nor email")
 	ErrNoPublicJob     = errors.New("store: public job lookup needs an org slug and a job slug")
+	ErrNoPublicOrg     = errors.New("store: public org lookup needs an org slug")
 	ErrOwnerRole       = errors.New("store: connection role owns the schema; RLS would be bypassed, connect as app_rw")
 )
 
@@ -152,6 +153,22 @@ func (s *Store) WithPublicJobTx(ctx context.Context, orgSlug, jobSlug string, fn
 			if _, err := tx.Exec(ctx, `select set_config($1, $2, true)`, setting.name, setting.value); err != nil {
 				return err
 			}
+		}
+		return fn(ctx, &Tx{Tx: tx, Q: db.New(tx)})
+	})
+}
+
+// WithPublicOrgTx runs fn for an unauthenticated page that knows only an org
+// slug: the talent-network join page. Only the org answering to the slug is
+// visible and every other table stays empty; the caller re-enters through
+// WithTx once it has the org's id.
+func (s *Store) WithPublicOrgTx(ctx context.Context, orgSlug string, fn func(ctx context.Context, tx *Tx) error) error {
+	if orgSlug == "" {
+		return ErrNoPublicOrg
+	}
+	return runTx(ctx, s.pool, func(ctx context.Context, tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `select set_config('app.public_org_slug', $1, true)`, orgSlug); err != nil {
+			return err
 		}
 		return fn(ctx, &Tx{Tx: tx, Q: db.New(tx)})
 	})

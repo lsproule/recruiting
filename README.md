@@ -163,8 +163,9 @@ consent screen with a camera, a fullscreen exit, the client's view of a
 shortlist packet, the process library and stage editor, a video interview
 room end to end (booking, both sides joining, a shared screen, the shared
 editor, a python run, the scorecard), a screening sprint rotating three
-candidates past two interviewers on twenty-second rounds, and a take-home
-sitting. It needs the Compose stack (`make dev-up`), the sandbox images
+candidates past two interviewers on twenty-second rounds, a take-home
+sitting, and the talent network from the public join page through the
+company's API to an accepted introduction. It needs the Compose stack (`make dev-up`), the sandbox images
 (`make runner-images`), and npm. When no object store answers at
 `BLOB_ENDPOINT`, the runner starts `tools/fakes3`, an in-memory S3 stand-in
 for development hosts that cannot run MinIO, on a port of its own.
@@ -246,6 +247,31 @@ stage needs at least one rating unless a recruiter overrides it with a
 reason. An unrated conversation lands in the work queue after five minutes.
 The API covers the whole lifecycle under `/api/v1/sprints`.
 
+## The company API and the talent network
+
+Everything a client company sees in its portal is also served as JSON
+under `/api/v1/portal`, for the company's own integrations: its jobs, the
+applications released to it with scores and assessment outcomes, the
+shortlist packets, the three actions the portal offers, a company-wide
+application list with paging, and a change feed (`GET /portal/events`)
+that pages by a `since` cursor. A client user issues tokens for themselves
+on the portal's *Developer* page or through `POST /portal/tokens`; a token
+acts as that user and reaches the company surface and nothing else.
+`docs/api.md` is the narrative guide; `/api/v1/docs` the reference.
+
+The talent network is the platform as data broker. People join from the
+public page `/talent/{org-slug}` with their skills, preferences, résumé,
+and explicit consent to be approached; they manage or withdraw from a
+link mailed to them. A company describes who it wants (a talent request,
+in the portal or through the API) and reads anonymised matches ranked on
+skills, seniority, location and remote fit, and résumé text against the
+network and the org's own talent pool: what people do and want, never who
+they are. The company asks for an introduction; the recruiter (from
+`/app/talent`, or the work queue's *Introduction* rule) sends the person
+the opportunity by email; the person answers with one click. A yes opens an
+application on the company's job, released to it at once, and shows up in
+the portal and the change feed. A no shares nothing.
+
 ## Take-home assessments
 
 An assessment has a format: `timed` is the proctored sitting; `take_home`
@@ -310,4 +336,5 @@ other query in this codebase must.
 | `internal/observe` | Request-scoped logging and the Prometheus metrics registry every mode's `/metrics` serves |
 | `db/migrations`, `db/queries` | goose migrations and sqlc queries |
 | `web/static/room` | The live-room island: WebRTC mesh, shared editor, sprint clock |
+| `docs/api.md` | The narrative API guide: authentication, the two surfaces, the change feed, the talent network |
 | `tools/fakes3` | In-memory S3 stand-in for development hosts without MinIO |

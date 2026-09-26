@@ -15,12 +15,14 @@ type Querier interface {
 	AddOrgUserRole(ctx context.Context, arg AddOrgUserRoleParams) error
 	AddSprintCandidate(ctx context.Context, arg AddSprintCandidateParams) (SprintCandidate, error)
 	AddSprintInterviewer(ctx context.Context, arg AddSprintInterviewerParams) error
+	AnswerTalentIntro(ctx context.Context, arg AnswerTalentIntroParams) (int64, error)
 	AppendAttemptEvent(ctx context.Context, arg AppendAttemptEventParams) error
 	// The candidate's best assessment score per problem tag, across every
 	// application they have. Derived, so re-running an upsert cannot drift.
 	BestAssessmentScoresForCandidate(ctx context.Context, candidateID uuid.UUID) ([]BestAssessmentScoresForCandidateRow, error)
 	CloseApplication(ctx context.Context, arg CloseApplicationParams) (Application, error)
 	CloseAttempt(ctx context.Context, arg CloseAttemptParams) (Attempt, error)
+	CloseTalentRequest(ctx context.Context, id uuid.UUID) (int64, error)
 	CountApplicationsInStage(ctx context.Context, stageID uuid.UUID) (int64, error)
 	CountAssessmentProblems(ctx context.Context, orgID uuid.UUID) ([]CountAssessmentProblemsRow, error)
 	CountAttemptEvents(ctx context.Context, attemptID uuid.UUID) (int64, error)
@@ -33,6 +35,7 @@ type Querier interface {
 	// The sidebar's non-queue counts, in one round trip.
 	CountNavSubjects(ctx context.Context, orgID uuid.UUID) (CountNavSubjectsRow, error)
 	CountPendingSubmissions(ctx context.Context, arg CountPendingSubmissionsParams) (int64, error)
+	CountTalentIntroWaiting(ctx context.Context, orgID uuid.UUID) (int64, error)
 	CreateAPIToken(ctx context.Context, arg CreateAPITokenParams) (ApiToken, error)
 	CreateApplication(ctx context.Context, arg CreateApplicationParams) (Application, error)
 	CreateApplicationEvent(ctx context.Context, arg CreateApplicationEventParams) (ApplicationEvent, error)
@@ -75,6 +78,8 @@ type Querier interface {
 	CreateSprintPairing(ctx context.Context, arg CreateSprintPairingParams) (SprintPairing, error)
 	CreateStage(ctx context.Context, arg CreateStageParams) (Stage, error)
 	CreateSubmission(ctx context.Context, arg CreateSubmissionParams) (Submission, error)
+	CreateTalentIntro(ctx context.Context, arg CreateTalentIntroParams) (TalentIntro, error)
+	CreateTalentRequest(ctx context.Context, arg CreateTalentRequestParams) (TalentRequest, error)
 	CreateTestCase(ctx context.Context, arg CreateTestCaseParams) (TestCase, error)
 	DeleteAssessment(ctx context.Context, arg DeleteAssessmentParams) (int64, error)
 	DeleteAssessmentProblems(ctx context.Context, assessmentID uuid.UUID) error
@@ -101,6 +106,7 @@ type Querier interface {
 	DeleteSprintPairings(ctx context.Context, sprintID uuid.UUID) error
 	DeleteStage(ctx context.Context, id uuid.UUID) (int64, error)
 	DeleteTestCases(ctx context.Context, problemID uuid.UUID) error
+	DismissTalentIntro(ctx context.Context, id uuid.UUID) (int64, error)
 	// A revoked invite the candidate never opened: there is no work to close
 	// over, so it is marked expired where it stands.
 	ExpireInvitedAttempt(ctx context.Context, arg ExpireInvitedAttemptParams) (Attempt, error)
@@ -174,14 +180,20 @@ type Querier interface {
 	GetStage(ctx context.Context, id uuid.UUID) (Stage, error)
 	GetSubmission(ctx context.Context, arg GetSubmissionParams) (Submission, error)
 	GetSubmissionForUpdate(ctx context.Context, id uuid.UUID) (Submission, error)
+	GetTalentIntro(ctx context.Context, id uuid.UUID) (GetTalentIntroRow, error)
 	GetTalentPoolEntry(ctx context.Context, id uuid.UUID) (GetTalentPoolEntryRow, error)
 	GetTalentPoolEntryForCandidate(ctx context.Context, arg GetTalentPoolEntryForCandidateParams) (TalentPoolEntry, error)
+	GetTalentProfile(ctx context.Context, id uuid.UUID) (GetTalentProfileRow, error)
+	GetTalentProfileByCandidate(ctx context.Context, candidateID uuid.UUID) (TalentProfile, error)
+	GetTalentRequest(ctx context.Context, id uuid.UUID) (GetTalentRequestRow, error)
 	HasScorecardForStage(ctx context.Context, arg HasScorecardForStageParams) (bool, error)
 	// Whether any interviewer rated the application in a sprint of this stage.
 	HasSprintRatingForStage(ctx context.Context, arg HasSprintRatingForStageParams) (bool, error)
 	HasVerdictForStage(ctx context.Context, arg HasVerdictForStageParams) (bool, error)
 	LatestScorecardForCandidate(ctx context.Context, candidateID uuid.UUID) (LatestScorecardForCandidateRow, error)
 	ListAPITokens(ctx context.Context, orgID uuid.UUID) ([]ListAPITokensRow, error)
+	// A client user's own live tokens, for the portal's developer page.
+	ListAPITokensByClientUser(ctx context.Context, clientUserID uuid.NullUUID) ([]ApiToken, error)
 	// A snooze hides the item from the one user who set it, until it lapses.
 	ListActiveQueueSnoozes(ctx context.Context, userID uuid.UUID) ([]ListActiveQueueSnoozesRow, error)
 	ListApplicationEvents(ctx context.Context, applicationID uuid.UUID) ([]ApplicationEvent, error)
@@ -204,12 +216,20 @@ type Querier interface {
 	ListAvailabilityExceptions(ctx context.Context, arg ListAvailabilityExceptionsParams) ([]AvailabilityException, error)
 	ListAvailabilityRules(ctx context.Context, vetterID uuid.UUID) ([]AvailabilityRule, error)
 	ListCandidateApplications(ctx context.Context, candidateID uuid.UUID) ([]ListCandidateApplicationsRow, error)
+	// People already in a company's pipeline, on any of its jobs: a match the
+	// company has, or has had, is no introduction.
+	ListCandidateIDsAtCompany(ctx context.Context, clientCompanyID uuid.UUID) ([]uuid.UUID, error)
 	ListClientAccountJobs(ctx context.Context, clientCompanyID uuid.UUID) ([]ListClientAccountJobsRow, error)
 	// The recruiter's book of accounts: one client company per row with the
 	// numbers the desk is judged on. Every count is a correlated subquery so a
 	// company with no jobs still reports zeroes rather than dropping out.
 	ListClientAccounts(ctx context.Context, arg ListClientAccountsParams) ([]ListClientAccountsRow, error)
 	ListClientCompanies(ctx context.Context, orgID uuid.UUID) ([]ClientCompany, error)
+	// The company's change feed: every event on a released application from
+	// the moment it was released, in sequence order, after a cursor. The
+	// sequence is global and monotonic, so a caller that remembers the last
+	// seq it saw reads exactly what happened since.
+	ListClientEvents(ctx context.Context, arg ListClientEventsParams) ([]ListClientEventsRow, error)
 	// The company's jobs with how many applications are released on each.
 	ListClientJobs(ctx context.Context, clientCompanyID uuid.UUID) ([]ListClientJobsRow, error)
 	// When each candidate was last rejected by one client company, read off the
@@ -238,6 +258,7 @@ type Querier interface {
 	ListJobApplicationCards(ctx context.Context, jobID uuid.UUID) ([]ListJobApplicationCardsRow, error)
 	ListJobCandidateIDs(ctx context.Context, jobID uuid.UUID) ([]uuid.UUID, error)
 	ListJobs(ctx context.Context, orgID uuid.UUID) ([]Job, error)
+	ListOpenJobsByCompany(ctx context.Context, clientCompanyID uuid.UUID) ([]Job, error)
 	ListOrgSettings(ctx context.Context, orgID uuid.UUID) ([]OrgSetting, error)
 	ListOrgUserRoles(ctx context.Context, orgUserID uuid.UUID) ([]string, error)
 	ListOrgUserRolesForOrg(ctx context.Context, orgID uuid.UUID) ([]ListOrgUserRolesForOrgRow, error)
@@ -274,6 +295,9 @@ type Querier interface {
 	// on sprints that still stand.
 	ListQueueSprintRatingsMissing(ctx context.Context) ([]ListQueueSprintRatingsMissingRow, error)
 	ListReleasedApplications(ctx context.Context, jobID uuid.UUID) ([]ListReleasedApplicationsRow, error)
+	// Every application released to the company, across its jobs, for the API's
+	// collection read. Filters are optional; a zero uuid or empty string is "any".
+	ListReleasedApplicationsByCompany(ctx context.Context, arg ListReleasedApplicationsByCompanyParams) ([]ListReleasedApplicationsByCompanyRow, error)
 	ListResumesByCandidate(ctx context.Context, candidateID uuid.UUID) ([]Resume, error)
 	ListScorecardsForApplication(ctx context.Context, applicationID uuid.UUID) ([]ListScorecardsForApplicationRow, error)
 	ListSentShortlistPacketsByCompany(ctx context.Context, clientCompanyID uuid.UUID) ([]ShortlistPacket, error)
@@ -303,10 +327,29 @@ type Querier interface {
 	ListStalePreviewAttempts(ctx context.Context, createdAt pgtype.Timestamptz) ([]Attempt, error)
 	ListStalePreviewOrgs(ctx context.Context, before pgtype.Timestamptz) ([]uuid.UUID, error)
 	ListSubmissions(ctx context.Context, attemptID uuid.UUID) ([]Submission, error)
+	ListTalentIntrosByRequest(ctx context.Context, requestID uuid.UUID) ([]ListTalentIntrosByRequestRow, error)
+	// Introductions a company asked for that no recruiter has sent yet: the
+	// work-queue rule.
+	ListTalentIntrosWaiting(ctx context.Context) ([]ListTalentIntrosWaitingRow, error)
 	ListTalentPoolEntries(ctx context.Context, orgID uuid.UUID) ([]TalentPoolEntry, error)
 	// Every live entry the ranker scores, with only the fields the formula and
 	// the panel read. The browse list is paged; ranking must see the whole pool.
 	ListTalentPoolEntriesForRanking(ctx context.Context, arg ListTalentPoolEntriesForRankingParams) ([]ListTalentPoolEntriesForRankingRow, error)
+	// The org's pool entries as the matcher sees them: the same terms, without
+	// the network's preferences. Their people applied to the org before, so a
+	// match here is an introduction the recruiter makes, not a promise made.
+	ListTalentPoolForMatching(ctx context.Context, arg ListTalentPoolForMatchingParams) ([]ListTalentPoolForMatchingRow, error)
+	// The recruiter's view of the network, newest first, narrowed by a search
+	// over names, headlines, skills, roles, and résumé text.
+	ListTalentProfiles(ctx context.Context, arg ListTalentProfilesParams) ([]ListTalentProfilesRow, error)
+	// Every consenting profile with the fields the matcher scores, plus how
+	// well the résumé and name index answer the request's terms. The rank is
+	// zero when the request has no terms or the text says nothing about them.
+	ListTalentProfilesForMatching(ctx context.Context, arg ListTalentProfilesForMatchingParams) ([]ListTalentProfilesForMatchingRow, error)
+	// The recruiter's list: every company's requests, open ones first, with
+	// how many introductions are waiting to be sent on each.
+	ListTalentRequests(ctx context.Context, orgID uuid.UUID) ([]ListTalentRequestsRow, error)
+	ListTalentRequestsByCompany(ctx context.Context, clientCompanyID uuid.UUID) ([]ListTalentRequestsByCompanyRow, error)
 	ListTestCases(ctx context.Context, problemID uuid.UUID) ([]TestCase, error)
 	// The interviews waiting on the signed-in vetter, with their own card if they
 	// have already filed one.
@@ -328,9 +371,11 @@ type Querier interface {
 	MarkPasswordResetsUsedForClientUser(ctx context.Context, clientUserID uuid.NullUUID) error
 	MarkPasswordResetsUsedForOrgUser(ctx context.Context, orgUserID uuid.NullUUID) error
 	MarkShortlistPacketSent(ctx context.Context, arg MarkShortlistPacketSentParams) (ShortlistPacket, error)
+	MarkTalentIntroSent(ctx context.Context, arg MarkTalentIntroSentParams) (int64, error)
 	// Conditional on the stage the mover saw, so a move decided on a stale read
 	// updates nothing rather than overwriting a concurrent move.
 	MoveApplication(ctx context.Context, arg MoveApplicationParams) (Application, error)
+	RejoinTalentProfile(ctx context.Context, id uuid.UUID) (int64, error)
 	RemoveTalentPoolEntry(ctx context.Context, id uuid.UUID) (int64, error)
 	// A removal stands until a recruiter asks for the person back; the automatic
 	// sources refresh the aggregates of a removed entry without reviving it.
@@ -340,6 +385,7 @@ type Querier interface {
 	// recruiter flagged, or whose application they marked high quality, stays.
 	RetractTalentPoolEntryFromReview(ctx context.Context, arg RetractTalentPoolEntryFromReviewParams) (int64, error)
 	RevokeAPIToken(ctx context.Context, id uuid.UUID) (int64, error)
+	RevokeAPITokenOfClientUser(ctx context.Context, arg RevokeAPITokenOfClientUserParams) (int64, error)
 	RevokeBookLinks(ctx context.Context, subjectID uuid.UUID) error
 	RevokeMagicLink(ctx context.Context, id uuid.UUID) error
 	RevokeSprintLinks(ctx context.Context, sprintID uuid.UUID) error
@@ -394,6 +440,7 @@ type Querier interface {
 	UpdateSprintDraft(ctx context.Context, arg UpdateSprintDraftParams) (Sprint, error)
 	UpdateStage(ctx context.Context, arg UpdateStageParams) (Stage, error)
 	UpdateTalentPoolEntry(ctx context.Context, arg UpdateTalentPoolEntryParams) (TalentPoolEntry, error)
+	UpdateTalentProfile(ctx context.Context, arg UpdateTalentProfileParams) (TalentProfile, error)
 	// The beat is the session's own counter, so a frame uploaded twice replaces
 	// the first rather than doubling the row and orphaning its object.
 	UpsertAttemptSnapshot(ctx context.Context, arg UpsertAttemptSnapshotParams) (AttemptSnapshot, error)
@@ -421,6 +468,14 @@ type Querier interface {
 	// One entry per candidate: a second pool-worthy event updates the aggregate
 	// the caller merged rather than filing another entry.
 	UpsertTalentPoolEntry(ctx context.Context, arg UpsertTalentPoolEntryParams) (TalentPoolEntry, error)
+	// The talent network: profiles people keep with the org, the requests
+	// companies file against it, and the introductions between the two. Every
+	// query runs org-scoped; a client's reads go through the service, which
+	// anonymises before anything reaches the company.
+	// One profile per candidate. A returning member's submission replaces their
+	// details, renews consent, and reverses a withdrawal.
+	UpsertTalentProfile(ctx context.Context, arg UpsertTalentProfileParams) (TalentProfile, error)
+	WithdrawTalentProfile(ctx context.Context, id uuid.UUID) (int64, error)
 }
 
 var _ Querier = (*Queries)(nil)

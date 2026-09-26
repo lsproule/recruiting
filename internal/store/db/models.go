@@ -569,6 +569,22 @@ type Submission struct {
 	UpdatedAt pgtype.Timestamptz
 }
 
+type TalentIntro struct {
+	ID            uuid.UUID
+	OrgID         uuid.UUID
+	RequestID     uuid.UUID
+	CandidateID   uuid.UUID
+	Source        string
+	Score         float32
+	Status        string
+	JobID         uuid.NullUUID
+	ApplicationID uuid.NullUUID
+	SentBy        uuid.NullUUID
+	RequestedAt   pgtype.Timestamptz
+	SentAt        pgtype.Timestamptz
+	AnsweredAt    pgtype.Timestamptz
+}
+
 type TalentPoolEntry struct {
 	ID               uuid.UUID
 	OrgID            uuid.UUID
@@ -585,6 +601,41 @@ type TalentPoolEntry struct {
 	UpdatedAt        pgtype.Timestamptz
 	RemovedAt        pgtype.Timestamptz
 	Source           string
+}
+
+type TalentProfile struct {
+	ID            uuid.UUID
+	OrgID         uuid.UUID
+	CandidateID   uuid.UUID
+	Headline      string
+	Skills        []string
+	Seniority     *string
+	Roles         []string
+	Location      *string
+	RemotePolicy  *string
+	SalaryMin     *int32
+	AvailableFrom pgtype.Date
+	ConsentAt     pgtype.Timestamptz
+	WithdrawnAt   pgtype.Timestamptz
+	CreatedAt     pgtype.Timestamptz
+	UpdatedAt     pgtype.Timestamptz
+}
+
+type TalentRequest struct {
+	ID              uuid.UUID
+	OrgID           uuid.UUID
+	ClientCompanyID uuid.UUID
+	ClientUserID    uuid.NullUUID
+	JobID           uuid.NullUUID
+	Title           string
+	Skills          []string
+	Seniority       *string
+	Location        *string
+	RemotePolicy    *string
+	Note            string
+	Status          string
+	CreatedAt       pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
 }
 
 type TestCase struct {

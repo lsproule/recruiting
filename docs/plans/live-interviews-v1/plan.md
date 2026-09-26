@@ -80,6 +80,17 @@ each.
 
 ## Phase 2: Company API and talent network
 
+Status: built. Migration `00031_talent_network.sql`, `db/queries/talent.sql`,
+`internal/domain/talent.go`, `internal/service/talent.go` (+ portal
+`Applications`/`Events`, token `IssueOwn`/`ListOwn`/`RevokeOwn`),
+`internal/api/{portal,talent}.go`, `internal/web/talent` (public join and
+profile pages, the opportunity answer, the recruiter's screens), the client
+portal's *Talent requests* and *Developer* pages, `docs/api.md`, and
+`web/e2e/tests/talent.spec.ts`. Resolved while building: matching also
+covers the org's talent pool (with the recruiter and the person as the two
+consent gates), an accepted introduction is released to the company at
+once, and only client-written reasons ride the change feed.
+
 Added mid-plan at the user's request: the platform also acts as a data
 broker. Companies consume their candidates through a documented API, and
 people who have not applied to anything can join the org's talent network,

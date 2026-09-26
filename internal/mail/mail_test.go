@@ -32,6 +32,8 @@ var sampleData = map[string]any{
 	"Conversations":     6,
 	"Minutes":           5,
 	"LobbyURL":          "https://example.test/sprint/abc",
+	"ProfileURL":        "https://example.test/talent/profile/abc",
+	"OpportunityURL":    "https://example.test/opportunity/abc",
 }
 
 // Every template the specification lists must exist with a subject and both
@@ -55,6 +57,8 @@ func TestRenderEveryTemplate(t *testing.T) {
 		mail.TemplateClientShortlist,
 		mail.TemplatePasswordReset,
 		mail.TemplateSprintInvite,
+		mail.TemplateTalentWelcome,
+		mail.TemplateOpportunity,
 	}
 	if got := r.Names(); len(got) != len(want) {
 		t.Errorf("Names() = %v, want the %d specified templates", got, len(want))

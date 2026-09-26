@@ -305,6 +305,63 @@ principals (magic links) run in the org scope like today's booking page.
 Templates `sprint_invite` (subject, text, html). `booking_confirmation`
 gains `JoinNote`.
 
+## Phase 2: the company API and the talent network
+
+Added at the user's request after the first phase: a well-documented API
+for companies to consume their candidates, and the platform as a data
+broker between companies and people who asked to be found.
+
+### Company API
+
+- The company surface is everything under `/api/v1/portal`, reached with a
+  token a client user issues for themselves (`POST /portal/tokens`, the
+  portal's *Developer* page) or an admin issues for them. It mirrors the
+  portal's pages and adds what an integration needs: `GET
+  /portal/applications` (company-wide, paged, filterable by job, status,
+  and `updated_since`), `GET /portal/events?since=` (a change feed on
+  every released application from the moment of release, cursor-paged by
+  the global event sequence), the shortlist packet, and the three actions.
+- What never reaches a company token: unreleased applications, a blind
+  candidate's identity or résumé, interviewer notes, integrity signals,
+  and the org's move reasons (only client-written reasons ride the feed).
+- Every operation carries a description; the document's info text and tag
+  descriptions orient a reader; `docs/api.md` is the narrative guide with
+  worked requests.
+
+### Talent network
+
+- `talent_profile`: one per candidate, with headline, skills, seniority,
+  roles, location, remote policy, salary floor, availability, `consent_at`,
+  `withdrawn_at`. Joining from `/talent/{org-slug}` creates or finds the
+  candidate by email (the public form never renames anyone), stores the
+  résumé, writes the profile with fresh consent, and mails a `profile`
+  link (180 days) to the member's own page, where they update, withdraw,
+  or rejoin. Withdrawing keeps the row and takes it out of every match.
+- Matching (`domain.RankTalent`): skills Jaccard (0.45), seniority fit
+  (0.2), location and remote fit read from both sides' wishes (0.15), and
+  the full-text rank of the request's skills against the candidate's
+  résumé and name index, normalised against the best in the batch (0.2).
+  Two sources: consenting profiles, and the org's talent pool; a person
+  present in both keeps their better entry. People already in the
+  company's pipeline are excluded. Threshold 0.15, at most 25 matches.
+- `talent_request` (company, optional job, title, skills, seniority,
+  location, remote, note, status) and `talent_intro` (request, candidate,
+  source, score, status `requested|sent|accepted|declined|dismissed`, job,
+  application). A company reads matches anonymised — no name, contact, or
+  résumé; the handle is the profile or pool entry id — and asks for an
+  introduction. The recruiter sees the person named on `/app/talent`,
+  picks one of the company's open jobs, and sends the `opportunity` email
+  with a 30-day link. The candidate answers on `/opportunity/{token}`: yes
+  opens an application on the job's first stage, released at once with a
+  `released` event and the usual client notice; no closes it with nothing
+  shared. The work queue's *Introduction* rule lists requested intros,
+  late after 48 hours.
+- RLS: `talent_profile` and `talent_intro` are org-internal (a company
+  reads its intros through a `client_read` policy joined to its own
+  requests); `talent_request` has a `client_own` policy on the company.
+  Matching runs in the org scope after the request is read in the
+  client's scope, which proves it is theirs.
+
 ## Failure and Edge Cases
 
 - A participant's browser refuses the camera: they join with audio only or
@@ -370,6 +427,14 @@ gains `JoinNote`.
 5. A take-home assessment shows the deadline rather than a countdown and
    survives closing the tab.
 6. Every new table refuses cross-org reads at the RLS level.
+7. A company token reads its released applications and its change feed,
+   never an unreleased application or another company's; it issues and
+   revokes its own tokens and cannot reach the org surface.
+8. A person joins the network from the public page and gets a working
+   profile link; a company's request finds them anonymised through the
+   API; the recruiter sends the opportunity from the work queue; the
+   person's yes puts a released application in the company's portal and
+   feed, with their name only now visible.
 
 ## Resolved Decisions
 

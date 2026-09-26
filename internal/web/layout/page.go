@@ -104,6 +104,7 @@ func AppMenu(p service.Principal, current string) []NavItem {
 			NavItem{Key: "processes", Label: "Hiring processes", Href: "/app/processes"},
 			NavItem{Key: "sprints", Label: "Sprints", Href: "/app/sprints"},
 			NavItem{Key: "pool", Label: "Talent pool", Href: "/app/pool"},
+			NavItem{Key: "talent", Label: "Talent network", Href: "/app/talent"},
 		)
 	}
 	if p.HasRole(service.RoleVetter) {
@@ -170,5 +171,9 @@ const htmxConfig = `{"responseHandling":[{"code":"204","swap":false},{"code":"[2
 // ClientNav is the client-portal navigation, with the entry matching current
 // marked active.
 func ClientNav(current string) []NavItem {
-	return markActive([]NavItem{{Key: "jobs", Label: "Jobs", Href: "/client/jobs"}}, current)
+	return markActive([]NavItem{
+		{Key: "jobs", Label: "Jobs", Href: "/client/jobs"},
+		{Key: "talent", Label: "Talent requests", Href: "/client/talent"},
+		{Key: "developer", Label: "Developer", Href: "/client/developer"},
+	}, current)
 }

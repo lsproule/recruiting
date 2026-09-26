@@ -32,10 +32,13 @@ const (
 	// QueueSprintRating: a sprint conversation ended and its interviewer
 	// never rated the candidate.
 	QueueSprintRating QueueKind = "sprint_rating"
+	// QueueTalentIntro is a company that asked to meet a match and a
+	// recruiter who has not yet sent the person the opportunity.
+	QueueTalentIntro QueueKind = "talent_intro"
 )
 
 // QueueKinds is the queue's rules in the order the screen groups them.
-var QueueKinds = []QueueKind{QueueReview, QueueExpiring, QueueClientWaiting, QueueShortlistDraft, QueueScorecardOverdue, QueueSprintRating}
+var QueueKinds = []QueueKind{QueueReview, QueueExpiring, QueueClientWaiting, QueueShortlistDraft, QueueScorecardOverdue, QueueSprintRating, QueueTalentIntro}
 
 // SnoozeWindow is how long "not now" lasts.
 const SnoozeWindow = 24 * time.Hour
@@ -183,6 +186,7 @@ func (s *WorkQueueService) collect(ctx context.Context, tx *store.Tx, p Principa
 		QueueShortlistDraft:   shortlistDraftItems,
 		QueueScorecardOverdue: scorecardOverdueItems,
 		QueueSprintRating:     sprintRatingItems,
+		QueueTalentIntro:      talentIntroItems,
 	}
 	out := []QueueItem{}
 	for _, kind := range QueueKinds {

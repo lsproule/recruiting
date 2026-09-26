@@ -127,6 +127,9 @@ if [ -z "$E2E_PASSWORD_SET_URL" ]; then
 fi
 export E2E_PASSWORD_SET_URL
 export E2E_ADMIN_EMAIL="e2e-admin@example.test"
+# The public talent-network page names the org by its slug.
+E2E_ORG_SLUG="$(grep -oE 'slug "[^"]+"' "$work/org.log" | head -1 | sed 's/slug "\(.*\)"/\1/')"
+export E2E_ORG_SLUG
 export E2E_ADMIN_PASSWORD="e2e-admin-password"
 
 echo "==> serve on $LISTEN_ADDR"
