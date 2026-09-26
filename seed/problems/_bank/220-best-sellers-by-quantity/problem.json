@@ -1,0 +1,69 @@
+{
+  "kind": "sql",
+  "title": "Best Sellers by Quantity",
+  "difficulty": "medium",
+  "tags": [
+    "aggregation",
+    "ranking",
+    "sql"
+  ],
+  "allowed_languages": [
+    "sql"
+  ],
+  "time_limit_ms": 2000,
+  "memory_limit_kb": 262144,
+  "sql_schema": "create table product (id int primary key, name text not null);\ncreate table order_item (id int primary key, product_id int not null references product(id), quantity int not null);",
+  "sql_seed": "insert into product (id, name) values (1, 'Anvil'), (2, 'Bolt'), (3, 'Clamp'), (4, 'Drill'), (5, 'Ember');\ninsert into order_item (id, product_id, quantity) values (1, 1, 5), (2, 2, 12), (3, 3, 7), (4, 1, 3), (5, 2, 1), (6, 4, 7);",
+  "statement": "An order database holds two tables:\n\n```\nproduct(id, name)\norder_item(id, product_id, quantity)\n```\n\nEach row of `order_item` is one product on one order, and a product may appear\non many orders.\n\nWrite one query returning the three best-selling products by total quantity, as\ntwo columns: the product `name` and the total quantity ordered. Sort by total\nquantity descending, and break a tie by name ascending. A product that was never\nordered does not appear, and a catalogue of fewer than three ordered products\nsimply returns fewer rows.\n\n**Example**\n\nWith `Bolt` selling 13 across two orders, `Anvil` 8, `Clamp` 7, `Drill` 7, and\n`Ember` never ordered, the query returns:\n\n```\nBolt\t13\nAnvil\t8\nClamp\t7\n```\n\n`Clamp` and `Drill` both sold 7, and `Clamp` wins the tie on name.\n\n**Constraints**\n\n- Return exactly two columns, name first\n- Return at most three rows\n- `quantity` is a positive integer\n",
+  "guidelines": "Watch the join direction: an outer join drags in never-ordered products with a null total. The tie-break has to be in the ORDER BY, not left to the planner, which the seeded data would otherwise hide.",
+  "test_cases": [
+    {
+      "name": "the seeded catalogue",
+      "class": "sample",
+      "input": "",
+      "expected": "Bolt\t13\nAnvil\t8\nClamp\t7",
+      "visibility": "public",
+      "weight": 1
+    },
+    {
+      "name": "a late bulk order",
+      "class": "sample",
+      "input": "insert into order_item (id, product_id, quantity) values (7, 5, 100);",
+      "expected": "Ember\t100\nBolt\t13\nAnvil\t8",
+      "visibility": "public",
+      "weight": 1
+    },
+    {
+      "name": "fewer than three products sold",
+      "class": "edge",
+      "input": "delete from order_item where product_id in (2, 4);",
+      "expected": "Anvil\t8\nClamp\t7",
+      "visibility": "hidden",
+      "weight": 2
+    },
+    {
+      "name": "a tie broken by name",
+      "class": "core",
+      "input": "insert into order_item (id, product_id, quantity) values (8, 4, 1);",
+      "expected": "Bolt\t13\nAnvil\t8\nDrill\t8",
+      "visibility": "hidden",
+      "weight": 3
+    },
+    {
+      "name": "nothing was ordered at all",
+      "class": "edge",
+      "input": "delete from order_item;",
+      "expected": "",
+      "visibility": "hidden",
+      "weight": 2
+    },
+    {
+      "name": "one product on many orders",
+      "class": "core",
+      "input": "insert into order_item (id, product_id, quantity) values (9, 3, 4), (10, 3, 4), (11, 3, 4);",
+      "expected": "Clamp\t19\nBolt\t13\nAnvil\t8",
+      "visibility": "hidden",
+      "weight": 2
+    }
+  ]
+}

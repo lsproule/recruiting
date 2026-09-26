@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -21,6 +22,7 @@ import (
 	"recruiting/internal/runner/server"
 	"recruiting/internal/store"
 	"recruiting/internal/store/db"
+	"recruiting/runner/wire"
 )
 
 // PlatformOrgID owns the seed problem bank every org may read but none may
@@ -43,6 +45,9 @@ const ImportTimeout = 10 * time.Minute
 var (
 	// ErrNoExecutor refuses a write that cannot be proven against the runner.
 	ErrNoExecutor = errors.New("service: no runner is configured, so reference solutions cannot be checked")
+	// ErrRunnerUnavailable is a runner that is configured but did not answer:
+	// down, unreachable, or saturated. The code was never judged.
+	ErrRunnerUnavailable = errors.New("service: the code runner could not be reached")
 	// ErrPlatformProblem refuses an edit of the shared seed bank.
 	ErrPlatformProblem = errors.New("service: platform problems are read-only")
 	// ErrProblemTitleTaken names the real cause of a unique-title violation.
@@ -66,8 +71,9 @@ type Problem struct {
 	MemoryLimitKB    int
 	SQLSchema        string
 	SQLSeed          string
-	// RecommendedMinutes sizes an assessment built from the problem.
-	RecommendedMinutes int
+	// Signature is the function a function problem asks for; nil on the
+	// other kinds.
+	Signature *domain.Signature
 	// Guidelines are what an interviewer watches for; internal only.
 	Guidelines string
 	// OriginProblemID names the problem this one was cloned from, if any.
@@ -178,7 +184,7 @@ func (s *ProblemService) List(ctx context.Context, p Principal, f ProblemFilter)
 				Difficulty: r.Difficulty, Tags: r.Tags, AllowedLanguages: r.AllowedLanguages,
 				TimeLimitMs: r.TimeLimitMs, MemoryLimitKb: r.MemoryLimitKb,
 				SqlSchema: r.SqlSchema, SqlSeed: r.SqlSeed,
-				RecommendedMinutes: r.RecommendedMinutes, Guidelines: r.Guidelines,
+				Signature: r.Signature, Guidelines: r.Guidelines,
 				OriginProblemID: r.OriginProblemID, Quality: r.Quality,
 				ProvenLanguages: r.ProvenLanguages,
 				CreatedAt:       r.CreatedAt, UpdatedAt: r.UpdatedAt,
@@ -192,6 +198,29 @@ func (s *ProblemService) List(ctx context.Context, p Principal, f ProblemFilter)
 		return nil, fmt.Errorf("list problems: %w", err)
 	}
 	return out, nil
+}
+
+// Stub is the starting source a candidate sees for a function problem in one
+// language: the function to fill in, with the wire types spelled the way the
+// language spells them. The other kinds start from an empty editor.
+func (p Problem) Stub(lang string) string {
+	return p.AsImport().Stub(domain.NormalizeLanguageID(lang))
+}
+
+// Stubs is the starting source for every allowed language of a function
+// problem, keyed by language id; nil on the other kinds.
+func (p Problem) Stubs() map[string]string {
+	if p.Kind != domain.ProblemKindFunction || p.Signature == nil {
+		return nil
+	}
+	imp := p.AsImport()
+	out := make(map[string]string, len(p.AllowedLanguages))
+	for _, lang := range p.AllowedLanguages {
+		if stub := imp.Stub(lang); stub != "" {
+			out[lang] = stub
+		}
+	}
+	return out
 }
 
 // Get loads one problem with its reference solutions and test cases.
@@ -484,16 +513,12 @@ func checkReference(ctx context.Context, exec Executor, p domain.ImportProblem, 
 // test case. The id is derived from the request so re-validating an unchanged
 // problem is answered from the runner's own cache.
 func runnerRequest(p domain.ImportProblem, ref domain.ImportReference) server.Request {
-	memMB := p.MemoryLimitKB / 1024
-	if memMB <= 0 {
-		memMB = 1
-	}
-	limits := server.Limits{CPUMs: p.TimeLimitMs, WallMs: p.TimeLimitMs, MemMB: memMB}
+	limits := problemLimits(p.Kind, p.TimeLimitMs, p.MemoryLimitKB)
 	// The id is the whole request: the runner caches by it, so anything that
 	// changes the verdict — the limits included — must change the id.
 	sum := sha256.New()
-	fmt.Fprintf(sum, "%s\x00%s\x00%s\x00%s\x00%d\x00%d\x00%d\x00",
-		ref.Language, ref.Source, p.SQLSchema, p.SQLSeed, limits.CPUMs, limits.WallMs, limits.MemMB)
+	fmt.Fprintf(sum, "%s\x00%s\x00%s\x00%s\x00%d\x00%d\x00%d\x00%d\x00%s\x00",
+		ref.Language, ref.Source, p.SQLSchema, p.SQLSeed, limits.CPUMs, limits.WallMs, limits.MemMB, limits.OutputKB, signatureKey(p.Signature))
 	tests := make([]server.Test, 0, len(p.TestCases))
 	for i, tc := range p.TestCases {
 		fmt.Fprintf(sum, "%s\x00%s\x00%v\x00", tc.Input, tc.Expected, tc.Unordered)
@@ -510,9 +535,50 @@ func runnerRequest(p domain.ImportProblem, ref domain.ImportReference) server.Re
 		Language:  ref.Language,
 		Source:    ref.Source,
 		SQLSchema: sqlSeedScript(p),
+		Signature: signatureFor(p),
 		Tests:     tests,
 		Limits:    limits,
 	}
+}
+
+// FunctionOutputKB is how much a function problem's driver may write: the
+// result stream is structured and can legitimately carry a hundred thousand
+// values, so it gets the runner's ceiling rather than the stdout default a
+// program is held to.
+const FunctionOutputKB = 4096
+
+// problemLimits is the sandbox budget for one problem: its own time and
+// memory limits, and the output cap its kind needs.
+func problemLimits(kind string, timeLimitMs, memoryLimitKB int) server.Limits {
+	memMB := memoryLimitKB / 1024
+	if memMB <= 0 {
+		memMB = 1
+	}
+	limits := server.Limits{CPUMs: timeLimitMs, WallMs: timeLimitMs, MemMB: memMB}
+	if kind == domain.ProblemKindFunction {
+		limits.OutputKB = FunctionOutputKB
+	}
+	return limits
+}
+
+// signatureFor is what the runner needs to drive a function problem: its
+// signature, or nothing for a program or a query.
+func signatureFor(p domain.ImportProblem) *wire.Signature {
+	if p.Kind != domain.ProblemKindFunction || p.Signature == nil {
+		return nil
+	}
+	sig := *p.Signature
+	return &sig
+}
+
+// signatureKey folds a signature into a request id, so changing the function
+// asked for changes the verdict the runner's cache answers with.
+func signatureKey(sig *domain.Signature) string {
+	if sig == nil {
+		return ""
+	}
+	b, _ := json.Marshal(sig)
+	return string(b)
 }
 
 // problemRunNamespace names the ids derived for reference validation, keeping
@@ -589,7 +655,7 @@ func writeProblem(ctx context.Context, tx *store.Tx, orgID, id uuid.UUID, in dom
 		Difficulty: in.Difficulty, Tags: in.Tags, AllowedLanguages: in.AllowedLanguages,
 		TimeLimitMs: int32(in.TimeLimitMs), MemoryLimitKb: int32(in.MemoryLimitKB),
 		SqlSchema: nullText(in.SQLSchema), SqlSeed: nullText(in.SQLSeed),
-		RecommendedMinutes: int32(in.RecommendedMinutes), Guidelines: in.Guidelines,
+		Signature: signatureJSON(in), Guidelines: in.Guidelines,
 		OriginProblemID: nullUUID(w.Origin), Quality: int32(w.Quality),
 		// The column is not null: a problem proven in nothing stores the
 		// empty array, never NULL.
@@ -605,7 +671,7 @@ func writeProblem(ctx context.Context, tx *store.Tx, orgID, id uuid.UUID, in dom
 			Difficulty: params.Difficulty, Tags: params.Tags, AllowedLanguages: params.AllowedLanguages,
 			TimeLimitMs: params.TimeLimitMs, MemoryLimitKb: params.MemoryLimitKb,
 			SqlSchema: params.SqlSchema, SqlSeed: params.SqlSeed,
-			RecommendedMinutes: params.RecommendedMinutes, Guidelines: params.Guidelines,
+			Signature: params.Signature, Guidelines: params.Guidelines,
 			Quality: params.Quality, ProvenLanguages: params.ProvenLanguages,
 		})
 		if err == nil {
@@ -677,7 +743,11 @@ func (p Problem) AsImport() domain.ImportProblem {
 		Tags: p.Tags, AllowedLanguages: p.AllowedLanguages,
 		TimeLimitMs: p.TimeLimitMs, MemoryLimitKB: p.MemoryLimitKB,
 		SQLSchema: p.SQLSchema, SQLSeed: p.SQLSeed,
-		RecommendedMinutes: p.RecommendedMinutes, Guidelines: p.Guidelines,
+		Guidelines: p.Guidelines,
+	}
+	if p.Signature != nil {
+		sig := *p.Signature
+		out.Signature = &sig
 	}
 	for _, r := range p.References {
 		out.References = append(out.References, domain.ImportReference{Language: r.Language, Source: r.Source})
@@ -699,11 +769,38 @@ func toProblem(r db.Problem) Problem {
 		Difficulty: r.Difficulty, Tags: r.Tags, AllowedLanguages: r.AllowedLanguages,
 		TimeLimitMs: int(r.TimeLimitMs), MemoryLimitKB: int(r.MemoryLimitKb),
 		SQLSchema: text(r.SqlSchema), SQLSeed: text(r.SqlSeed),
-		RecommendedMinutes: int(r.RecommendedMinutes), Guidelines: r.Guidelines,
+		Signature: signatureOf(r.Signature), Guidelines: r.Guidelines,
 		OriginProblemID: r.OriginProblemID.UUID, Quality: int(r.Quality),
 		ProvenLanguages: r.ProvenLanguages,
 		CreatedAt:       r.CreatedAt.Time.UTC(), UpdatedAt: r.UpdatedAt.Time.UTC(),
 	}
+}
+
+// signatureJSON is the signature column's value: the signature on a function
+// problem, NULL on the other kinds.
+func signatureJSON(in domain.ImportProblem) []byte {
+	sig := signatureFor(in)
+	if sig == nil {
+		return nil
+	}
+	b, err := json.Marshal(sig)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
+// signatureOf reads the signature column; a NULL or an unreadable value is
+// no signature, which validation then reports on the next save.
+func signatureOf(raw []byte) *domain.Signature {
+	if len(raw) == 0 {
+		return nil
+	}
+	var sig domain.Signature
+	if err := json.Unmarshal(raw, &sig); err != nil {
+		return nil
+	}
+	return &sig
 }
 
 func nullUUID(id uuid.UUID) uuid.NullUUID {

@@ -96,6 +96,7 @@ func (s *JobService) UpdateStage(ctx context.Context, p Principal, jobID, stageI
 			DefaultVetterID: vetterParam(st.DefaultVetterID),
 			InterviewFormat: formatParam(st.InterviewFormat), DurationMinutes: int32Ptr(st.DurationMinutes),
 			RoundSeconds: int32Ptr(st.RoundSeconds), BreakSeconds: int32Ptr(st.BreakSeconds),
+			PassScore: int32Ptr(st.PassScore), AutoAdvance: st.AutoAdvance, AutoReject: st.AutoReject,
 		})
 		if err != nil {
 			return err
@@ -263,6 +264,7 @@ func templateStage(row db.PipelineTemplateStage) domain.Stage {
 		ID: row.ID, Position: int(row.Position), Name: row.Name, Kind: domain.StageKind(row.Kind), Unblind: row.Unblind,
 		InterviewFormat: row.InterviewFormat, DurationMinutes: derefInt32(row.DurationMinutes),
 		RoundSeconds: derefInt32(row.RoundSeconds), BreakSeconds: derefInt32(row.BreakSeconds),
+		PassScore: derefInt32(row.PassScore), AutoAdvance: row.AutoAdvance, AutoReject: row.AutoReject,
 	}
 	if st.Kind == domain.StageTerminal {
 		st.Terminal = domain.TerminalOutcomeFor(row.Name)
@@ -281,6 +283,7 @@ func createStageParams(orgID, jobID uuid.UUID, position int32, st domain.Stage) 
 		DefaultVetterID: vetterParam(st.DefaultVetterID),
 		InterviewFormat: formatParam(st.InterviewFormat), DurationMinutes: int32Ptr(st.DurationMinutes),
 		RoundSeconds: int32Ptr(st.RoundSeconds), BreakSeconds: int32Ptr(st.BreakSeconds),
+		PassScore: int32Ptr(st.PassScore), AutoAdvance: st.AutoAdvance, AutoReject: st.AutoReject,
 	}
 }
 
@@ -389,6 +392,7 @@ func toStage(row db.Stage) domain.Stage {
 		Kind: domain.StageKind(row.Kind), Unblind: row.Unblind,
 		InterviewFormat: row.InterviewFormat, DurationMinutes: derefInt32(row.DurationMinutes),
 		RoundSeconds: derefInt32(row.RoundSeconds), BreakSeconds: derefInt32(row.BreakSeconds),
+		PassScore: derefInt32(row.PassScore), AutoAdvance: row.AutoAdvance, AutoReject: row.AutoReject,
 	}
 	if row.TerminalStatus != nil {
 		st.Terminal = domain.ApplicationStatus(*row.TerminalStatus)

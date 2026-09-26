@@ -207,6 +207,27 @@ introduction carries the candidate's name and the `application_id` of the
 released application, which appears in the change feed as `released` like
 any other; from there the person is an ordinary candidate of yours.
 
+## Posting a job to the boards
+
+A job's ad is written by the platform from the job's own fields (title,
+skills, seniority, location, remote policy, salary, description) and placed
+on an external board by a browser automation the worker runs, so applicants
+land on the platform's own apply page and their résumés in your candidate
+database. Nothing in the ad is invented: a job with no salary gets no salary
+line.
+
+| Method | Path | Does |
+| ------ | ---- | ---- |
+| `GET` | `/api/v1/jobs/{job_id}/postings/preview` | The ad each board would carry, as it would be posted |
+| `POST` | `/api/v1/jobs/{job_id}/postings` | `{"board": "linkedin" \| "indeed" \| "glassdoor" \| "demo"}`; answers `202` with the posting as `queued` |
+| `GET` | `/api/v1/jobs/{job_id}/postings` | Every placement, newest first: `status` (`queued`, `posting`, `posted`, `failed`, `removed`), `external_url` once live, `error` when not |
+
+A posting is asynchronous: the response is the record, and reading it back
+says where it landed. A board that refuses (a verification code, a changed
+page) leaves the row `failed` with the reason and the worker retries with
+backoff; `JOBPOST_CMD` unset on the worker fails every posting with a
+message saying so. The org surface only; a company token cannot post.
+
 ## The org surface, briefly
 
 The org surface is the whole console: jobs and their pipelines, candidates

@@ -6,14 +6,43 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"recruiting/runner/wire"
 )
 
-// Problem kinds. A code problem runs a program against stdin/stdout; a SQL
-// problem runs one query against a seeded database.
+// Problem kinds. A function problem asks for one function of a declared
+// signature, called with typed arguments; a code problem runs a program
+// against stdin/stdout; a SQL problem runs one query against a seeded
+// database.
 const (
-	ProblemKindCode = "code"
-	ProblemKindSQL  = "sql"
+	ProblemKindFunction = "function"
+	ProblemKindCode     = "code"
+	ProblemKindSQL      = "sql"
 )
+
+// ProblemKinds is every kind a problem may declare, in the order screens
+// offer them.
+var ProblemKinds = []string{ProblemKindFunction, ProblemKindCode, ProblemKindSQL}
+
+// CodeKind reports whether a problem of this kind is answered in a
+// programming language: a function or a program, as opposed to a query. The
+// language registry files both under ProblemKindCode.
+func CodeKind(kind string) bool {
+	return kind == ProblemKindFunction || kind == ProblemKindCode
+}
+
+// Signature and Param are the function a function problem asks for; the
+// harness reads the same type, so it lives in the wire package.
+type (
+	Signature = wire.Signature
+	Param     = wire.Param
+)
+
+// SignatureTypes is every type a parameter or a return may declare.
+var SignatureTypes = wire.SignatureTypes
+
+// MaxSignatureParams bounds a signature, as the wire does.
+const MaxSignatureParams = wire.MaxSignatureParams
 
 // Test case visibility: a public case is shown to the candidate with its
 // expected output, a hidden one only ever reports pass or fail.
@@ -56,12 +85,6 @@ const (
 	// executed before anything is stored, so the batch is also a bound on how
 	// long an import holds the runner.
 	MaxImportProblems = 50
-	// DefaultRecommendedMinutes is how long a problem is expected to take
-	// when the author does not say.
-	DefaultRecommendedMinutes = 45
-	// MaxRecommendedMinutes matches the column's own bound; a problem longer
-	// than a working day is a mistake.
-	MaxRecommendedMinutes = 480
 	// MaxCaseNameLength keeps a case name to something a results table can
 	// show in one column.
 	MaxCaseNameLength = 80
@@ -80,9 +103,9 @@ type ImportProblem struct {
 	MemoryLimitKB    int      `json:"memory_limit_kb"`
 	SQLSchema        string   `json:"sql_schema"`
 	SQLSeed          string   `json:"sql_seed"`
-	// RecommendedMinutes is how long the problem should take; it sizes an
-	// assessment rather than limiting one attempt.
-	RecommendedMinutes int `json:"recommended_minutes"`
+	// Signature is the function a function problem asks for; nil on the
+	// other kinds.
+	Signature *Signature `json:"signature"`
 	// Guidelines are what an interviewer watches for. They are internal: no
 	// candidate and no client ever sees them.
 	Guidelines string            `json:"guidelines"`
@@ -98,16 +121,23 @@ type ImportReference struct {
 	Source   string `json:"source"`
 }
 
-// ImportTestCase is one case a solution is scored against. Weight is a
-// pointer so an omitted weight (which defaults to 1) is told apart from an
-// explicit zero, which is refused.
+// ImportTestCase is one case a solution is scored against. A function
+// problem's case carries Args (a JSON array, one value per parameter) and
+// Returns (the JSON value the function must return); a code or SQL case
+// carries Input and Expected as text. Normalize renders Args and Returns
+// into Input and Expected in their canonical spelling, which is what is
+// stored and what the harness receives. Weight is a pointer so an omitted
+// weight (which defaults to 1) is told apart from an explicit zero, which
+// is refused.
 type ImportTestCase struct {
-	Name       string   `json:"name"`
-	Class      string   `json:"class"`
-	Input      string   `json:"input"`
-	Expected   string   `json:"expected"`
-	Visibility string   `json:"visibility"`
-	Weight     *float64 `json:"weight"`
+	Name       string          `json:"name"`
+	Class      string          `json:"class"`
+	Input      string          `json:"input"`
+	Expected   string          `json:"expected"`
+	Args       json.RawMessage `json:"args"`
+	Returns    json.RawMessage `json:"returns"`
+	Visibility string          `json:"visibility"`
+	Weight     *float64        `json:"weight"`
 	// Unordered compares SQL result rows as a multiset; ignored for code.
 	Unordered bool `json:"unordered"`
 }
@@ -228,8 +258,11 @@ func (p *ImportProblem) Normalize() {
 	if p.MemoryLimitKB <= 0 {
 		p.MemoryLimitKB = DefaultProblemMemoryLimitKB
 	}
-	if p.RecommendedMinutes <= 0 {
-		p.RecommendedMinutes = DefaultRecommendedMinutes
+	if p.Signature != nil {
+		p.Signature.Normalize()
+		if p.Kind == "" {
+			p.Kind = ProblemKindFunction
+		}
 	}
 	p.Guidelines = strings.TrimSpace(p.Guidelines)
 	p.SQLSchema = strings.TrimSpace(p.SQLSchema)
@@ -257,8 +290,36 @@ func (p *ImportProblem) Normalize() {
 			one := 1.0
 			tc.Weight = &one
 		}
+		if p.Kind == ProblemKindFunction && p.Signature != nil {
+			p.normalizeFunctionCase(tc)
+		}
 	}
 }
+
+// normalizeFunctionCase renders a function case's typed arguments and
+// result into the stored text: Input is the canonical JSON array of
+// arguments, Expected the canonical JSON of the result. A case written with
+// Input and Expected already in that shape is left alone; one whose values
+// do not fit the signature keeps what it was given so Validate can say why.
+func (p ImportProblem) normalizeFunctionCase(tc *ImportTestCase) {
+	if len(tc.Args) > 0 {
+		if args, err := p.Signature.ArgsOf(tc.Args); err == nil {
+			tc.Input = wire.CanonicalJSON(argsList(args))
+		} else {
+			tc.Input = string(tc.Args)
+		}
+	}
+	if len(tc.Returns) > 0 {
+		if v, err := wire.DecodeTyped(p.Signature.Returns, tc.Returns); err == nil {
+			tc.Expected = wire.CanonicalJSON(v)
+		} else {
+			tc.Expected = string(tc.Returns)
+		}
+	}
+	tc.Args, tc.Returns = nil, nil
+}
+
+func argsList(args []any) []any { return args }
 
 // Validate returns every reason the problem cannot be stored, in reading
 // order, so an import report tells the author about all of them at once.
@@ -268,9 +329,9 @@ func (p ImportProblem) Validate() []string {
 	add := func(format string, args ...any) { errs = append(errs, fmt.Sprintf(format, args...)) }
 
 	switch p.Kind {
-	case ProblemKindCode, ProblemKindSQL:
+	case ProblemKindFunction, ProblemKindCode, ProblemKindSQL:
 	case "":
-		add("kind is required (%s or %s)", ProblemKindCode, ProblemKindSQL)
+		add("kind is required (%s)", strings.Join(ProblemKinds, ", "))
 	default:
 		add("unknown kind %q", p.Kind)
 	}
@@ -280,6 +341,14 @@ func (p ImportProblem) Validate() []string {
 	if p.Statement == "" {
 		add("statement is required")
 	}
+	switch {
+	case p.Kind == ProblemKindFunction && p.Signature == nil:
+		add("a function problem needs a signature: the function's name, its parameters, and what it returns")
+	case p.Kind == ProblemKindFunction:
+		errs = append(errs, ValidateSignature(*p.Signature)...)
+	case p.Signature != nil:
+		add("a signature belongs to a function problem")
+	}
 	if !contains(ProblemDifficulties, p.Difficulty) {
 		add("unknown difficulty %q (want %s)", p.Difficulty, strings.Join(ProblemDifficulties, ", "))
 	}
@@ -288,9 +357,6 @@ func (p ImportProblem) Validate() []string {
 	}
 	if p.MemoryLimitKB > MaxProblemMemoryLimitKB {
 		add("memory_limit_kb %d exceeds the %d kB cap", p.MemoryLimitKB, MaxProblemMemoryLimitKB)
-	}
-	if p.RecommendedMinutes > MaxRecommendedMinutes {
-		add("recommended_minutes %d exceeds the %d minute cap", p.RecommendedMinutes, MaxRecommendedMinutes)
 	}
 
 	if len(p.AllowedLanguages) == 0 {
@@ -304,8 +370,11 @@ func (p ImportProblem) Validate() []string {
 		if p.Kind == ProblemKindSQL && lang != "sql" {
 			add("a sql problem cannot offer %q", lang)
 		}
-		if p.Kind == ProblemKindCode && lang == "sql" {
-			add("sql is not a language for a code problem")
+		if p.Kind != ProblemKindSQL && lang == "sql" {
+			add("sql is not a language for a %s problem", p.Kind)
+		}
+		if p.Kind == ProblemKindFunction && p.Signature != nil && lang != "sql" && !wire.Supports(lang, *p.Signature) {
+			add("%s cannot express this signature: it has no way to return a %s", lang, p.Signature.Returns)
 		}
 	}
 
@@ -317,7 +386,7 @@ func (p ImportProblem) Validate() []string {
 		if p.SQLSchema == "" {
 			add("a sql problem needs sql_schema to seed its database")
 		}
-	case ProblemKindCode:
+	case ProblemKindCode, ProblemKindFunction:
 		if p.SQLSchema != "" || p.SQLSeed != "" {
 			add("sql_schema and sql_seed belong to a sql problem")
 		}
@@ -374,6 +443,14 @@ func (p ImportProblem) validateTestCases() []string {
 		if tc.WeightValue() <= 0 {
 			errs = append(errs, fmt.Sprintf("test_cases[%d] has weight %v; a weight must be positive", i, tc.WeightValue()))
 		}
+		if p.Kind == ProblemKindFunction && p.Signature != nil {
+			if _, err := p.Signature.ArgsOf(json.RawMessage(tc.Input)); err != nil {
+				errs = append(errs, fmt.Sprintf("test_cases[%d] args: %v", i, err))
+			}
+			if _, err := wire.DecodeTyped(p.Signature.Returns, json.RawMessage(tc.Expected)); err != nil {
+				errs = append(errs, fmt.Sprintf("test_cases[%d] returns: %v", i, err))
+			}
+		}
 	}
 	if public == 0 {
 		errs = append(errs, "at least one test case must be public so the candidate sees an example")
@@ -426,14 +503,17 @@ func (p ImportProblem) ValidateDraft() []string {
 	var errs []string
 	add := func(format string, args ...any) { errs = append(errs, fmt.Sprintf(format, args...)) }
 	switch p.Kind {
-	case ProblemKindCode, ProblemKindSQL:
+	case ProblemKindFunction, ProblemKindCode, ProblemKindSQL:
 	case "":
-		add("kind is required (%s or %s)", ProblemKindCode, ProblemKindSQL)
+		add("kind is required (%s)", strings.Join(ProblemKinds, ", "))
 	default:
 		add("unknown kind %q", p.Kind)
 	}
 	if p.Title == "" {
 		add("title is required")
+	}
+	if p.Signature != nil {
+		errs = append(errs, ValidateSignature(*p.Signature)...)
 	}
 	if !contains(ProblemDifficulties, p.Difficulty) {
 		add("unknown difficulty %q (want %s)", p.Difficulty, strings.Join(ProblemDifficulties, ", "))
@@ -443,9 +523,6 @@ func (p ImportProblem) ValidateDraft() []string {
 	}
 	if p.MemoryLimitKB > MaxProblemMemoryLimitKB {
 		add("memory_limit_kb %d exceeds the %d kB cap", p.MemoryLimitKB, MaxProblemMemoryLimitKB)
-	}
-	if p.RecommendedMinutes > MaxRecommendedMinutes {
-		add("recommended_minutes %d exceeds the %d minute cap", p.RecommendedMinutes, MaxRecommendedMinutes)
 	}
 	for _, lang := range p.AllowedLanguages {
 		if !contains(ProblemLanguages, lang) {
@@ -464,4 +541,13 @@ func (p ImportProblem) ValidateDraft() []string {
 // a reference solution has been proven in.
 func (p ImportProblem) Quality(proven []string) QualityInput {
 	return QualityInput{Statement: p.Statement, Tags: p.Tags, TestCases: p.TestCases, ProvenLanguages: proven}
+}
+
+// Stub is the empty function a candidate starts from for a function
+// problem, in one language; empty for the other kinds.
+func (p ImportProblem) Stub(lang string) string {
+	if p.Kind != ProblemKindFunction || p.Signature == nil {
+		return ""
+	}
+	return wire.Stub(lang, *p.Signature)
 }

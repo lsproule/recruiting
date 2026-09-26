@@ -1,6 +1,9 @@
 package server
 
-import "recruiting/internal/domain"
+import (
+	"recruiting/internal/domain"
+	"recruiting/runner/wire"
+)
 
 // Wire types for POST /execute. Field names are the contract with the app.
 
@@ -30,12 +33,16 @@ func languageSet() map[string]bool {
 }
 
 type Request struct {
-	ID        string `json:"id"`
-	Language  string `json:"language"`
-	Source    string `json:"source"`
-	SQLSchema string `json:"sql_schema,omitempty"`
-	Tests     []Test `json:"tests"`
-	Limits    Limits `json:"limits"`
+	ID       string `json:"id"`
+	Language string `json:"language"`
+	Source   string `json:"source"`
+	// Signature makes this a function run: the source implements the
+	// function, each test's Input is a JSON array of arguments, and its
+	// Expected is the JSON value the function must return.
+	Signature *wire.Signature `json:"signature,omitempty"`
+	SQLSchema string          `json:"sql_schema,omitempty"`
+	Tests     []Test          `json:"tests"`
+	Limits    Limits          `json:"limits"`
 }
 
 type Test struct {

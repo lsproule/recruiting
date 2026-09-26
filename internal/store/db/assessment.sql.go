@@ -777,7 +777,7 @@ func (q *Queries) GetSubmissionForUpdate(ctx context.Context, id uuid.UUID) (Sub
 }
 
 const listAssessmentProblems = `-- name: ListAssessmentProblems :many
-select p.id, p.org_id, p.kind, p.title, p.statement, p.difficulty, p.tags, p.allowed_languages, p.time_limit_ms, p.memory_limit_kb, p.sql_schema, p.sql_seed, p.created_at, p.updated_at, p.recommended_minutes, p.guidelines, p.origin_problem_id, p.quality, p.proven_languages from assessment_problem ap join problem p on p.id = ap.problem_id
+select p.id, p.org_id, p.kind, p.title, p.statement, p.difficulty, p.tags, p.allowed_languages, p.time_limit_ms, p.memory_limit_kb, p.sql_schema, p.sql_seed, p.created_at, p.updated_at, p.guidelines, p.origin_problem_id, p.quality, p.proven_languages, p.signature from assessment_problem ap join problem p on p.id = ap.problem_id
 where ap.assessment_id = $1 order by ap.position
 `
 
@@ -805,11 +805,11 @@ func (q *Queries) ListAssessmentProblems(ctx context.Context, assessmentID uuid.
 			&i.SqlSeed,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.RecommendedMinutes,
 			&i.Guidelines,
 			&i.OriginProblemID,
 			&i.Quality,
 			&i.ProvenLanguages,
+			&i.Signature,
 		); err != nil {
 			return nil, err
 		}

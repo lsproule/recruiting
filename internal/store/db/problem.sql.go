@@ -14,28 +14,28 @@ import (
 
 const createProblem = `-- name: CreateProblem :one
 insert into problem (org_id, kind, title, statement, difficulty, tags, allowed_languages,
-    time_limit_ms, memory_limit_kb, sql_schema, sql_seed, recommended_minutes, guidelines,
+    time_limit_ms, memory_limit_kb, sql_schema, sql_seed, signature, guidelines,
     origin_problem_id, quality, proven_languages)
-values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) returning id, org_id, kind, title, statement, difficulty, tags, allowed_languages, time_limit_ms, memory_limit_kb, sql_schema, sql_seed, created_at, updated_at, recommended_minutes, guidelines, origin_problem_id, quality, proven_languages
+values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) returning id, org_id, kind, title, statement, difficulty, tags, allowed_languages, time_limit_ms, memory_limit_kb, sql_schema, sql_seed, created_at, updated_at, guidelines, origin_problem_id, quality, proven_languages, signature
 `
 
 type CreateProblemParams struct {
-	OrgID              uuid.UUID
-	Kind               string
-	Title              string
-	Statement          string
-	Difficulty         string
-	Tags               []string
-	AllowedLanguages   []string
-	TimeLimitMs        int32
-	MemoryLimitKb      int32
-	SqlSchema          *string
-	SqlSeed            *string
-	RecommendedMinutes int32
-	Guidelines         string
-	OriginProblemID    uuid.NullUUID
-	Quality            int32
-	ProvenLanguages    []string
+	OrgID            uuid.UUID
+	Kind             string
+	Title            string
+	Statement        string
+	Difficulty       string
+	Tags             []string
+	AllowedLanguages []string
+	TimeLimitMs      int32
+	MemoryLimitKb    int32
+	SqlSchema        *string
+	SqlSeed          *string
+	Signature        []byte
+	Guidelines       string
+	OriginProblemID  uuid.NullUUID
+	Quality          int32
+	ProvenLanguages  []string
 }
 
 func (q *Queries) CreateProblem(ctx context.Context, arg CreateProblemParams) (Problem, error) {
@@ -51,7 +51,7 @@ func (q *Queries) CreateProblem(ctx context.Context, arg CreateProblemParams) (P
 		arg.MemoryLimitKb,
 		arg.SqlSchema,
 		arg.SqlSeed,
-		arg.RecommendedMinutes,
+		arg.Signature,
 		arg.Guidelines,
 		arg.OriginProblemID,
 		arg.Quality,
@@ -73,11 +73,11 @@ func (q *Queries) CreateProblem(ctx context.Context, arg CreateProblemParams) (P
 		&i.SqlSeed,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.RecommendedMinutes,
 		&i.Guidelines,
 		&i.OriginProblemID,
 		&i.Quality,
 		&i.ProvenLanguages,
+		&i.Signature,
 	)
 	return i, err
 }
@@ -197,7 +197,7 @@ func (q *Queries) DeleteTestCases(ctx context.Context, problemID uuid.UUID) erro
 }
 
 const filterProblems = `-- name: FilterProblems :many
-select problem.id, problem.org_id, problem.kind, problem.title, problem.statement, problem.difficulty, problem.tags, problem.allowed_languages, problem.time_limit_ms, problem.memory_limit_kb, problem.sql_schema, problem.sql_seed, problem.created_at, problem.updated_at, problem.recommended_minutes, problem.guidelines, problem.origin_problem_id, problem.quality, problem.proven_languages, (select count(*) from test_case where test_case.problem_id = problem.id)::int as case_count
+select problem.id, problem.org_id, problem.kind, problem.title, problem.statement, problem.difficulty, problem.tags, problem.allowed_languages, problem.time_limit_ms, problem.memory_limit_kb, problem.sql_schema, problem.sql_seed, problem.created_at, problem.updated_at, problem.guidelines, problem.origin_problem_id, problem.quality, problem.proven_languages, problem.signature, (select count(*) from test_case where test_case.problem_id = problem.id)::int as case_count
 from problem
 where ($1::text = '' or kind = $1::text)
   and ($2::text = '' or difficulty = $2::text)
@@ -216,26 +216,26 @@ type FilterProblemsParams struct {
 }
 
 type FilterProblemsRow struct {
-	ID                 uuid.UUID
-	OrgID              uuid.UUID
-	Kind               string
-	Title              string
-	Statement          string
-	Difficulty         string
-	Tags               []string
-	AllowedLanguages   []string
-	TimeLimitMs        int32
-	MemoryLimitKb      int32
-	SqlSchema          *string
-	SqlSeed            *string
-	CreatedAt          pgtype.Timestamptz
-	UpdatedAt          pgtype.Timestamptz
-	RecommendedMinutes int32
-	Guidelines         string
-	OriginProblemID    uuid.NullUUID
-	Quality            int32
-	ProvenLanguages    []string
-	CaseCount          int32
+	ID               uuid.UUID
+	OrgID            uuid.UUID
+	Kind             string
+	Title            string
+	Statement        string
+	Difficulty       string
+	Tags             []string
+	AllowedLanguages []string
+	TimeLimitMs      int32
+	MemoryLimitKb    int32
+	SqlSchema        *string
+	SqlSeed          *string
+	CreatedAt        pgtype.Timestamptz
+	UpdatedAt        pgtype.Timestamptz
+	Guidelines       string
+	OriginProblemID  uuid.NullUUID
+	Quality          int32
+	ProvenLanguages  []string
+	Signature        []byte
+	CaseCount        int32
 }
 
 // RLS shows the caller's own problems and the platform seed; the filters are
@@ -270,11 +270,11 @@ func (q *Queries) FilterProblems(ctx context.Context, arg FilterProblemsParams) 
 			&i.SqlSeed,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.RecommendedMinutes,
 			&i.Guidelines,
 			&i.OriginProblemID,
 			&i.Quality,
 			&i.ProvenLanguages,
+			&i.Signature,
 			&i.CaseCount,
 		); err != nil {
 			return nil, err
@@ -288,7 +288,7 @@ func (q *Queries) FilterProblems(ctx context.Context, arg FilterProblemsParams) 
 }
 
 const getProblem = `-- name: GetProblem :one
-select id, org_id, kind, title, statement, difficulty, tags, allowed_languages, time_limit_ms, memory_limit_kb, sql_schema, sql_seed, created_at, updated_at, recommended_minutes, guidelines, origin_problem_id, quality, proven_languages from problem where id = $1
+select id, org_id, kind, title, statement, difficulty, tags, allowed_languages, time_limit_ms, memory_limit_kb, sql_schema, sql_seed, created_at, updated_at, guidelines, origin_problem_id, quality, proven_languages, signature from problem where id = $1
 `
 
 func (q *Queries) GetProblem(ctx context.Context, id uuid.UUID) (Problem, error) {
@@ -309,17 +309,17 @@ func (q *Queries) GetProblem(ctx context.Context, id uuid.UUID) (Problem, error)
 		&i.SqlSeed,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.RecommendedMinutes,
 		&i.Guidelines,
 		&i.OriginProblemID,
 		&i.Quality,
 		&i.ProvenLanguages,
+		&i.Signature,
 	)
 	return i, err
 }
 
 const getProblemByTitle = `-- name: GetProblemByTitle :one
-select id, org_id, kind, title, statement, difficulty, tags, allowed_languages, time_limit_ms, memory_limit_kb, sql_schema, sql_seed, created_at, updated_at, recommended_minutes, guidelines, origin_problem_id, quality, proven_languages from problem where org_id = $1 and lower(title) = lower($2)
+select id, org_id, kind, title, statement, difficulty, tags, allowed_languages, time_limit_ms, memory_limit_kb, sql_schema, sql_seed, created_at, updated_at, guidelines, origin_problem_id, quality, proven_languages, signature from problem where org_id = $1 and lower(title) = lower($2)
 `
 
 type GetProblemByTitleParams struct {
@@ -345,11 +345,11 @@ func (q *Queries) GetProblemByTitle(ctx context.Context, arg GetProblemByTitlePa
 		&i.SqlSeed,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.RecommendedMinutes,
 		&i.Guidelines,
 		&i.OriginProblemID,
 		&i.Quality,
 		&i.ProvenLanguages,
+		&i.Signature,
 	)
 	return i, err
 }
@@ -423,28 +423,28 @@ func (q *Queries) ListTestCases(ctx context.Context, problemID uuid.UUID) ([]Tes
 const updateProblem = `-- name: UpdateProblem :one
 update problem set kind = $3, title = $4, statement = $5, difficulty = $6, tags = $7,
     allowed_languages = $8, time_limit_ms = $9, memory_limit_kb = $10, sql_schema = $11,
-    sql_seed = $12, recommended_minutes = $13, guidelines = $14, quality = $15,
+    sql_seed = $12, signature = $13, guidelines = $14, quality = $15,
     proven_languages = $16, updated_at = now()
-where id = $1 and org_id = $2 returning id, org_id, kind, title, statement, difficulty, tags, allowed_languages, time_limit_ms, memory_limit_kb, sql_schema, sql_seed, created_at, updated_at, recommended_minutes, guidelines, origin_problem_id, quality, proven_languages
+where id = $1 and org_id = $2 returning id, org_id, kind, title, statement, difficulty, tags, allowed_languages, time_limit_ms, memory_limit_kb, sql_schema, sql_seed, created_at, updated_at, guidelines, origin_problem_id, quality, proven_languages, signature
 `
 
 type UpdateProblemParams struct {
-	ID                 uuid.UUID
-	OrgID              uuid.UUID
-	Kind               string
-	Title              string
-	Statement          string
-	Difficulty         string
-	Tags               []string
-	AllowedLanguages   []string
-	TimeLimitMs        int32
-	MemoryLimitKb      int32
-	SqlSchema          *string
-	SqlSeed            *string
-	RecommendedMinutes int32
-	Guidelines         string
-	Quality            int32
-	ProvenLanguages    []string
+	ID               uuid.UUID
+	OrgID            uuid.UUID
+	Kind             string
+	Title            string
+	Statement        string
+	Difficulty       string
+	Tags             []string
+	AllowedLanguages []string
+	TimeLimitMs      int32
+	MemoryLimitKb    int32
+	SqlSchema        *string
+	SqlSeed          *string
+	Signature        []byte
+	Guidelines       string
+	Quality          int32
+	ProvenLanguages  []string
 }
 
 func (q *Queries) UpdateProblem(ctx context.Context, arg UpdateProblemParams) (Problem, error) {
@@ -461,7 +461,7 @@ func (q *Queries) UpdateProblem(ctx context.Context, arg UpdateProblemParams) (P
 		arg.MemoryLimitKb,
 		arg.SqlSchema,
 		arg.SqlSeed,
-		arg.RecommendedMinutes,
+		arg.Signature,
 		arg.Guidelines,
 		arg.Quality,
 		arg.ProvenLanguages,
@@ -482,11 +482,11 @@ func (q *Queries) UpdateProblem(ctx context.Context, arg UpdateProblemParams) (P
 		&i.SqlSeed,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.RecommendedMinutes,
 		&i.Guidelines,
 		&i.OriginProblemID,
 		&i.Quality,
 		&i.ProvenLanguages,
+		&i.Signature,
 	)
 	return i, err
 }

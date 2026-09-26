@@ -38,12 +38,22 @@ where a.candidate_id = $1
 order by a.created_at desc;
 
 -- name: SearchCandidates :many
-select c.id, c.org_id, c.email, c.name, c.phone, c.links, c.created_at, c.updated_at, count(a.id) as application_count
+-- One row per candidate with what the list shows beside the name: how many
+-- roles they are on and where each stands, and the headline, skills, and
+-- location of their talent-network profile when they have one.
+select c.id, c.org_id, c.email, c.name, c.phone, c.links, c.created_at, c.updated_at,
+    (select count(*) from application a where a.candidate_id = c.id)::bigint as application_count,
+    coalesce((select string_agg(j.title || ' · ' || s.name || case when a.status = 'active' then '' else ' · ' || a.status end, '; ' order by a.created_at desc)
+        from application a join job j on j.id = a.job_id join stage s on s.id = a.stage_id
+        where a.candidate_id = c.id), '')::text as pipeline,
+    coalesce(tp.headline, '')::text as headline,
+    coalesce(tp.skills, '{}')::text[] as skills,
+    coalesce(tp.location, '')::text as location,
+    (tp.id is not null and tp.withdrawn_at is null)::bool as in_network
 from candidate c
-left join application a on a.candidate_id = c.id
+left join talent_profile tp on tp.candidate_id = c.id
 where c.org_id = $1
   and (sqlc.arg(query)::text = '' or c.search @@ websearch_to_tsquery('english', sqlc.arg(query)::text))
-group by c.id
 order by
     case when sqlc.arg(query)::text = '' then 0
          else ts_rank(c.search, websearch_to_tsquery('english', sqlc.arg(query)::text)) end desc,
@@ -59,3 +69,8 @@ select * from resume where id = $1;
 
 -- name: ListResumesByCandidate :many
 select * from resume where candidate_id = $1 order by created_at desc;
+
+-- name: GetCandidateNetworkProfile :one
+-- The candidate's talent-network profile, for the recruiter's candidate page.
+select headline, skills, seniority, location, remote_policy, withdrawn_at, consent_at
+from talent_profile where candidate_id = $1;

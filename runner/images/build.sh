@@ -10,7 +10,7 @@ root=$(cd "$(dirname "$0")/../.." && pwd)
 prefix=${RUNNER_IMAGE_PREFIX:-recruiting-runner-}
 
 # Registry order; each entry needs runner/images/<lang>/Dockerfile.
-all=(python javascript typescript go java c cpp rust php ruby haskell lua kotlin csharp)
+all=(python javascript ruby php go java csharp cpp c rust)
 
 langs=("$@")
 if [ ${#langs[@]} -eq 0 ]; then

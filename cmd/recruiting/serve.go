@@ -198,6 +198,7 @@ func appHandler(ctx context.Context, logger *slog.Logger, cfg *config.Config, st
 	apiTokens := service.NewAPITokenService(st)
 	clientAccounts := service.NewClientService(st, applications)
 	workQueue := service.NewWorkQueueService(st)
+	workQueue.Apps, workQueue.Releases = applications, releases
 	processService := service.NewProcessService(st)
 	sprintService := service.NewSprintService(st, q, cfg.BaseURL)
 	interviewService := service.NewInterviewService(st)
@@ -211,7 +212,8 @@ func appHandler(ctx context.Context, logger *slog.Logger, cfg *config.Config, st
 
 	admin.Mount(app, admin.Deps{Org: org, BaseURL: cfg.BaseURL, SendInvite: sendPasswordReset(st, q, cfg.BaseURL)})
 	mountAPITokens(app, apiTokensDeps{Tokens: apiTokens, Org: org, Logger: logger})
-	jobs.Mount(app, jobs.Deps{Jobs: jobService, Org: org, Logger: logger})
+	postings := service.NewJobPostingService(st, q, cfg.BaseURL)
+	jobs.Mount(app, jobs.Deps{Jobs: jobService, Postings: postings, Org: org, Logger: logger})
 	pipeline.Mount(app, pipeline.Deps{
 		Applications: applications, Release: releases, Schedule: schedule, Org: org,
 		Reviews: reviewService, Attempts: attempts, Pool: poolService, Candidates: candidates,
@@ -265,6 +267,7 @@ func appHandler(ctx context.Context, logger *slog.Logger, cfg *config.Config, st
 		Tokens:       apiTokens,
 		Links:        links,
 		Jobs:         jobService,
+		Postings:     postings,
 		Applications: applications,
 		Releases:     releases,
 		Candidates:   candidates,

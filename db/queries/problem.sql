@@ -1,13 +1,13 @@
 -- name: CreateProblem :one
 insert into problem (org_id, kind, title, statement, difficulty, tags, allowed_languages,
-    time_limit_ms, memory_limit_kb, sql_schema, sql_seed, recommended_minutes, guidelines,
+    time_limit_ms, memory_limit_kb, sql_schema, sql_seed, signature, guidelines,
     origin_problem_id, quality, proven_languages)
 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) returning *;
 
 -- name: UpdateProblem :one
 update problem set kind = $3, title = $4, statement = $5, difficulty = $6, tags = $7,
     allowed_languages = $8, time_limit_ms = $9, memory_limit_kb = $10, sql_schema = $11,
-    sql_seed = $12, recommended_minutes = $13, guidelines = $14, quality = $15,
+    sql_seed = $12, signature = $13, guidelines = $14, quality = $15,
     proven_languages = $16, updated_at = now()
 where id = $1 and org_id = $2 returning *;
 

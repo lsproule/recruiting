@@ -27,6 +27,7 @@ type attemptFinalizeArgs struct{ payload }
 type signalsComputeArgs struct{ payload }
 type attemptPurgePreviewArgs struct{ payload }
 type snapshotPurgeArgs struct{ payload }
+type jobPostPublishArgs struct{ payload }
 
 func (emailSendArgs) Kind() string           { return KindEmailSend }
 func (interviewRemindArgs) Kind() string     { return KindInterviewRemind }
@@ -35,6 +36,7 @@ func (assessmentRemindArgs) Kind() string    { return KindAssessmentRemind }
 func (runnerExecuteArgs) Kind() string       { return KindRunnerExecute }
 func (attemptFinalizeArgs) Kind() string     { return KindAttemptFinalize }
 func (signalsComputeArgs) Kind() string      { return KindSignalsCompute }
+func (jobPostPublishArgs) Kind() string      { return KindJobPostPublish }
 func (attemptPurgePreviewArgs) Kind() string { return KindAttemptPurgePreview }
 func (snapshotPurgeArgs) Kind() string       { return KindSnapshotPurge }
 
@@ -84,6 +86,7 @@ var registry = []kindDef{
 	define[signalsComputeArgs, *signalsComputeArgs](),
 	define[attemptPurgePreviewArgs, *attemptPurgePreviewArgs](),
 	define[snapshotPurgeArgs, *snapshotPurgeArgs](),
+	define[jobPostPublishArgs, *jobPostPublishArgs](),
 }
 
 var defByKind = func() map[string]kindDef {

@@ -53,6 +53,7 @@ type Querier interface {
 	CreateIntegritySignal(ctx context.Context, arg CreateIntegritySignalParams) error
 	CreateInterviewSlot(ctx context.Context, arg CreateInterviewSlotParams) (InterviewSlot, error)
 	CreateJob(ctx context.Context, arg CreateJobParams) (Job, error)
+	CreateJobPosting(ctx context.Context, arg CreateJobPostingParams) (JobPosting, error)
 	CreateMagicLink(ctx context.Context, arg CreateMagicLinkParams) (MagicLink, error)
 	CreateOrg(ctx context.Context, arg CreateOrgParams) (Org, error)
 	CreateOrgUser(ctx context.Context, arg CreateOrgUserParams) (OrgUser, error)
@@ -112,6 +113,7 @@ type Querier interface {
 	ExpireInvitedAttempt(ctx context.Context, arg ExpireInvitedAttemptParams) (Attempt, error)
 	// Only ever extends: a link is never cut short by the attempt it opens.
 	ExtendMagicLinkExpiry(ctx context.Context, arg ExtendMagicLinkExpiryParams) error
+	FailJobPosting(ctx context.Context, arg FailJobPostingParams) error
 	// The list screen: stage and status narrow in SQL, and the search runs on the
 	// candidate's maintained tsvector so it matches resume text as well as names.
 	FilterJobApplicationCards(ctx context.Context, arg FilterJobApplicationCardsParams) ([]FilterJobApplicationCardsRow, error)
@@ -121,6 +123,7 @@ type Querier interface {
 	// A job slug is unique only within an org, so the public URL names both. The
 	// policy on job enforces the same pair; the join makes it explicit here.
 	FindPublicJobBySlug(ctx context.Context, arg FindPublicJobBySlugParams) (Job, error)
+	FinishJobPosting(ctx context.Context, arg FinishJobPostingParams) error
 	FinishSubmission(ctx context.Context, arg FinishSubmissionParams) error
 	FirstStage(ctx context.Context, jobID uuid.UUID) (Stage, error)
 	GetApplication(ctx context.Context, id uuid.UUID) (Application, error)
@@ -134,6 +137,8 @@ type Querier interface {
 	GetAttemptForUpdate(ctx context.Context, id uuid.UUID) (Attempt, error)
 	GetBookedSlotForApplication(ctx context.Context, applicationID uuid.NullUUID) (InterviewSlot, error)
 	GetCandidate(ctx context.Context, id uuid.UUID) (GetCandidateRow, error)
+	// The candidate's talent-network profile, for the recruiter's candidate page.
+	GetCandidateNetworkProfile(ctx context.Context, candidateID uuid.UUID) (GetCandidateNetworkProfileRow, error)
 	// Both ids are matched so a resume id from one candidate cannot be read
 	// through another candidate's URL.
 	GetCandidateResume(ctx context.Context, arg GetCandidateResumeParams) (Resume, error)
@@ -148,6 +153,8 @@ type Querier interface {
 	GetInterviewSlotRoom(ctx context.Context, id uuid.UUID) (GetInterviewSlotRoomRow, error)
 	GetJob(ctx context.Context, id uuid.UUID) (Job, error)
 	GetJobBySlug(ctx context.Context, arg GetJobBySlugParams) (Job, error)
+	GetJobPosting(ctx context.Context, id uuid.UUID) (JobPosting, error)
+	GetJobPostingForUpdate(ctx context.Context, id uuid.UUID) (JobPosting, error)
 	// Score and verdict only; the reviewer's notes stay internal.
 	GetLatestAssessmentOutcome(ctx context.Context, applicationID uuid.UUID) (GetLatestAssessmentOutcomeRow, error)
 	GetLatestSentShortlistPacketForJob(ctx context.Context, jobID uuid.UUID) (ShortlistPacket, error)
@@ -257,6 +264,9 @@ type Querier interface {
 	// One row per application on a job, with what a board card or list row shows.
 	ListJobApplicationCards(ctx context.Context, jobID uuid.UUID) ([]ListJobApplicationCardsRow, error)
 	ListJobCandidateIDs(ctx context.Context, jobID uuid.UUID) ([]uuid.UUID, error)
+	ListJobPostings(ctx context.Context, jobID uuid.UUID) ([]JobPosting, error)
+	// Every posting of the org, newest first, for the sourcing overview.
+	ListJobPostingsForOrg(ctx context.Context, arg ListJobPostingsForOrgParams) ([]ListJobPostingsForOrgRow, error)
 	ListJobs(ctx context.Context, orgID uuid.UUID) ([]Job, error)
 	ListOpenJobsByCompany(ctx context.Context, clientCompanyID uuid.UUID) ([]Job, error)
 	ListOrgSettings(ctx context.Context, orgID uuid.UUID) ([]OrgSetting, error)
@@ -294,6 +304,11 @@ type Querier interface {
 	// Conversations that ended more than five minutes ago and were never rated,
 	// on sprints that still stand.
 	ListQueueSprintRatingsMissing(ctx context.Context) ([]ListQueueSprintRatingsMissingRow, error)
+	// One row per open application, with everything the step rules read: where
+	// it stands, when it got there, what its stage has collected, and the two
+	// stages a decision can send it to. The rules themselves live in Go so
+	// each can be read and tested on its own; this is the one scan behind them.
+	ListQueueSteps(ctx context.Context) ([]ListQueueStepsRow, error)
 	ListReleasedApplications(ctx context.Context, jobID uuid.UUID) ([]ListReleasedApplicationsRow, error)
 	// Every application released to the company, across its jobs, for the API's
 	// collection read. Filters are optional; a zero uuid or empty string is "any".
@@ -376,6 +391,7 @@ type Querier interface {
 	// updates nothing rather than overwriting a concurrent move.
 	MoveApplication(ctx context.Context, arg MoveApplicationParams) (Application, error)
 	RejoinTalentProfile(ctx context.Context, id uuid.UUID) (int64, error)
+	RemoveJobPosting(ctx context.Context, arg RemoveJobPostingParams) (int64, error)
 	RemoveTalentPoolEntry(ctx context.Context, id uuid.UUID) (int64, error)
 	// A removal stands until a recruiter asks for the person back; the automatic
 	// sources refresh the aggregates of a removed entry without reviving it.
@@ -393,6 +409,9 @@ type Querier interface {
 	// Only a closed attempt is scored, and only once: concurrent deliveries of
 	// attempt.finalize race here and the losers match no row.
 	ScoreAttempt(ctx context.Context, arg ScoreAttemptParams) (Attempt, error)
+	// One row per candidate with what the list shows beside the name: how many
+	// roles they are on and where each stands, and the headline, skills, and
+	// location of their talent-network profile when they have one.
 	SearchCandidates(ctx context.Context, arg SearchCandidatesParams) ([]SearchCandidatesRow, error)
 	// The pool list is a working view: a name, an address, or a tag narrows it.
 	SearchTalentPoolEntriesWithCandidate(ctx context.Context, arg SearchTalentPoolEntriesWithCandidateParams) ([]SearchTalentPoolEntriesWithCandidateRow, error)
@@ -420,6 +439,8 @@ type Querier interface {
 	SetStagePosition(ctx context.Context, arg SetStagePositionParams) error
 	SetStageRubric(ctx context.Context, arg SetStageRubricParams) error
 	StartAttempt(ctx context.Context, arg StartAttemptParams) (Attempt, error)
+	// Claims a queued or failed posting for one publish attempt.
+	StartJobPosting(ctx context.Context, id uuid.UUID) (int64, error)
 	StartSubmission(ctx context.Context, id uuid.UUID) error
 	TouchPipelineTemplate(ctx context.Context, id uuid.UUID) error
 	TouchSession(ctx context.Context, arg TouchSessionParams) error

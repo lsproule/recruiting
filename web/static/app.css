@@ -1255,7 +1255,7 @@ main:has(> .try-editor) {
 .queue { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
 .queue-row {
   display: grid;
-  grid-template-columns: 8.5rem minmax(0, 1.5fr) minmax(0, 1.2fr) 6rem auto;
+  grid-template-columns: 7.5rem minmax(0, 1.4fr) minmax(0, 0.9fr) minmax(16rem, auto);
   align-items: center;
   gap: var(--space-4);
   padding: var(--space-3) var(--space-4);
@@ -1334,8 +1334,8 @@ main:has(> .try-editor) {
 }
 
 @media (max-width: 72rem) {
-  .queue-row { grid-template-columns: 8.5rem minmax(0, 1fr) auto; row-gap: var(--space-2); }
-  .queue-where, .queue-due { grid-column: 2 / -1; }
+  .queue-row { grid-template-columns: 7.5rem minmax(0, 1fr); row-gap: var(--space-2); }
+  .queue-where, .queue-actions { grid-column: 2 / -1; }
 }
 
 /* ── Stage editor: a job's pipeline and a reusable process ─────────────── */
@@ -1725,3 +1725,53 @@ main:has(> .try-editor) {
   .talent-layout aside { position: static; }
   .join-form .grid-2 { grid-template-columns: 1fr; }
 }
+
+/* Function problems: the entrypoint editor and the stubs it produces. */
+.signature { border: 1px solid var(--border); border-radius: var(--radius); padding: var(--space-3); margin: var(--space-3) 0; }
+.signature legend { font-weight: 600; padding: 0 var(--space-1); }
+.param-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--space-2) var(--space-3); }
+.param-row { display: grid; grid-template-columns: 1fr 10rem; gap: var(--space-2); align-items: end; }
+.entrypoint { font-size: 0.95rem; padding: 0.2rem 0.5rem; background: var(--surface-2, rgba(0,0,0,0.04)); border-radius: var(--radius); }
+.row-note code { font-size: 0.8rem; }
+.stubs { display: grid; gap: var(--space-2); }
+.stub summary { cursor: pointer; font-weight: 600; }
+.stub pre { margin-top: var(--space-2); }
+@media (max-width: 720px) {
+  .param-grid { grid-template-columns: 1fr; }
+}
+.assess-entrypoint { margin: var(--space-2) 0; }
+.assess-entrypoint code { padding: 0.15rem 0.4rem; background: var(--surface-2, rgba(0,0,0,0.04)); border-radius: var(--radius); }
+
+/* Work queue: one section per client, one row per step waiting on a person. */
+.queue-company { margin-top: var(--space-5); }
+.queue-company-head { display: flex; align-items: baseline; gap: var(--space-3); margin-bottom: var(--space-2); }
+.queue-company-head h2 { margin: 0; font-size: 16px; }
+.queue-company-head .late { color: var(--color-accent-300); }
+.queue-step { display: flex; flex-direction: column; gap: 2px; }
+.queue-row.late { border-left: 3px solid var(--color-accent-400); }
+.queue-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; justify-content: flex-end; }
+.queue-actions form { margin: 0; }
+.queue-actions .btn { padding: 0.3rem 0.7rem; font-size: 12px; white-space: nowrap; }
+.queue-where { display: flex; flex-direction: column; gap: 2px; }
+.queue-reject[open] { flex-basis: 100%; }
+.queue-reject summary { list-style: none; display: inline-block; cursor: pointer; }
+.queue-reject summary::-webkit-details-marker { display: none; }
+.queue-reject-form { display: flex; gap: var(--space-2); margin-top: var(--space-2); flex-wrap: wrap; }
+.queue-reject-form input[type=text] { min-width: 16rem; }
+.btn-danger { background: color-mix(in srgb, var(--color-accent) 18%, transparent); border-color: var(--color-accent); }
+.queue-kind-resume, .queue-kind-decision, .queue-kind-forward { color: var(--color-accent); border-color: var(--color-accent); }
+
+/* Job postings: one board per row, the copy on demand. */
+.boards { display: grid; gap: var(--space-2); margin-bottom: var(--space-5); }
+.board { border: 1px solid var(--color-border, #333); border-radius: var(--radius); padding: var(--space-2) var(--space-3); }
+.board summary { cursor: pointer; display: flex; gap: var(--space-3); align-items: baseline; }
+.board-name { font-weight: 600; }
+.posting-copy { margin: var(--space-3) 0; max-height: 28rem; overflow: auto; }
+.posting-status-posted { color: var(--color-accent); border-color: var(--color-accent); }
+.posting-status-failed { color: var(--color-accent-300); }
+
+/* Candidates: the database, one person per row with where they stand. */
+.candidates .pipeline-line { white-space: normal; }
+.candidate-panels { margin-bottom: var(--space-5); }
+.candidate-panels .panel h2 { margin-top: 0; }
+.status-rejected, .status-withdrawn { opacity: 0.7; }

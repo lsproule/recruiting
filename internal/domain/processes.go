@@ -12,6 +12,11 @@ type ProcessStage struct {
 	DurationMinutes int
 	RoundSeconds    int
 	BreakSeconds    int
+	// PassScore, AutoAdvance, and AutoReject are an assessment stage's own
+	// decision rule; see Stage.
+	PassScore   int
+	AutoAdvance bool
+	AutoReject  bool
 }
 
 // ProcessSpec is one entry of the library: a named hiring process an org
@@ -98,6 +103,7 @@ func (ps ProcessStage) Stage() Stage {
 		Name: ps.Name, Kind: ps.Kind, Unblind: ps.Unblind,
 		InterviewFormat: ps.InterviewFormat, DurationMinutes: ps.DurationMinutes,
 		RoundSeconds: ps.RoundSeconds, BreakSeconds: ps.BreakSeconds,
+		PassScore: ps.PassScore, AutoAdvance: ps.AutoAdvance, AutoReject: ps.AutoReject,
 	}
 	if ps.Kind == StageTerminal {
 		s.Terminal = TerminalOutcomeFor(ps.Name)

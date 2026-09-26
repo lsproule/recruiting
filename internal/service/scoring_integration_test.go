@@ -9,12 +9,14 @@ import (
 	"context"
 	"encoding/json"
 	"math"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"recruiting/internal/domain"
 	"recruiting/internal/queue"
 	"recruiting/internal/runner/server"
 	"recruiting/internal/service"
@@ -27,7 +29,7 @@ func (f *executionFixture) finalize(t *testing.T, b service.BlobStore, attemptID
 	payload, _ := json.Marshal(service.AttemptFinalizeJob{
 		AttemptFinalizePayload: service.AttemptFinalizePayload{AttemptID: attemptID, OrgID: f.orgID}, Wait: wait,
 	})
-	h := service.AttemptFinalizeHandler(f.st, f.q, b, nil)
+	h := service.AttemptFinalizeHandler(f.st, f.q, b, nil, nil)
 	return h(context.Background(), queue.Job{Kind: queue.KindAttemptFinalize, Payload: payload})
 }
 
@@ -405,4 +407,107 @@ func (e publicOnlyExecutor) Execute(_ context.Context, req server.Request) (serv
 		res.Results = append(res.Results, server.TestResult{TestID: tc.ID, Status: status})
 	}
 	return res, nil
+}
+
+// finalizeWith is finalize with the application service wired in, so an
+// assessment stage's own decision rule runs once the score lands.
+func (f *executionFixture) finalizeWith(t *testing.T, b service.BlobStore, attemptID uuid.UUID) error {
+	t.Helper()
+	payload, _ := json.Marshal(service.AttemptFinalizeJob{
+		AttemptFinalizePayload: service.AttemptFinalizePayload{AttemptID: attemptID, OrgID: f.orgID},
+	})
+	h := service.AttemptFinalizeHandler(f.st, f.q, b, f.apps, nil)
+	return h(context.Background(), queue.Job{Kind: queue.KindAttemptFinalize, Payload: payload})
+}
+
+// scoreOnePublicCase leaves the attempt with the adder's public case passed
+// and nothing else: a low score, well below any sensible pass mark.
+func (f *executionFixture) scoreOnePublicCase(t *testing.T) service.Attempt {
+	t.Helper()
+	ctx := context.Background()
+	att := f.start(t)
+	cand := f.candidateOf(att.ID)
+	sub, err := f.attempts.Submit(ctx, cand, att.ID, f.problems[0].ID, "python", "print(3)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.execute(t, publicOnlyExecutor{cases: f.problems[0].TestCases}, sub.ID, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.attempts.Finish(ctx, cand, att.ID); err != nil {
+		t.Fatalf("finish: %v", err)
+	}
+	// The sitting belongs to the assessment stage; park the application
+	// there, as the stage entry that sent the invite would have.
+	if _, err := f.sys.Exec(ctx, `update application set stage_id = $2 where id = $1`, f.appID, f.stages[domain.StageAssessment]); err != nil {
+		t.Fatal(err)
+	}
+	return att
+}
+
+func (f *executionFixture) applicationState(t *testing.T) (stage uuid.UUID, status string) {
+	t.Helper()
+	if err := f.sys.QueryRow(context.Background(), `select stage_id, status from application where id = $1`, f.appID).Scan(&stage, &status); err != nil {
+		t.Fatal(err)
+	}
+	return stage, status
+}
+
+func TestFinalizeRejectsBelowThePassMarkWhenTheStageSaysSo(t *testing.T) {
+	f := newExecutionFixture(t, adderImport(t, "Auto Adder"))
+	if _, err := f.sys.Exec(context.Background(), `update stage set pass_score = 60, auto_reject = true where id = $1`, f.stages[domain.StageAssessment]); err != nil {
+		t.Fatal(err)
+	}
+	att := f.scoreOnePublicCase(t)
+	if err := f.finalizeWith(t, newFakeBlob(), att.ID); err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+	stage, status := f.applicationState(t)
+	if status != string(domain.StatusRejected) || stage != f.reject {
+		t.Fatalf("after a failing score the application is %s in %s, want rejected", status, stage)
+	}
+	rec := f.principal(service.RoleRecruiter)
+	events, err := f.apps.Events(context.Background(), rec, f.appID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := events[len(events)-1]
+	if last.ActorKind != "system" || !last.Override || !strings.Contains(last.Reason, "pass mark of 60") {
+		t.Fatalf("automatic reject event = %+v, want the system's, with the mark in the reason", last)
+	}
+	var emails int
+	if err := f.sys.QueryRow(context.Background(), `select count(*) from river_job where kind = 'email.send' and args->>'payload' like '%application_rejected%' and args->>'payload' like '%'||$1||'%'`, f.orgID.String()).Scan(&emails); err != nil {
+		t.Fatal(err)
+	}
+	if emails != 1 {
+		t.Fatalf("rejection emails queued = %d, want 1", emails)
+	}
+}
+
+func TestFinalizeAdvancesAtThePassMarkWhenTheStageSaysSo(t *testing.T) {
+	f := newExecutionFixture(t, adderImport(t, "Auto Adder"))
+	// The one public case is worth a third of the problem; a mark of 10
+	// is cleared.
+	if _, err := f.sys.Exec(context.Background(), `update stage set pass_score = 10, auto_advance = true, auto_reject = true where id = $1`, f.stages[domain.StageAssessment]); err != nil {
+		t.Fatal(err)
+	}
+	att := f.scoreOnePublicCase(t)
+	if err := f.finalizeWith(t, newFakeBlob(), att.ID); err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+	stage, status := f.applicationState(t)
+	if status != string(domain.StatusActive) || stage != f.stages[domain.StageClientReview] {
+		t.Fatalf("after a passing score the application is %s in %s, want active in the client review stage", status, stage)
+	}
+}
+
+func TestFinalizeLeavesTheDecisionToAPersonWithoutARule(t *testing.T) {
+	f := newExecutionFixture(t, adderImport(t, "Manual Adder"))
+	att := f.scoreOnePublicCase(t)
+	if err := f.finalizeWith(t, newFakeBlob(), att.ID); err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+	if stage, status := f.applicationState(t); status != string(domain.StatusActive) || stage != f.stages[domain.StageAssessment] {
+		t.Fatalf("a stage with no rule moved the application: %s in %s", status, stage)
+	}
 }

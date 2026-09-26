@@ -16,7 +16,7 @@ import (
 // integration suite.
 func TestHandlersCoverEveryQueueKind(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(nil, nil))
-	h := handlers(logger, nil, nil, nil, nil, runnerclient.New("http://runner.invalid", "secret"), nil, nil, "http://app.invalid")
+	h := handlers(logger, nil, nil, nil, nil, runnerclient.New("http://runner.invalid", "secret"), nil, nil, "http://app.invalid", nil)
 
 	got := make([]string, 0, len(h))
 	for kind := range h {

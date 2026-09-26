@@ -41,7 +41,7 @@ func TestValidateMoveMatrix(t *testing.T) {
 		{"admin advances from generic", domain.ActorAdmin, applied, interview, none, domain.MoveRequest{}, nil},
 		{"vetter cannot leave generic", domain.ActorVetter, applied, interview, both, domain.MoveRequest{}, domain.ErrForbiddenMove},
 		{"client cannot leave generic", domain.ActorClient, applied, review, both, domain.MoveRequest{}, domain.ErrForbiddenMove},
-		{"system cannot move", domain.ActorSystem, applied, interview, both, domain.MoveRequest{}, domain.ErrForbiddenMove},
+		{"system moves with the recruiter's authority", domain.ActorSystem, applied, interview, both, domain.MoveRequest{}, nil},
 		{"a move to the same stage is not a move", domain.ActorAdmin, applied, applied, both, domain.MoveRequest{}, domain.ErrForbiddenMove},
 
 		// interview: recruiter/admin; vetter advances once a scorecard exists.

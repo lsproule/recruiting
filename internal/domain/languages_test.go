@@ -9,8 +9,7 @@ import (
 
 func TestLanguagesAreTheDocumentedSetInOrder(t *testing.T) {
 	want := []string{
-		"python", "javascript", "typescript", "go", "java", "c", "cpp",
-		"rust", "php", "ruby", "haskell", "lua", "kotlin", "csharp", "sql",
+		"python", "javascript", "ruby", "php", "go", "java", "csharp", "cpp", "c", "rust", "sql",
 	}
 	got := make([]string, 0, len(domain.Languages))
 	for _, l := range domain.Languages {
@@ -42,13 +41,13 @@ func TestProblemLanguagesDerivesFromTheRegistry(t *testing.T) {
 
 func TestCodeLanguageIDsExcludesSQL(t *testing.T) {
 	got := domain.CodeLanguageIDs()
-	if len(got) != 14 {
-		t.Fatalf("got %d code languages, want 14: %v", len(got), got)
+	if len(got) != 10 {
+		t.Fatalf("got %d code languages, want 10: %v", len(got), got)
 	}
 	if slices.Contains(got, "sql") {
 		t.Error("sql is listed as a code language")
 	}
-	if got[0] != "python" || got[len(got)-1] != "csharp" {
+	if got[0] != "python" || got[len(got)-1] != "rust" {
 		t.Errorf("code ids = %v, want registry order", got)
 	}
 }

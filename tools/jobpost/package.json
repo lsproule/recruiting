@@ -1,0 +1,15 @@
+{
+  "name": "recruiting-jobpost",
+  "private": true,
+  "type": "module",
+  "description": "Browser automation that places a job posting on an external board and reports where it landed.",
+  "bin": { "jobpost": "./cli.js" },
+  "scripts": {
+    "post": "node cli.js post",
+    "fake-board": "node fake-board.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "playwright": "1.56.1"
+  }
+}

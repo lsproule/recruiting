@@ -140,10 +140,6 @@ func (s *ExecutionService) finish(ctx context.Context, p RunnerExecutePayload, s
 // service and learns nothing about the org or the candidate behind the code.
 // The id is the submission's, which the runner is idempotent on.
 func executionRequest(submissionID uuid.UUID, kind, language, source string, p Problem) server.Request {
-	memMB := p.MemoryLimitKB / 1024
-	if memMB <= 0 {
-		memMB = 1
-	}
 	cases := executionCases(kind, p)
 	tests := make([]server.Test, 0, len(cases))
 	for _, c := range cases {
@@ -157,8 +153,9 @@ func executionRequest(submissionID uuid.UUID, kind, language, source string, p P
 		Language:  language,
 		Source:    source,
 		SQLSchema: sqlSeedScript(p.AsImport()),
+		Signature: signatureFor(p.AsImport()),
 		Tests:     tests,
-		Limits:    server.Limits{CPUMs: p.TimeLimitMs, WallMs: p.TimeLimitMs, MemMB: memMB},
+		Limits:    problemLimits(p.Kind, p.TimeLimitMs, p.MemoryLimitKB),
 	}
 }
 

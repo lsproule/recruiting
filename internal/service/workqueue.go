@@ -2,43 +2,109 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"recruiting/internal/domain"
 	"recruiting/internal/store"
 	"recruiting/internal/store/db"
 )
 
-// QueueKind names one rule of the work queue. Each is a separate read, so a
-// rule can be reasoned about and tested without the other four.
+// QueueKind names one step of the hiring process that is waiting on a
+// person. The queue bubbles up, for every client at once, exactly what has
+// to happen next for each candidate: review the résumé, get the call booked,
+// file the feedback, send or review the exam, forward the candidate, plan the
+// shortlist, interview, decide. A step that can be done from the queue
+// carries its decision inline; the rest carry the one link that resolves
+// them.
 type QueueKind string
 
 const (
-	// QueueReview: a sitting was scored and nobody has reviewed it.
-	QueueReview QueueKind = "review"
-	// QueueExpiring: an invite lapses within the day and was never started.
-	QueueExpiring QueueKind = "expiring"
+	// QueueResume: someone applied and nobody has looked at the résumé.
+	QueueResume QueueKind = "resume"
+	// QueueCallUnbooked: the candidate was sent a booking link and has not
+	// picked a time.
+	QueueCallUnbooked QueueKind = "call_unbooked"
+	// QueueFeedback: an interview ended and its scorecard is missing.
+	QueueFeedback QueueKind = "feedback"
+	// QueueExamUnopened: the exam invite is out and unopened.
+	QueueExamUnopened QueueKind = "exam_unopened"
+	// QueueExamReview: a sitting was scored and nobody has reviewed it.
+	QueueExamReview QueueKind = "exam_review"
+	// QueueDecision: the stage has what it needs (feedback, a verdict, a
+	// rating) and the application is waiting to be advanced or rejected.
+	QueueDecision QueueKind = "decision"
+	// QueueForward: the candidate reached a client stage and the client
+	// cannot see them yet.
+	QueueForward QueueKind = "forward"
 	// QueueClientWaiting: the client asked something and got no answer.
 	QueueClientWaiting QueueKind = "client_waiting"
-	// QueueShortlistDraft: a packet was built and never sent.
-	QueueShortlistDraft QueueKind = "shortlist_draft"
-	// QueueScorecardOverdue: an interview ended over a day ago with no scorecard.
-	QueueScorecardOverdue QueueKind = "scorecard_overdue"
+	// QueueClientSilent: the client has had the candidate for days and said
+	// nothing.
+	QueueClientSilent QueueKind = "client_silent"
+	// QueueShortlistPlan: the candidate is in a sprint stage with no sprint
+	// planned: a round-robin, or targeted interviews instead.
+	QueueShortlistPlan QueueKind = "shortlist_plan"
 	// QueueSprintRating: a sprint conversation ended and its interviewer
 	// never rated the candidate.
 	QueueSprintRating QueueKind = "sprint_rating"
+	// QueueShortlistDraft: a packet was built and never sent.
+	QueueShortlistDraft QueueKind = "shortlist_draft"
 	// QueueTalentIntro is a company that asked to meet a match and a
 	// recruiter who has not yet sent the person the opportunity.
 	QueueTalentIntro QueueKind = "talent_intro"
 )
 
-// QueueKinds is the queue's rules in the order the screen groups them.
-var QueueKinds = []QueueKind{QueueReview, QueueExpiring, QueueClientWaiting, QueueShortlistDraft, QueueScorecardOverdue, QueueSprintRating, QueueTalentIntro}
+// QueueKinds is every rule in the order of the hiring process, which is how
+// the screen's filter lists them.
+var QueueKinds = []QueueKind{
+	QueueResume, QueueCallUnbooked, QueueFeedback, QueueExamUnopened, QueueExamReview,
+	QueueDecision, QueueForward, QueueClientWaiting, QueueClientSilent,
+	QueueShortlistPlan, QueueSprintRating, QueueShortlistDraft, QueueTalentIntro,
+}
+
+// Step is the rule's place in the hiring process, one to nine, as the
+// recruiter counts the steps: résumé, call, feedback, exam sent, exam done,
+// shortlist, interview, further rounds, decision. Work that belongs to no
+// candidate's step (a draft packet, an introduction) is nine as well: it is
+// a decision somebody owes.
+func (k QueueKind) Step() int {
+	switch k {
+	case QueueResume:
+		return 1
+	case QueueCallUnbooked:
+		return 2
+	case QueueFeedback:
+		return 3
+	case QueueExamUnopened:
+		return 4
+	case QueueExamReview, QueueForward, QueueClientWaiting, QueueClientSilent:
+		return 5
+	case QueueShortlistPlan, QueueSprintRating, QueueShortlistDraft:
+		return 6
+	case QueueDecision:
+		return 7
+	}
+	return 9
+}
+
+// How long each step may wait before the queue counts it late. None of
+// these move anything; they only order the screen and colour the row.
+const (
+	ResumeSLA         = 48 * time.Hour
+	CallBookingSLA    = 72 * time.Hour
+	ExamReviewSLA     = 24 * time.Hour
+	DecisionSLA       = 48 * time.Hour
+	ForwardSLA        = 24 * time.Hour
+	ClientSilentAfter = 72 * time.Hour
+)
 
 // SnoozeWindow is how long "not now" lasts.
 const SnoozeWindow = 24 * time.Hour
@@ -53,25 +119,77 @@ const (
 	queueSprintPath    = "/app/sprints/"
 )
 
-// QueueItem is one pending action: who it is about, what it is, and the one
-// link that resolves it.
+// The decisions a row can carry. Advance and reject are moves; release
+// makes the candidate visible to the client.
+const (
+	QueueActionAdvance = "advance"
+	QueueActionReject  = "reject"
+	QueueActionRelease = "release"
+)
+
+// QueueAction is one decision that can be taken from the row itself.
+type QueueAction struct {
+	Kind  string
+	Label string
+	// ToStageID is where an advance or a reject sends the application.
+	ToStageID uuid.UUID
+	// NeedsReason marks a decision the rules refuse without one (a reject).
+	NeedsReason bool
+}
+
+// QueueItem is one pending action: who it is about, what it is, where it
+// belongs, and how it is resolved — a link, or a decision on the row.
 type QueueItem struct {
 	Kind                              QueueKind
 	Who, Detail, JobTitle, ClientName string
-	// Due is when the item stops being merely late, where the rule has such
-	// a moment: the invite's expiry, the question's age, the interview's end.
+	ClientID                          uuid.UUID
+	// Due is when the item stops being merely pending and becomes late: the
+	// step's allowance, the invite's expiry, the interview's end.
 	Due                    *time.Time
 	ActionLabel, ActionURL string
-	// SubjectID is the row the rule fired on — an attempt, application,
-	// packet, or slot — and the key a snooze is filed under.
+	// SubjectID is the row the rule fired on — an application, attempt,
+	// packet, pairing, or introduction — and the key a snooze is filed under.
 	SubjectID uuid.UUID
+	// ApplicationID is the application the row concerns, where it concerns
+	// one; a draft packet or an introduction has none.
+	ApplicationID uuid.UUID
+	// Actions are the decisions the row offers inline.
+	Actions []QueueAction
 }
 
-// WorkQueueService reads the queue. It owns no table of its own: every row
-// is derived, so an item disappears the moment the work behind it is done.
-type WorkQueueService struct{ st *store.Store }
+// DecideRequest is one decision taken from the queue.
+type DecideRequest struct {
+	ApplicationID uuid.UUID
+	Action        string
+	ToStageID     uuid.UUID
+	Reason        string
+}
 
-func NewWorkQueueService(st *store.Store) *WorkQueueService { return &WorkQueueService{st: st} }
+// ErrBadDecision is a decision the queue does not offer.
+var ErrBadDecision = errors.New("service: that is not a decision the queue offers")
+
+// Releaser makes an application visible to its client; the release service
+// is the one the pipeline screens use, notice to the client included.
+type Releaser interface {
+	Release(ctx context.Context, p Principal, id uuid.UUID) (Application, error)
+}
+
+// WorkQueueService reads the queue and takes the decisions it offers. It
+// owns no table of its own: every row is derived, so an item disappears the
+// moment the work behind it is done.
+type WorkQueueService struct {
+	st *store.Store
+	// Apps and Releases carry out the inline decisions; nil disables them
+	// and the rows show links only.
+	Apps     *ApplicationService
+	Releases Releaser
+	// Now is the clock the deadlines are measured against; tests replace it.
+	Now func() time.Time
+}
+
+func NewWorkQueueService(st *store.Store) *WorkQueueService {
+	return &WorkQueueService{st: st, Now: time.Now}
+}
 
 // List is the queue as one org user sees it, most urgent first. An empty
 // filter returns every rule. Items this user has snoozed are left out; they
@@ -110,6 +228,34 @@ func (s *WorkQueueService) Counts(ctx context.Context, p Principal) (map[QueueKi
 	return out, nil
 }
 
+// Decide takes one of the decisions a row offers: advance or reject the
+// application, or release it to the client. The move rules apply as they do
+// anywhere else, so a reject still needs a reason and a stage still needs
+// its prerequisite.
+func (s *WorkQueueService) Decide(ctx context.Context, p Principal, req DecideRequest) error {
+	if err := requireRecruiter(p); err != nil {
+		return err
+	}
+	if req.ApplicationID == uuid.Nil {
+		return ErrNotFound
+	}
+	switch req.Action {
+	case QueueActionAdvance, QueueActionReject:
+		if s.Apps == nil || req.ToStageID == uuid.Nil {
+			return ErrBadDecision
+		}
+		_, err := s.Apps.Move(ctx, p, MoveRequest{ApplicationID: req.ApplicationID, ToStageID: req.ToStageID, Reason: req.Reason})
+		return err
+	case QueueActionRelease:
+		if s.Releases == nil {
+			return ErrBadDecision
+		}
+		_, err := s.Releases.Release(ctx, p, req.ApplicationID)
+		return err
+	}
+	return ErrBadDecision
+}
+
 // Snooze hides one item from one user until the given moment. Snoozing an
 // item that is already snoozed moves the deadline rather than failing.
 func (s *WorkQueueService) Snooze(ctx context.Context, p Principal, kind QueueKind, subjectID uuid.UUID, until time.Time) error {
@@ -125,14 +271,13 @@ func (s *WorkQueueService) Snooze(ctx context.Context, p Principal, kind QueueKi
 		})
 	})
 	if err != nil {
-		return fmt.Errorf("snooze queue item: %w", err)
+		return fmt.Errorf("snooze: %w", err)
 	}
 	return nil
 }
 
 // NavCounts is every sidebar badge in one request: the queue's own total and
-// the plain sizes of the other destinations. The keys are the nav keys the
-// layout uses.
+// the counts the other nav entries show.
 func (s *WorkQueueService) NavCounts(ctx context.Context, p Principal) (map[string]int, error) {
 	if p.Kind != PrincipalOrgUser {
 		return nil, ErrForbidden
@@ -141,20 +286,18 @@ func (s *WorkQueueService) NavCounts(ctx context.Context, p Principal) (map[stri
 	if err != nil {
 		return nil, err
 	}
-	queued := 0
+	total := 0
 	for _, n := range counts {
-		queued += n
+		total += n
 	}
-	out := map[string]int{"queue": queued}
+	out := map[string]int{"queue": total}
 	err = s.st.WithTx(ctx, p, func(ctx context.Context, tx *store.Tx) error {
 		row, err := tx.Q.CountNavSubjects(ctx, p.OrgID)
 		if err != nil {
 			return err
 		}
-		out["clients"] = int(row.Clients)
-		out["candidates"] = int(row.Candidates)
-		out["problems"] = int(row.Problems)
-		out["assessments"] = int(row.Assessments)
+		out["clients"], out["candidates"] = int(row.Clients), int(row.Candidates)
+		out["problems"], out["assessments"] = int(row.Problems), int(row.Assessments)
 		return nil
 	})
 	if err != nil {
@@ -172,39 +315,48 @@ func knownQueueKind(kind QueueKind) bool {
 	return false
 }
 
-// collect runs the rules the filter asks for and drops what the user has
-// snoozed.
+// collect runs every rule and drops what the user has snoozed. The step
+// rules share one scan of the open applications; the rest are their own
+// reads.
 func (s *WorkQueueService) collect(ctx context.Context, tx *store.Tx, p Principal, filter QueueKind) ([]QueueItem, error) {
 	snoozed, err := s.snoozed(ctx, tx, p)
 	if err != nil {
 		return nil, err
 	}
-	rules := map[QueueKind]func(context.Context, *store.Tx) ([]QueueItem, error){
-		QueueReview:           reviewItems,
-		QueueExpiring:         expiringItems,
-		QueueClientWaiting:    clientWaitingItems,
-		QueueShortlistDraft:   shortlistDraftItems,
-		QueueScorecardOverdue: scorecardOverdueItems,
-		QueueSprintRating:     sprintRatingItems,
-		QueueTalentIntro:      talentIntroItems,
+	now := s.now()
+	var all []QueueItem
+	steps, err := stepItems(ctx, tx, now)
+	if err != nil {
+		return nil, err
 	}
-	out := []QueueItem{}
-	for _, kind := range QueueKinds {
-		if filter != "" && filter != kind {
-			continue
-		}
-		items, err := rules[kind](ctx, tx)
+	all = append(all, steps...)
+	for _, rule := range []func(context.Context, *store.Tx) ([]QueueItem, error){
+		clientWaitingItems, shortlistDraftItems, sprintRatingItems, talentIntroItems,
+	} {
+		items, err := rule(ctx, tx)
 		if err != nil {
 			return nil, err
 		}
-		for _, item := range items {
-			if snoozed[snoozeKey{item.Kind, item.SubjectID}] {
-				continue
-			}
-			out = append(out, item)
+		all = append(all, items...)
+	}
+	out := []QueueItem{}
+	for _, item := range all {
+		if filter != "" && filter != item.Kind {
+			continue
 		}
+		if snoozed[snoozeKey{item.Kind, item.SubjectID}] {
+			continue
+		}
+		out = append(out, item)
 	}
 	return out, nil
+}
+
+func (s *WorkQueueService) now() time.Time {
+	if s.Now == nil {
+		return time.Now()
+	}
+	return s.Now()
 }
 
 type snoozeKey struct {
@@ -224,42 +376,150 @@ func (s *WorkQueueService) snoozed(ctx context.Context, tx *store.Tx, p Principa
 	return out, nil
 }
 
-func reviewItems(ctx context.Context, tx *store.Tx) ([]QueueItem, error) {
-	rows, err := tx.Q.ListQueueReview(ctx)
+// stepItems reads every open application once and asks each what it is
+// waiting for.
+func stepItems(ctx context.Context, tx *store.Tx, now time.Time) ([]QueueItem, error) {
+	rows, err := tx.Q.ListQueueSteps(ctx)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]QueueItem, 0, len(rows))
 	for _, row := range rows {
-		detail := "Scored sitting, no verdict yet"
-		if score := numericPtr(row.Score); score != nil {
-			detail = "Scored " + strconv.FormatFloat(*score, 'f', -1, 64) + ", no verdict yet"
+		if item, ok := stepItem(row, now); ok {
+			out = append(out, item)
 		}
-		out = append(out, QueueItem{
-			Kind: QueueReview, Who: row.CandidateName, Detail: detail,
-			JobTitle: row.JobTitle, ClientName: row.ClientName, Due: timePtr(row.FinishedAt),
-			ActionLabel: "Review", ActionURL: queueReviewPath + row.AttemptID.String(),
-			SubjectID: row.AttemptID,
-		})
 	}
 	return out, nil
 }
 
-func expiringItems(ctx context.Context, tx *store.Tx) ([]QueueItem, error) {
-	rows, err := tx.Q.ListQueueExpiring(ctx)
-	if err != nil {
-		return nil, err
+// stepItem is the one rule per stage kind: given where an application stands
+// and what its stage has collected, the next thing a person has to do, or
+// nothing when the ball is in someone else's court (a booked call, an exam
+// in progress, a client who has the candidate and has not gone quiet).
+func stepItem(r db.ListQueueStepsRow, now time.Time) (QueueItem, bool) {
+	item := QueueItem{
+		Who: r.CandidateName, JobTitle: r.JobTitle, ClientName: r.ClientName, ClientID: r.ClientID,
+		ApplicationID: r.ApplicationID, SubjectID: r.ApplicationID,
+		ActionLabel: "Open application", ActionURL: appPath + r.ApplicationID.String(),
 	}
-	out := make([]QueueItem, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, QueueItem{
-			Kind: QueueExpiring, Who: row.CandidateName, Detail: "Invite unopened, window closing",
-			JobTitle: row.JobTitle, ClientName: row.ClientName, Due: timePtr(row.InviteExpiresAt),
-			ActionLabel: "Open application", ActionURL: appPath + row.ApplicationID.String(),
-			SubjectID: row.AttemptID,
-		})
+	entered := r.EnteredAt.Time
+	decide := decisions(r)
+	switch domain.StageKind(r.StageKind) {
+	case domain.StageGeneric:
+		if r.FirstStage {
+			item.Kind, item.Detail = QueueResume, "New applicant: does the résumé fit?"
+			item.Due, item.Actions = after(entered, ResumeSLA), decide
+			return item, true
+		}
+		item.Kind, item.Detail = QueueDecision, "In "+r.StageName+" since "+dayText(entered, now)+": advance or reject"
+		item.Due, item.Actions = after(entered, DecisionSLA), decide
+		return item, true
+	case domain.StageInterview:
+		switch {
+		case r.SlotID == uuid.Nil:
+			item.Kind, item.Detail = QueueCallUnbooked, r.StageName+": booking link sent, no time picked"
+			item.Due = after(entered, CallBookingSLA)
+			return item, true
+		case r.SlotEndsAt.Valid && r.SlotEndsAt.Time.After(now) && r.SlotStatus != "completed":
+			return QueueItem{}, false // booked and still to come
+		case !r.HasScorecard:
+			item.Kind, item.Detail = QueueFeedback, r.StageName+" ended, feedback due"
+			item.Due, item.ActionLabel = timePtr(r.SlotEndsAt), "File scorecard"
+			item.ActionURL = appPath + r.ApplicationID.String() + queueScorecardPath + r.StageID.String()
+			return item, true
+		default:
+			item.Kind, item.Detail = QueueDecision, "Feedback in for "+r.StageName+": advance or reject"
+			item.Due, item.Actions = after(r.SlotEndsAt.Time, DecisionSLA), decide
+			return item, true
+		}
+	case domain.StageAssessment:
+		score := ""
+		if v := numericPtr(r.AttemptScore); v != nil {
+			score = "scored " + strconv.FormatFloat(*v, 'f', -1, 64)
+		}
+		switch r.AttemptStatus {
+		case "", AttemptInvited:
+			item.Kind, item.Detail = QueueExamUnopened, "Exam sent, not opened"
+			item.Due = timePtr(r.AttemptInviteExpiresAt)
+			if item.Due != nil && item.Due.Before(now) {
+				item.Detail = "Exam invite lapsed unopened: re-invite or reject"
+				item.Kind, item.Actions = QueueDecision, decide
+			}
+			return item, true
+		case AttemptStarted, AttemptSubmitted:
+			return QueueItem{}, false // with the candidate, or with the runner
+		case AttemptExpired:
+			item.Kind, item.Detail = QueueDecision, "Exam window closed unfinished: re-invite or reject"
+			item.Due, item.Actions = after(entered, DecisionSLA), decide
+			return item, true
+		}
+		if r.Verdict == "" {
+			item.Kind, item.Detail = QueueExamReview, strings.TrimSpace("Exam done, "+score+", no verdict yet")
+			item.Due, item.ActionLabel = after(r.AttemptFinishedAt.Time, ExamReviewSLA), "Review"
+			item.ActionURL, item.SubjectID = queueReviewPath+r.AttemptID.String(), r.AttemptID
+			return item, true
+		}
+		item.Kind = QueueDecision
+		item.Detail = "Verdict " + r.Verdict + " (" + score + "): advance or reject"
+		item.Due, item.Actions = after(r.AttemptFinishedAt.Time, DecisionSLA), decide
+		return item, true
+	case domain.StageSprint:
+		switch {
+		case !r.InSprint:
+			item.Kind, item.Detail = QueueShortlistPlan, "Waiting to be shortlisted: run a round-robin sprint or book targeted interviews"
+			item.Due, item.ActionLabel, item.ActionURL = after(entered, DecisionSLA), "Plan the sprint", queueJobPath+r.JobID.String()+"/sprints"
+			return item, true
+		case r.HasRating:
+			item.Kind, item.Detail = QueueDecision, "Sprint rated: advance or reject"
+			item.Due, item.Actions = after(entered, DecisionSLA), decide
+			return item, true
+		}
+		return QueueItem{}, false // the rating rule speaks for the pairings
+	case domain.StageClientReview:
+		switch {
+		case !r.ReleasedAt.Valid:
+			item.Kind, item.Detail = QueueForward, "Ready for "+r.ClientName+": forward the résumé, exam, and recording"
+			item.Due = after(entered, ForwardSLA)
+			item.Actions = []QueueAction{{Kind: QueueActionRelease, Label: "Forward to client"}}
+			return item, true
+		case (!r.LastClientAt.Valid || r.LastClientAt.Time.Before(r.ReleasedAt.Time)) && r.ReleasedAt.Time.Add(ClientSilentAfter).Before(now):
+			item.Kind, item.Detail = QueueClientSilent, "With "+r.ClientName+" since "+dayText(r.ReleasedAt.Time, now)+", nothing back"
+			item.Due, item.ActionLabel = after(r.ReleasedAt.Time, ClientSilentAfter), "Nudge the client"
+			return item, true
+		}
+		return QueueItem{}, false // the client has them and is engaged
 	}
-	return out, nil
+	return QueueItem{}, false
+}
+
+// decisions are the two moves a row offers when the stage has what it
+// needs: on to the next stage, or out.
+func decisions(r db.ListQueueStepsRow) []QueueAction {
+	var out []QueueAction
+	if r.NextStageID != uuid.Nil {
+		out = append(out, QueueAction{Kind: QueueActionAdvance, Label: "Advance to " + r.NextStageName, ToStageID: r.NextStageID})
+	}
+	if r.RejectStageID != uuid.Nil {
+		out = append(out, QueueAction{Kind: QueueActionReject, Label: "Reject", ToStageID: r.RejectStageID, NeedsReason: true})
+	}
+	return out
+}
+
+func after(t time.Time, d time.Duration) *time.Time {
+	at := t.Add(d)
+	return &at
+}
+
+// dayText says how long ago a moment was, in days, as a row reads.
+func dayText(t, now time.Time) string {
+	days := int(now.Sub(t).Hours() / 24)
+	switch {
+	case days <= 0:
+		return "today"
+	case days == 1:
+		return "yesterday"
+	}
+	return strconv.Itoa(days) + " days ago"
 }
 
 func clientWaitingItems(ctx context.Context, tx *store.Tx) ([]QueueItem, error) {
@@ -277,7 +537,7 @@ func clientWaitingItems(ctx context.Context, tx *store.Tx) ([]QueueItem, error) 
 			Kind: QueueClientWaiting, Who: row.CandidateName, Detail: detail,
 			JobTitle: row.JobTitle, ClientName: row.ClientName, Due: timePtr(row.CreatedAt),
 			ActionLabel: "Answer", ActionURL: appPath + row.ApplicationID.String(),
-			SubjectID: row.ApplicationID,
+			SubjectID: row.ApplicationID, ApplicationID: row.ApplicationID,
 		})
 	}
 	return out, nil
@@ -297,27 +557,6 @@ func shortlistDraftItems(ctx context.Context, tx *store.Tx) ([]QueueItem, error)
 			ActionLabel: "Open builder", ActionURL: queueJobPath + row.JobID.String() + queueShortlistPath,
 			SubjectID: row.PacketID,
 		})
-	}
-	return out, nil
-}
-
-func scorecardOverdueItems(ctx context.Context, tx *store.Tx) ([]QueueItem, error) {
-	rows, err := tx.Q.ListQueueScorecardsOverdue(ctx)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]QueueItem, 0, len(rows))
-	for _, row := range rows {
-		item := QueueItem{
-			Kind: QueueScorecardOverdue, Who: row.CandidateName,
-			Detail:   row.StageName + " with " + row.VetterName + ", no scorecard",
-			JobTitle: row.JobTitle, ClientName: row.ClientName, Due: timePtr(row.EndsAt),
-			ActionLabel: "File scorecard", SubjectID: row.SlotID,
-		}
-		if row.ApplicationID.Valid && row.StageID.Valid {
-			item.ActionURL = appPath + row.ApplicationID.UUID.String() + queueScorecardPath + row.StageID.UUID.String()
-		}
-		out = append(out, item)
 	}
 	return out, nil
 }

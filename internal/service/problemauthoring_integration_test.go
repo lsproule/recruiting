@@ -62,7 +62,7 @@ func TestSaveScoresQualityAndProvenLanguages(t *testing.T) {
 	if !good.Attachable() {
 		t.Error("a problem meeting every rule is not attachable")
 	}
-	if good.Guidelines == "" || good.RecommendedMinutes == 0 {
+	if good.Guidelines == "" {
 		t.Errorf("authoring fields were not stored: %+v", good)
 	}
 	if good.TestCases[0].Name == "" || good.TestCases[0].Class != domain.CaseClassSample {
@@ -234,10 +234,10 @@ func TestTryRunsPublicCasesAndWritesNothing(t *testing.T) {
 	}
 
 	var submissions, attempts int
-	if err := f.owner.QueryRow(ctx, `select count(*) from submission`).Scan(&submissions); err != nil {
+	if err := f.owner.QueryRow(ctx, `select count(*) from submission where org_id = $1`, f.p.OrgID).Scan(&submissions); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.owner.QueryRow(ctx, `select count(*) from attempt`).Scan(&attempts); err != nil {
+	if err := f.owner.QueryRow(ctx, `select count(*) from attempt where org_id = $1`, f.p.OrgID).Scan(&attempts); err != nil {
 		t.Fatal(err)
 	}
 	if submissions != 0 || attempts != 0 {

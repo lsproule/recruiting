@@ -337,6 +337,7 @@ func (s *ProcessService) UpdateStage(ctx context.Context, p Principal, id, stage
 			InterviewFormat: formatParam(st.InterviewFormat), DurationMinutes: int32Ptr(st.DurationMinutes),
 			RoundSeconds: int32Ptr(st.RoundSeconds), BreakSeconds: int32Ptr(st.BreakSeconds),
 			TerminalStatus: terminalParam(st.Terminal),
+			PassScore:      int32Ptr(st.PassScore), AutoAdvance: st.AutoAdvance, AutoReject: st.AutoReject,
 		})
 		if err != nil {
 			return err
@@ -496,6 +497,7 @@ func processStageParams(orgID, templateID uuid.UUID, position int32, st domain.S
 		InterviewFormat: formatParam(st.InterviewFormat), DurationMinutes: int32Ptr(st.DurationMinutes),
 		RoundSeconds: int32Ptr(st.RoundSeconds), BreakSeconds: int32Ptr(st.BreakSeconds),
 		TerminalStatus: terminalParam(st.Terminal),
+		PassScore:      int32Ptr(st.PassScore), AutoAdvance: st.AutoAdvance, AutoReject: st.AutoReject,
 	}
 }
 

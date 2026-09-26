@@ -13,6 +13,10 @@ const (
 	SettingIntegrityWeights      = "integrity_weights"
 	SettingAssessmentInviteDays  = "assessment_invite_days"
 	SettingSnapshotRetentionDays = "snapshot_retention_days"
+	// SettingRejectionEmail is whether closing an application as rejected
+	// emails the candidate to say so. On by default: a candidate who never
+	// hears back is the industry's oldest complaint.
+	SettingRejectionEmail = "rejection_email"
 )
 
 // Snapshot retention bounds. The default is long enough for a dispute over a
@@ -65,6 +69,9 @@ type Settings struct {
 	// IntegrityWeights weights each signal in the risk score; one entry per
 	// IntegritySignalNames.
 	IntegrityWeights map[string]float64
+	// RejectionEmail sends the candidate a note when their application is
+	// closed as rejected, whoever or whatever closed it.
+	RejectionEmail bool
 }
 
 func DefaultSettings() Settings {
@@ -75,6 +82,7 @@ func DefaultSettings() Settings {
 	return Settings{
 		PoolScoreThreshold: 80, AssessmentInviteDays: 7,
 		SnapshotRetentionDays: DefaultSnapshotRetentionDays, IntegrityWeights: w,
+		RejectionEmail: true,
 	}
 }
 

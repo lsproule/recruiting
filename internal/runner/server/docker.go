@@ -12,6 +12,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"recruiting/runner/wire"
 )
 
 // DockerExecutor runs the language harness in a fresh, hardened container per
@@ -46,10 +48,11 @@ func availableRuntimes(ctx context.Context) ([]string, error) {
 
 // harnessSpec is what the in-image harness reads from stdin.
 type harnessSpec struct {
-	Language string `json:"language"`
-	Source   string `json:"source"`
-	Tests    []Test `json:"tests"`
-	Limits   Limits `json:"limits"`
+	Language  string          `json:"language"`
+	Source    string          `json:"source"`
+	Signature *wire.Signature `json:"signature,omitempty"`
+	Tests     []Test          `json:"tests"`
+	Limits    Limits          `json:"limits"`
 }
 
 func (d *DockerExecutor) runArgs(name, language string, l Limits) []string {
@@ -87,7 +90,7 @@ func (d *DockerExecutor) Execute(ctx context.Context, req *Request) *Response {
 		docker = "docker"
 	}
 	limits := req.Limits.normalized()
-	spec, err := json.Marshal(harnessSpec{Language: req.Language, Source: req.Source, Tests: req.Tests, Limits: limits})
+	spec, err := json.Marshal(harnessSpec{Language: req.Language, Source: req.Source, Signature: req.Signature, Tests: req.Tests, Limits: limits})
 	if err != nil {
 		return &Response{ID: req.ID, Status: StatusError, CompileOutput: err.Error()}
 	}

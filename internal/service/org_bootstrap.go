@@ -161,6 +161,7 @@ func writeSettings(ctx context.Context, tx *store.Tx, orgID uuid.UUID, s Setting
 		{SettingAssessmentInviteDays, []byte(fmt.Sprint(s.AssessmentInviteDays))},
 		{SettingSnapshotRetentionDays, []byte(fmt.Sprint(s.SnapshotRetentionDays))},
 		{SettingIntegrityWeights, weights},
+		{SettingRejectionEmail, []byte(fmt.Sprint(s.RejectionEmail))},
 	} {
 		err := tx.Q.UpsertOrgSetting(ctx, db.UpsertOrgSettingParams{OrgID: orgID, Key: kv.key, Value: kv.value})
 		if err != nil {

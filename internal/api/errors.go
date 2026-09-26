@@ -122,6 +122,7 @@ var statusErrors = map[int][]error{
 	http.StatusServiceUnavailable: {
 		service.ErrNoBlobStore,
 		service.ErrNoExecutor,
+		service.ErrRunnerUnavailable,
 	},
 	http.StatusUnprocessableEntity: {
 		service.ErrTalentConsent,
@@ -135,6 +136,9 @@ var statusErrors = map[int][]error{
 		service.ErrSprintInterviewer,
 		service.ErrSprintName,
 		service.ErrBadRating,
+		service.ErrBadDecision,
+		service.ErrBadBoard,
+		service.ErrPostingClosedJob,
 		service.ErrProcessName,
 		service.ErrProcessSource,
 		service.ErrRoomLanguage,

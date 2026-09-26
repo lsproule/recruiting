@@ -20,6 +20,7 @@ var unmappedSentinels = map[string]string{
 	"service.ErrResetInvalid":       "password reset is an HTML surface",
 	"service.ErrOrgIncomplete":      "org bootstrap is the admin CLI, which has no API operation",
 	"domain.ErrExtractTooBig":       "resume text extraction runs in the worker, never in a request",
+	"service.ErrNoPoster":           "job postings are placed by the worker, which records the missing tool on the row rather than answering a request",
 }
 
 // declaredSentinels is every exported Err* declared under dir, qualified by

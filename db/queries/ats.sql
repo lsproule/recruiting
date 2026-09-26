@@ -32,12 +32,13 @@ select * from job where org_id = $1 order by created_at desc;
 
 -- name: CreateStage :one
 insert into stage (org_id, job_id, position, name, kind, terminal_status, unblind, scorecard_rubric_id, default_vetter_id, assessment_id,
-    interview_format, duration_minutes, round_seconds, break_seconds)
-values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) returning *;
+    interview_format, duration_minutes, round_seconds, break_seconds, pass_score, auto_advance, auto_reject)
+values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) returning *;
 
 -- name: UpdateStage :one
 update stage set name = $2, kind = $3, terminal_status = $4, unblind = $5, default_vetter_id = $6,
-    interview_format = $7, duration_minutes = $8, round_seconds = $9, break_seconds = $10
+    interview_format = $7, duration_minutes = $8, round_seconds = $9, break_seconds = $10,
+    pass_score = $11, auto_advance = $12, auto_reject = $13
 where id = $1 returning *;
 
 -- name: SetStagePosition :exec

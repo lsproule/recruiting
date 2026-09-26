@@ -111,7 +111,7 @@ func (q *Queries) FindPublicJobBySlug(ctx context.Context, arg FindPublicJobBySl
 }
 
 const firstStage = `-- name: FirstStage :one
-select id, org_id, job_id, position, name, kind, unblind, scorecard_rubric_id, default_vetter_id, assessment_id, terminal_status, interview_format, duration_minutes, round_seconds, break_seconds from stage where job_id = $1 order by position limit 1
+select id, org_id, job_id, position, name, kind, unblind, scorecard_rubric_id, default_vetter_id, assessment_id, terminal_status, interview_format, duration_minutes, round_seconds, break_seconds, pass_score, auto_advance, auto_reject from stage where job_id = $1 order by position limit 1
 `
 
 func (q *Queries) FirstStage(ctx context.Context, jobID uuid.UUID) (Stage, error) {
@@ -133,6 +133,40 @@ func (q *Queries) FirstStage(ctx context.Context, jobID uuid.UUID) (Stage, error
 		&i.DurationMinutes,
 		&i.RoundSeconds,
 		&i.BreakSeconds,
+		&i.PassScore,
+		&i.AutoAdvance,
+		&i.AutoReject,
+	)
+	return i, err
+}
+
+const getCandidateNetworkProfile = `-- name: GetCandidateNetworkProfile :one
+select headline, skills, seniority, location, remote_policy, withdrawn_at, consent_at
+from talent_profile where candidate_id = $1
+`
+
+type GetCandidateNetworkProfileRow struct {
+	Headline     string
+	Skills       []string
+	Seniority    *string
+	Location     *string
+	RemotePolicy *string
+	WithdrawnAt  pgtype.Timestamptz
+	ConsentAt    pgtype.Timestamptz
+}
+
+// The candidate's talent-network profile, for the recruiter's candidate page.
+func (q *Queries) GetCandidateNetworkProfile(ctx context.Context, candidateID uuid.UUID) (GetCandidateNetworkProfileRow, error) {
+	row := q.db.QueryRow(ctx, getCandidateNetworkProfile, candidateID)
+	var i GetCandidateNetworkProfileRow
+	err := row.Scan(
+		&i.Headline,
+		&i.Skills,
+		&i.Seniority,
+		&i.Location,
+		&i.RemotePolicy,
+		&i.WithdrawnAt,
+		&i.ConsentAt,
 	)
 	return i, err
 }
@@ -291,12 +325,19 @@ func (q *Queries) ListResumesByCandidate(ctx context.Context, candidateID uuid.U
 }
 
 const searchCandidates = `-- name: SearchCandidates :many
-select c.id, c.org_id, c.email, c.name, c.phone, c.links, c.created_at, c.updated_at, count(a.id) as application_count
+select c.id, c.org_id, c.email, c.name, c.phone, c.links, c.created_at, c.updated_at,
+    (select count(*) from application a where a.candidate_id = c.id)::bigint as application_count,
+    coalesce((select string_agg(j.title || ' · ' || s.name || case when a.status = 'active' then '' else ' · ' || a.status end, '; ' order by a.created_at desc)
+        from application a join job j on j.id = a.job_id join stage s on s.id = a.stage_id
+        where a.candidate_id = c.id), '')::text as pipeline,
+    coalesce(tp.headline, '')::text as headline,
+    coalesce(tp.skills, '{}')::text[] as skills,
+    coalesce(tp.location, '')::text as location,
+    (tp.id is not null and tp.withdrawn_at is null)::bool as in_network
 from candidate c
-left join application a on a.candidate_id = c.id
+left join talent_profile tp on tp.candidate_id = c.id
 where c.org_id = $1
   and ($2::text = '' or c.search @@ websearch_to_tsquery('english', $2::text))
-group by c.id
 order by
     case when $2::text = '' then 0
          else ts_rank(c.search, websearch_to_tsquery('english', $2::text)) end desc,
@@ -320,8 +361,16 @@ type SearchCandidatesRow struct {
 	CreatedAt        pgtype.Timestamptz
 	UpdatedAt        pgtype.Timestamptz
 	ApplicationCount int64
+	Pipeline         string
+	Headline         string
+	Skills           []string
+	Location         string
+	InNetwork        bool
 }
 
+// One row per candidate with what the list shows beside the name: how many
+// roles they are on and where each stands, and the headline, skills, and
+// location of their talent-network profile when they have one.
 func (q *Queries) SearchCandidates(ctx context.Context, arg SearchCandidatesParams) ([]SearchCandidatesRow, error) {
 	rows, err := q.db.Query(ctx, searchCandidates, arg.OrgID, arg.Query, arg.RowLimit)
 	if err != nil {
@@ -341,6 +390,11 @@ func (q *Queries) SearchCandidates(ctx context.Context, arg SearchCandidatesPara
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.ApplicationCount,
+			&i.Pipeline,
+			&i.Headline,
+			&i.Skills,
+			&i.Location,
+			&i.InNetwork,
 		); err != nil {
 			return nil, err
 		}

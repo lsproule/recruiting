@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -183,75 +184,179 @@ func (s *ApplicationService) Move(ctx context.Context, p Principal, req MoveRequ
 	if p.Kind != PrincipalOrgUser && p.Kind != PrincipalClientUser {
 		return Application{}, ErrForbidden
 	}
-	req.Reason = strings.TrimSpace(req.Reason)
-	role := actorRole(p)
 	var out Application
 	err := s.st.WithTx(ctx, orgScoped(p.OrgID), func(ctx context.Context, tx *store.Tx) error {
-		app, err := lockApplication(ctx, tx, p, req.ApplicationID)
-		if err != nil {
-			return err
-		}
-		stages, err := listStages(ctx, tx, app.JobID)
-		if err != nil {
-			return err
-		}
-		from, ok := findStage(stages, app.StageID)
-		if !ok {
-			return fmt.Errorf("application %s sits in a stage its job does not have", app.ID)
-		}
-		to, ok := findStage(stages, req.ToStageID)
-		if !ok {
-			return ErrNotFound
-		}
-		if app.Status == string(domain.StatusActive) && to.ID == from.ID {
-			// Another mover got here first, or the screen was stale.
-			return ErrStale
-		}
-		dapp := domain.Application{ID: app.ID, StageID: app.StageID, Status: domain.ApplicationStatus(app.Status)}
-		prereqs, err := s.Prereqs(ctx, tx, dapp, from)
-		if err != nil {
-			return err
-		}
-		if err := domain.ValidateMove(role, dapp, from, to, prereqs, req); err != nil {
-			return err
-		}
-		status := domain.StatusActive
-		if to.Kind == domain.StageTerminal {
-			status = to.Terminal
-		}
-		if _, err := tx.Q.MoveApplication(ctx, db.MoveApplicationParams{ID: app.ID, StageID: to.ID, Status: string(status), FromStageID: from.ID}); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrStale
-			}
-			return err
-		}
-		override := req.OverridePrereq && !prereqs.Satisfies(from.Kind)
-		_, err = tx.Q.CreateApplicationEvent(ctx, db.CreateApplicationEventParams{
-			OrgID: p.OrgID, ApplicationID: app.ID, ActorKind: actorKind(p),
-			ActorID:     uuid.NullUUID{UUID: p.UserID, Valid: p.UserID != uuid.Nil},
-			Kind:        EventMoved,
-			FromStageID: uuid.NullUUID{UUID: from.ID, Valid: true},
-			ToStageID:   uuid.NullUUID{UUID: to.ID, Valid: true},
-			Reason:      nullable(req.Reason),
-			Payload:     []byte(fmt.Sprintf(`{"override":%t}`, override)),
-		})
-		if err != nil {
-			return err
-		}
-		card, err := tx.Q.GetApplicationCard(ctx, app.ID)
-		if err != nil {
-			return err
-		}
-		if err := s.onEnter(ctx, tx, p.OrgID, card, to); err != nil {
-			return err
-		}
-		out, err = s.card(ctx, tx, app.ID)
+		var err error
+		out, err = s.moveTx(ctx, tx, p, req)
 		return err
 	})
 	if err != nil {
 		return Application{}, wrapMove("move application", err)
 	}
 	return out, nil
+}
+
+// moveTx is Move inside a transaction the caller holds: the same rules, the
+// same event, the same stage-entry side effects. An automation that has
+// already done work in the transaction (a score just written) moves the
+// application through here so both commit or neither does.
+func (s *ApplicationService) moveTx(ctx context.Context, tx *store.Tx, p Principal, req MoveRequest) (Application, error) {
+	req.Reason = strings.TrimSpace(req.Reason)
+	role := actorRole(p)
+	app, err := lockApplication(ctx, tx, p, req.ApplicationID)
+	if err != nil {
+		return Application{}, err
+	}
+	stages, err := listStages(ctx, tx, app.JobID)
+	if err != nil {
+		return Application{}, err
+	}
+	from, ok := findStage(stages, app.StageID)
+	if !ok {
+		return Application{}, fmt.Errorf("application %s sits in a stage its job does not have", app.ID)
+	}
+	to, ok := findStage(stages, req.ToStageID)
+	if !ok {
+		return Application{}, ErrNotFound
+	}
+	if app.Status == string(domain.StatusActive) && to.ID == from.ID {
+		// Another mover got here first, or the screen was stale.
+		return Application{}, ErrStale
+	}
+	dapp := domain.Application{ID: app.ID, StageID: app.StageID, Status: domain.ApplicationStatus(app.Status)}
+	prereqs, err := s.Prereqs(ctx, tx, dapp, from)
+	if err != nil {
+		return Application{}, err
+	}
+	if err := domain.ValidateMove(role, dapp, from, to, prereqs, req); err != nil {
+		return Application{}, err
+	}
+	status := domain.StatusActive
+	if to.Kind == domain.StageTerminal {
+		status = to.Terminal
+	}
+	if _, err := tx.Q.MoveApplication(ctx, db.MoveApplicationParams{ID: app.ID, StageID: to.ID, Status: string(status), FromStageID: from.ID}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Application{}, ErrStale
+		}
+		return Application{}, err
+	}
+	override := req.OverridePrereq && !prereqs.Satisfies(from.Kind)
+	_, err = tx.Q.CreateApplicationEvent(ctx, db.CreateApplicationEventParams{
+		OrgID: p.OrgID, ApplicationID: app.ID, ActorKind: actorKind(p),
+		ActorID:     uuid.NullUUID{UUID: p.UserID, Valid: p.UserID != uuid.Nil},
+		Kind:        EventMoved,
+		FromStageID: uuid.NullUUID{UUID: from.ID, Valid: true},
+		ToStageID:   uuid.NullUUID{UUID: to.ID, Valid: true},
+		Reason:      nullable(req.Reason),
+		Payload:     []byte(fmt.Sprintf(`{"override":%t}`, override)),
+	})
+	if err != nil {
+		return Application{}, err
+	}
+	card, err := tx.Q.GetApplicationCard(ctx, app.ID)
+	if err != nil {
+		return Application{}, err
+	}
+	if err := s.onEnter(ctx, tx, p.OrgID, card, to); err != nil {
+		return Application{}, err
+	}
+	if status == domain.StatusRejected {
+		if err := s.notifyRejection(ctx, tx, p.OrgID, card); err != nil {
+			return Application{}, err
+		}
+	}
+	return s.card(ctx, tx, app.ID)
+}
+
+// notifyRejection tells the candidate their application is closed, unless
+// the org has switched the note off. It says only that: the reason on the
+// timeline is the org's, never the candidate's to read.
+func (s *ApplicationService) notifyRejection(ctx context.Context, tx *store.Tx, orgID uuid.UUID, app db.GetApplicationCardRow) error {
+	if s.q == nil || app.CandidateEmail == "" {
+		return nil
+	}
+	on, err := rejectionEmailOn(ctx, tx, orgID)
+	if err != nil || !on {
+		return err
+	}
+	return enqueued(s.q.Enqueue(ctx, tx, queue.KindEmailSend, queue.EmailPayload{
+		Template: mail.TemplateApplicationRejected, To: app.CandidateEmail, OrgID: orgID,
+		Data: map[string]any{"CandidateName": app.CandidateName, "JobTitle": app.JobTitle},
+	}))
+}
+
+// rejectionEmailOn reads the org's switch; an org that never saved settings
+// has the default, which is on.
+func rejectionEmailOn(ctx context.Context, tx *store.Tx, orgID uuid.UUID) (bool, error) {
+	raw, err := tx.Q.GetOrgSetting(ctx, db.GetOrgSettingParams{OrgID: orgID, Key: SettingRejectionEmail})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return DefaultSettings().RejectionEmail, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(string(raw)) == "true", nil
+}
+
+// AutoDecide applies an assessment stage's own rule to a sitting that was
+// just scored: at or above the pass mark with auto-advance on, the
+// application moves to the next stage; below it with auto-reject on, it is
+// closed as rejected, which sends the candidate the rejection note. A stage
+// without a rule, or an application that already moved on, is left alone.
+// It runs in the scoring transaction so the score and the move commit
+// together.
+func (s *ApplicationService) AutoDecide(ctx context.Context, tx *store.Tx, orgID, applicationID uuid.UUID, score float64) error {
+	app, err := tx.Q.GetApplicationForUpdate(ctx, applicationID)
+	if err != nil {
+		return err
+	}
+	if app.Status != string(domain.StatusActive) {
+		return nil
+	}
+	stages, err := listStages(ctx, tx, app.JobID)
+	if err != nil {
+		return err
+	}
+	from, ok := findStage(stages, app.StageID)
+	if !ok || from.Kind != domain.StageAssessment {
+		return nil
+	}
+	advance, reject := domain.AutoDecision(from, score)
+	var to domain.Stage
+	var reason string
+	switch {
+	case advance:
+		for _, st := range stages {
+			if st.Position > from.Position && st.Kind != domain.StageTerminal {
+				to = st
+				break
+			}
+		}
+		reason = fmt.Sprintf("Automatic: scored %s, at or above the pass mark of %d", scoreText(score), from.PassScore)
+	case reject:
+		for _, st := range stages {
+			if st.Kind == domain.StageTerminal && st.Terminal == domain.StatusRejected {
+				to = st
+				break
+			}
+		}
+		reason = fmt.Sprintf("Automatic: scored %s, below the pass mark of %d", scoreText(score), from.PassScore)
+	default:
+		return nil
+	}
+	if to.ID == uuid.Nil {
+		return nil
+	}
+	_, err = s.moveTx(ctx, tx, orgScoped(orgID), MoveRequest{
+		ApplicationID: applicationID, ToStageID: to.ID, Reason: reason, OverridePrereq: true,
+	})
+	return err
+}
+
+// scoreText writes a score the way the review screen does.
+func scoreText(score float64) string {
+	return strconv.FormatFloat(score, 'f', -1, 64)
 }
 
 // lockApplication loads the application under a row lock. The transaction

@@ -279,6 +279,25 @@ type Job struct {
 	TemplateID      uuid.NullUUID
 }
 
+type JobPosting struct {
+	ID          uuid.UUID
+	OrgID       uuid.UUID
+	JobID       uuid.UUID
+	Board       string
+	Status      string
+	Title       string
+	Body        string
+	ApplyUrl    string
+	ExternalUrl *string
+	ExternalID  *string
+	Error       *string
+	Attempts    int32
+	PostedAt    pgtype.Timestamptz
+	CreatedBy   uuid.NullUUID
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+}
+
 type MagicLink struct {
 	ID        uuid.UUID
 	OrgID     uuid.UUID
@@ -363,28 +382,31 @@ type PipelineTemplateStage struct {
 	RoundSeconds    *int32
 	BreakSeconds    *int32
 	TerminalStatus  *string
+	PassScore       *int32
+	AutoAdvance     bool
+	AutoReject      bool
 }
 
 type Problem struct {
-	ID                 uuid.UUID
-	OrgID              uuid.UUID
-	Kind               string
-	Title              string
-	Statement          string
-	Difficulty         string
-	Tags               []string
-	AllowedLanguages   []string
-	TimeLimitMs        int32
-	MemoryLimitKb      int32
-	SqlSchema          *string
-	SqlSeed            *string
-	CreatedAt          pgtype.Timestamptz
-	UpdatedAt          pgtype.Timestamptz
-	RecommendedMinutes int32
-	Guidelines         string
-	OriginProblemID    uuid.NullUUID
-	Quality            int32
-	ProvenLanguages    []string
+	ID               uuid.UUID
+	OrgID            uuid.UUID
+	Kind             string
+	Title            string
+	Statement        string
+	Difficulty       string
+	Tags             []string
+	AllowedLanguages []string
+	TimeLimitMs      int32
+	MemoryLimitKb    int32
+	SqlSchema        *string
+	SqlSeed          *string
+	CreatedAt        pgtype.Timestamptz
+	UpdatedAt        pgtype.Timestamptz
+	Guidelines       string
+	OriginProblemID  uuid.NullUUID
+	Quality          int32
+	ProvenLanguages  []string
+	Signature        []byte
 }
 
 type ProblemReference struct {
@@ -552,6 +574,9 @@ type Stage struct {
 	DurationMinutes   *int32
 	RoundSeconds      *int32
 	BreakSeconds      *int32
+	PassScore         *int32
+	AutoAdvance       bool
+	AutoReject        bool
 }
 
 type Submission struct {

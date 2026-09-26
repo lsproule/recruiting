@@ -445,19 +445,13 @@ func (s *IntakeService) createAssessment(ctx context.Context, tx *store.Tx, p Pr
 }
 
 // intakeDuration is how long the sitting runs: what the recruiter set, else
-// what the problems recommend between them, else the platform default.
+// the platform default. Nobody can say how long a problem "should" take, so
+// no problem carries an estimate.
 func intakeDuration(in IntakePayload, problems []Problem) int {
 	if in.Assessment.DurationMinutes > 0 {
 		return in.Assessment.DurationMinutes
 	}
-	total := 0
-	for _, p := range problems {
-		total += p.RecommendedMinutes
-	}
-	if total <= 0 {
-		return DefaultAssessmentMinutes
-	}
-	return total
+	return DefaultAssessmentMinutes
 }
 
 // intakeDescription is the job description the intake writes: the client's
@@ -547,18 +541,21 @@ func intakeSlotPick(in IntakeAssessment, i int) uuid.UUID {
 // intakeBank is every problem the org may build a set from: its own and the
 // platform seed, code problems only, since a set is what a candidate codes.
 func intakeBank(ctx context.Context, tx *store.Tx) ([]Problem, error) {
-	rows, err := tx.Q.FilterProblems(ctx, db.FilterProblemsParams{Kind: domain.ProblemKindCode, RowLimit: ProblemListLimit})
+	rows, err := tx.Q.FilterProblems(ctx, db.FilterProblemsParams{RowLimit: ProblemListLimit})
 	if err != nil {
 		return nil, err
 	}
 	out := make([]Problem, 0, len(rows))
 	for _, r := range rows {
+		if !domain.CodeKind(r.Kind) {
+			continue
+		}
 		p := toProblem(db.Problem{
 			ID: r.ID, OrgID: r.OrgID, Kind: r.Kind, Title: r.Title, Statement: r.Statement,
 			Difficulty: r.Difficulty, Tags: r.Tags, AllowedLanguages: r.AllowedLanguages,
 			TimeLimitMs: r.TimeLimitMs, MemoryLimitKb: r.MemoryLimitKb,
 			SqlSchema: r.SqlSchema, SqlSeed: r.SqlSeed,
-			RecommendedMinutes: r.RecommendedMinutes, Guidelines: r.Guidelines,
+			Signature: r.Signature, Guidelines: r.Guidelines,
 			OriginProblemID: r.OriginProblemID, Quality: r.Quality,
 			ProvenLanguages: r.ProvenLanguages,
 			CreatedAt:       r.CreatedAt, UpdatedAt: r.UpdatedAt,

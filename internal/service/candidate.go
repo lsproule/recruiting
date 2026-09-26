@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgerrcode"
@@ -39,6 +40,25 @@ type Candidate struct {
 	Phone            string
 	Links            []string
 	ApplicationCount int
+	// Pipeline is where each of their applications stands, newest first,
+	// as one line per role ("Backend Engineer · Take-home").
+	Pipeline []string
+	// Headline, Skills, Location, and InNetwork come from their talent
+	// network profile when they have one; empty otherwise.
+	Headline  string
+	Skills    []string
+	Location  string
+	InNetwork bool
+	CreatedAt time.Time
+}
+
+// NetworkProfile is the candidate's own talent-network profile as the
+// recruiter's page shows it.
+type NetworkProfile struct {
+	Headline, Seniority, Location, RemotePolicy string
+	Skills                                      []string
+	JoinedAt                                    time.Time
+	Withdrawn                                   bool
 }
 
 // CandidateApplication is one of a candidate's applications, named by the job
@@ -58,6 +78,8 @@ type CandidateDetail struct {
 	Candidate    Candidate
 	Applications []CandidateApplication
 	Resumes      []Resume
+	// Network is their talent-network profile; nil when they never joined.
+	Network *NetworkProfile
 }
 
 // PublicJob is what the unauthenticated apply page may show. It deliberately
@@ -224,10 +246,16 @@ func (s *CandidateService) Search(ctx context.Context, p Principal, query string
 		}
 		out = make([]Candidate, 0, len(rows))
 		for _, r := range rows {
-			out = append(out, Candidate{
+			c := Candidate{
 				ID: r.ID, Email: r.Email, Name: r.Name, Phone: deref(r.Phone),
 				Links: decodeLinks(r.Links), ApplicationCount: int(r.ApplicationCount),
-			})
+				Headline: r.Headline, Skills: r.Skills, Location: r.Location, InNetwork: r.InNetwork,
+				CreatedAt: r.CreatedAt.Time.UTC(),
+			}
+			if r.Pipeline != "" {
+				c.Pipeline = strings.Split(r.Pipeline, "; ")
+			}
+			out = append(out, c)
 		}
 		return nil
 	})
@@ -250,7 +278,19 @@ func (s *CandidateService) Detail(ctx context.Context, p Principal, id uuid.UUID
 		}
 		out.Candidate = Candidate{
 			ID: row.ID, Email: row.Email, Name: row.Name, Phone: deref(row.Phone),
-			Links: decodeLinks(row.Links),
+			Links: decodeLinks(row.Links), CreatedAt: row.CreatedAt.Time.UTC(),
+		}
+		switch profile, err := tx.Q.GetCandidateNetworkProfile(ctx, id); {
+		case err == nil:
+			out.Network = &NetworkProfile{
+				Headline: profile.Headline, Seniority: deref(profile.Seniority), Location: deref(profile.Location),
+				RemotePolicy: deref(profile.RemotePolicy), Skills: profile.Skills,
+				JoinedAt: profile.ConsentAt.Time.UTC(), Withdrawn: profile.WithdrawnAt.Valid,
+			}
+			out.Candidate.Headline, out.Candidate.Skills, out.Candidate.Location = profile.Headline, profile.Skills, deref(profile.Location)
+			out.Candidate.InNetwork = !profile.WithdrawnAt.Valid
+		case !errors.Is(err, pgx.ErrNoRows):
+			return err
 		}
 		apps, err := tx.Q.ListCandidateApplications(ctx, id)
 		if err != nil {

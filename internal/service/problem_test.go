@@ -190,27 +190,44 @@ func (f executorFunc) Execute(ctx context.Context, req server.Request) (server.R
 	return f(ctx, req)
 }
 
-func TestSeedProblemsCoverEveryDifficultyAndBothKinds(t *testing.T) {
+func TestSeedProblemsCoverEveryDifficultyAndEveryLanguage(t *testing.T) {
 	problems, err := SeedProblems()
 	if err != nil {
 		t.Fatalf("SeedProblems: %v", err)
 	}
-	code, sql := 0, 0
+	functions, sql := 0, 0
 	difficulties := map[string]int{}
 	for _, p := range problems {
 		difficulties[p.Difficulty]++
 		switch p.Kind {
-		case domain.ProblemKindCode:
-			code++
-			if !contains(p.AllowedLanguages, "python") {
-				t.Errorf("%q offers no python reference", p.Title)
+		case domain.ProblemKindFunction:
+			functions++
+			// Every function problem ships a solution in every language it
+			// allows, so each language is proven on each problem; C sits out
+			// only where the signature is one it cannot return.
+			proven := map[string]bool{}
+			for _, ref := range p.References {
+				proven[ref.Language] = true
+			}
+			for _, lang := range domain.CodeLanguageIDs() {
+				if !contains(p.AllowedLanguages, lang) {
+					if lang != "c" {
+						t.Errorf("%q does not allow %s", p.Title, lang)
+					}
+					continue
+				}
+				if !proven[lang] {
+					t.Errorf("%q allows %s but ships no reference solution in it", p.Title, lang)
+				}
 			}
 		case domain.ProblemKindSQL:
 			sql++
+		default:
+			t.Errorf("%q is a %s problem; the bank ships functions and queries", p.Title, p.Kind)
 		}
 	}
-	if code < 5 {
-		t.Errorf("%d code problems, want at least 5", code)
+	if functions < 12 {
+		t.Errorf("%d function problems, want at least 12", functions)
 	}
 	if sql < 3 {
 		t.Errorf("%d sql problems, want at least 3", sql)

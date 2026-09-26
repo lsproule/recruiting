@@ -436,6 +436,8 @@ func (s *OrgService) Settings(ctx context.Context, p Principal) (Settings, error
 				out.AssessmentInviteDays, err = settingInt(row)
 			case SettingSnapshotRetentionDays:
 				out.SnapshotRetentionDays, err = settingInt(row)
+			case SettingRejectionEmail:
+				out.RejectionEmail, err = settingBool(row)
 			case SettingIntegrityWeights:
 				var stored map[string]float64
 				if err = json.Unmarshal(row.Value, &stored); err != nil {
@@ -477,6 +479,18 @@ func (s *OrgService) UpdateSettings(ctx context.Context, p Principal, in Setting
 		return fmt.Errorf("save settings: %w", err)
 	}
 	return nil
+}
+
+// settingBool reads a true/false setting, naming the key when the stored
+// value is neither.
+func settingBool(row db.OrgSetting) (bool, error) {
+	switch strings.TrimSpace(string(row.Value)) {
+	case "true":
+		return true, nil
+	case "false":
+		return false, nil
+	}
+	return false, fmt.Errorf("%w: %s is not true or false", ErrInvalidSettings, row.Key)
 }
 
 // settingInt reads a scalar integer setting, naming the key when the stored

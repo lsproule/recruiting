@@ -1,10 +1,15 @@
 package domain
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 // Language is one language a problem may be offered in. Kind tells a code
-// language (a program read from stdin) from the SQL one (a single query), and
-// Compiled marks the languages the runner builds once before the tests.
+// language (a function, or a program read from stdin) from the SQL one (a
+// single query), and Compiled marks the languages the runner builds once
+// before the tests. The code languages are exactly the ones the harness
+// carries drivers for (runner/wire.Languages), in the same order.
 type Language struct {
 	ID       string
 	Label    string
@@ -22,24 +27,20 @@ const LanguageAny = "any"
 var Languages = []Language{
 	{ID: "python", Label: "Python", Kind: ProblemKindCode},
 	{ID: "javascript", Label: "JavaScript", Kind: ProblemKindCode},
-	{ID: "typescript", Label: "TypeScript", Kind: ProblemKindCode},
+	{ID: "ruby", Label: "Ruby", Kind: ProblemKindCode},
+	{ID: "php", Label: "PHP", Kind: ProblemKindCode},
 	{ID: "go", Label: "Go", Kind: ProblemKindCode, Compiled: true},
 	{ID: "java", Label: "Java", Kind: ProblemKindCode, Compiled: true},
-	{ID: "c", Label: "C", Kind: ProblemKindCode, Compiled: true},
-	{ID: "cpp", Label: "C++", Kind: ProblemKindCode, Compiled: true},
-	{ID: "rust", Label: "Rust", Kind: ProblemKindCode, Compiled: true},
-	{ID: "php", Label: "PHP", Kind: ProblemKindCode},
-	{ID: "ruby", Label: "Ruby", Kind: ProblemKindCode},
-	{ID: "haskell", Label: "Haskell", Kind: ProblemKindCode, Compiled: true},
-	{ID: "lua", Label: "Lua", Kind: ProblemKindCode},
-	{ID: "kotlin", Label: "Kotlin", Kind: ProblemKindCode, Compiled: true},
 	{ID: "csharp", Label: "C#", Kind: ProblemKindCode, Compiled: true},
+	{ID: "cpp", Label: "C++", Kind: ProblemKindCode, Compiled: true},
+	{ID: "c", Label: "C", Kind: ProblemKindCode, Compiled: true},
+	{ID: "rust", Label: "Rust", Kind: ProblemKindCode, Compiled: true},
 	{ID: "sql", Label: "SQL", Kind: ProblemKindSQL},
 }
 
 // languageAliases maps retired ids to their current one so a document, an API
 // caller, or a stored row written before a rename still resolves.
-var languageAliases = map[string]string{"node": "javascript"}
+var languageAliases = map[string]string{"node": "javascript", "c++": "cpp", "c#": "csharp", "js": "javascript", "py": "python", "golang": "go", "rs": "rust", "rb": "ruby"}
 
 // NormalizeLanguageID trims, lower-cases, and resolves aliases. It does not
 // check that the result is a known language.
@@ -71,6 +72,26 @@ func CodeLanguageIDs() []string {
 			out = append(out, l.ID)
 		}
 	}
+	return out
+}
+
+// OrderLanguages sorts language ids into registry order, so a screen that
+// offers them leads with Python rather than whatever sorts first
+// alphabetically; unknown ids keep their relative order at the end.
+func OrderLanguages(ids []string) []string {
+	rank := make(map[string]int, len(Languages))
+	for i, l := range Languages {
+		rank[l.ID] = i
+	}
+	out := append([]string(nil), ids...)
+	sort.SliceStable(out, func(i, j int) bool {
+		ri, oki := rank[NormalizeLanguageID(out[i])]
+		rj, okj := rank[NormalizeLanguageID(out[j])]
+		if oki != okj {
+			return oki
+		}
+		return ri < rj
+	})
 	return out
 }
 

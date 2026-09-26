@@ -42,7 +42,11 @@ templ jobFormPage(page layout.Page, f jobForm) {
 			<h1>New job</h1>
 		} else {
 			<h1>{ f.Job.Title }</h1>
-			<p><a href={ templ.SafeURL(Prefix + "/" + f.Job.ID.String() + "/pipeline") }>Edit pipeline</a></p>
+			<p>
+				<a href={ templ.SafeURL(Prefix + "/" + f.Job.ID.String() + "/pipeline") }>Edit pipeline</a>
+				{ " · " }
+				<a href={ templ.SafeURL(Prefix + "/" + f.Job.ID.String() + "/postings") }>Postings</a>
+			</p>
 		}
 		if f.Error != "" {
 			<p class="flash flash-error" role="alert">{ f.Error }</p>

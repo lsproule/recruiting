@@ -13,9 +13,7 @@ import { cpp } from "@codemirror/lang-cpp";
 import { rust } from "@codemirror/lang-rust";
 import { php } from "@codemirror/lang-php";
 import { ruby } from "@codemirror/legacy-modes/mode/ruby";
-import { haskell } from "@codemirror/legacy-modes/mode/haskell";
-import { lua } from "@codemirror/legacy-modes/mode/lua";
-import { csharp, kotlin } from "@codemirror/legacy-modes/mode/clike";
+import { csharp } from "@codemirror/legacy-modes/mode/clike";
 
 // Retired ids still reaching the island from a stored row or an old page.
 const ALIASES: Record<string, string> = { node: "javascript" };
@@ -23,7 +21,6 @@ const ALIASES: Record<string, string> = { node: "javascript" };
 const MODES: Record<string, () => LanguageSupport | Extension> = {
   python: () => python(),
   javascript: () => javascript(),
-  typescript: () => javascript({ typescript: true }),
   go: () => go(),
   java: () => java(),
   c: () => cpp(),
@@ -31,9 +28,6 @@ const MODES: Record<string, () => LanguageSupport | Extension> = {
   rust: () => rust(),
   php: () => php(),
   ruby: () => StreamLanguage.define(ruby),
-  haskell: () => StreamLanguage.define(haskell),
-  lua: () => StreamLanguage.define(lua),
-  kotlin: () => StreamLanguage.define(kotlin),
   csharp: () => StreamLanguage.define(csharp),
   sql: () => sql(),
 };
@@ -43,7 +37,6 @@ const MODES: Record<string, () => LanguageSupport | Extension> = {
 const LABELS: Record<string, string> = {
   python: "Python",
   javascript: "JavaScript",
-  typescript: "TypeScript",
   go: "Go",
   java: "Java",
   c: "C",
@@ -51,9 +44,6 @@ const LABELS: Record<string, string> = {
   rust: "Rust",
   php: "PHP",
   ruby: "Ruby",
-  haskell: "Haskell",
-  lua: "Lua",
-  kotlin: "Kotlin",
   csharp: "C#",
   sql: "SQL",
 };

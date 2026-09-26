@@ -3,6 +3,7 @@ package mail
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -35,19 +36,29 @@ const (
 	TemplateSprintInvite        = "sprint_invite"
 	TemplateTalentWelcome       = "talent_welcome"
 	TemplateOpportunity         = "opportunity"
+	TemplateApplicationRejected = "application_rejected"
 )
 
 // ErrUnknownTemplate is returned for a name no template file answers to.
 var ErrUnknownTemplate = errors.New("mail: unknown template")
 
 // Message is one rendered email. Both bodies are always present; the wire
-// format sends them as alternatives.
+// format sends them as alternatives. Attachments, when there are any, ride
+// alongside in a multipart/mixed envelope.
 type Message struct {
-	From    string
-	To      string
-	Subject string
-	Text    string
-	HTML    string
+	From        string
+	To          string
+	Subject     string
+	Text        string
+	HTML        string
+	Attachments []Attachment
+}
+
+// Attachment is one file on a message.
+type Attachment struct {
+	Filename    string
+	ContentType string
+	Body        []byte
 }
 
 // tripleSuffixes are the three files that make up one template.
@@ -172,7 +183,6 @@ func (r *Renderer) Render(name, orgName string, data map[string]any) (Message, e
 // Bytes renders the RFC 5322 message: a multipart/alternative with the plain
 // body first, so a client that cannot show HTML still reads something.
 func (m Message) Bytes() []byte {
-	boundary := randomBoundary()
 	var b bytes.Buffer
 	fmt.Fprintf(&b, "From: %s\r\n", headerValue(m.From))
 	fmt.Fprintf(&b, "To: %s\r\n", headerValue(m.To))
@@ -182,19 +192,57 @@ func (m Message) Bytes() []byte {
 	fmt.Fprintf(&b, "Date: %s\r\n", time.Now().UTC().Format(time.RFC1123Z))
 	fmt.Fprintf(&b, "Message-ID: %s\r\n", messageID(m.From))
 	b.WriteString("MIME-Version: 1.0\r\n")
-	fmt.Fprintf(&b, "Content-Type: multipart/alternative; boundary=%q\r\n\r\n", boundary)
+	if len(m.Attachments) == 0 {
+		m.writeAlternative(&b)
+		return b.Bytes()
+	}
+	// With attachments the bodies become the first part of a mixed message,
+	// so a client shows the text and lists the files beside it.
+	mixed := randomBoundary()
+	fmt.Fprintf(&b, "Content-Type: multipart/mixed; boundary=%q\r\n\r\n", mixed)
+	fmt.Fprintf(&b, "--%s\r\n", mixed)
+	m.writeAlternative(&b)
+	for _, a := range m.Attachments {
+		fmt.Fprintf(&b, "--%s\r\n", mixed)
+		fmt.Fprintf(&b, "Content-Type: %s; name=%q\r\n", a.ContentType, headerValue(a.Filename))
+		fmt.Fprintf(&b, "Content-Disposition: attachment; filename=%q\r\n", headerValue(a.Filename))
+		b.WriteString("Content-Transfer-Encoding: base64\r\n\r\n")
+		b.WriteString(base64Lines(a.Body))
+		b.WriteString("\r\n")
+	}
+	fmt.Fprintf(&b, "--%s--\r\n", mixed)
+	return b.Bytes()
+}
 
+// writeAlternative writes the multipart/alternative body with its own
+// Content-Type line: the whole message when there are no attachments, one
+// part of the mixed message when there are.
+func (m Message) writeAlternative(b *bytes.Buffer) {
+	boundary := randomBoundary()
+	fmt.Fprintf(b, "Content-Type: multipart/alternative; boundary=%q\r\n\r\n", boundary)
 	for _, part := range []struct{ contentType, body string }{
 		{"text/plain; charset=utf-8", m.Text},
 		{"text/html; charset=utf-8", m.HTML},
 	} {
-		fmt.Fprintf(&b, "--%s\r\n", boundary)
-		fmt.Fprintf(&b, "Content-Type: %s\r\n\r\n", part.contentType)
+		fmt.Fprintf(b, "--%s\r\n", boundary)
+		fmt.Fprintf(b, "Content-Type: %s\r\n\r\n", part.contentType)
 		b.WriteString(crlf(part.body))
 		b.WriteString("\r\n")
 	}
-	fmt.Fprintf(&b, "--%s--\r\n", boundary)
-	return b.Bytes()
+	fmt.Fprintf(b, "--%s--\r\n", boundary)
+}
+
+// base64Lines encodes a body in the 76-column lines RFC 2045 asks for.
+func base64Lines(body []byte) string {
+	enc := base64.StdEncoding.EncodeToString(body)
+	var b strings.Builder
+	for len(enc) > 76 {
+		b.WriteString(enc[:76])
+		b.WriteString("\r\n")
+		enc = enc[76:]
+	}
+	b.WriteString(enc)
+	return b.String()
 }
 
 // headerValue keeps a header on one line; a rendered subject must not be able

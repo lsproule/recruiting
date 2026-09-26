@@ -178,8 +178,8 @@ func (q *Queries) CreateJob(ctx context.Context, arg CreateJobParams) (Job, erro
 
 const createStage = `-- name: CreateStage :one
 insert into stage (org_id, job_id, position, name, kind, terminal_status, unblind, scorecard_rubric_id, default_vetter_id, assessment_id,
-    interview_format, duration_minutes, round_seconds, break_seconds)
-values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) returning id, org_id, job_id, position, name, kind, unblind, scorecard_rubric_id, default_vetter_id, assessment_id, terminal_status, interview_format, duration_minutes, round_seconds, break_seconds
+    interview_format, duration_minutes, round_seconds, break_seconds, pass_score, auto_advance, auto_reject)
+values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) returning id, org_id, job_id, position, name, kind, unblind, scorecard_rubric_id, default_vetter_id, assessment_id, terminal_status, interview_format, duration_minutes, round_seconds, break_seconds, pass_score, auto_advance, auto_reject
 `
 
 type CreateStageParams struct {
@@ -197,6 +197,9 @@ type CreateStageParams struct {
 	DurationMinutes   *int32
 	RoundSeconds      *int32
 	BreakSeconds      *int32
+	PassScore         *int32
+	AutoAdvance       bool
+	AutoReject        bool
 }
 
 func (q *Queries) CreateStage(ctx context.Context, arg CreateStageParams) (Stage, error) {
@@ -215,6 +218,9 @@ func (q *Queries) CreateStage(ctx context.Context, arg CreateStageParams) (Stage
 		arg.DurationMinutes,
 		arg.RoundSeconds,
 		arg.BreakSeconds,
+		arg.PassScore,
+		arg.AutoAdvance,
+		arg.AutoReject,
 	)
 	var i Stage
 	err := row.Scan(
@@ -233,6 +239,9 @@ func (q *Queries) CreateStage(ctx context.Context, arg CreateStageParams) (Stage
 		&i.DurationMinutes,
 		&i.RoundSeconds,
 		&i.BreakSeconds,
+		&i.PassScore,
+		&i.AutoAdvance,
+		&i.AutoReject,
 	)
 	return i, err
 }
@@ -491,7 +500,7 @@ func (q *Queries) ListJobs(ctx context.Context, orgID uuid.UUID) ([]Job, error) 
 }
 
 const listStages = `-- name: ListStages :many
-select id, org_id, job_id, position, name, kind, unblind, scorecard_rubric_id, default_vetter_id, assessment_id, terminal_status, interview_format, duration_minutes, round_seconds, break_seconds from stage where job_id = $1 order by position
+select id, org_id, job_id, position, name, kind, unblind, scorecard_rubric_id, default_vetter_id, assessment_id, terminal_status, interview_format, duration_minutes, round_seconds, break_seconds, pass_score, auto_advance, auto_reject from stage where job_id = $1 order by position
 `
 
 func (q *Queries) ListStages(ctx context.Context, jobID uuid.UUID) ([]Stage, error) {
@@ -519,6 +528,9 @@ func (q *Queries) ListStages(ctx context.Context, jobID uuid.UUID) ([]Stage, err
 			&i.DurationMinutes,
 			&i.RoundSeconds,
 			&i.BreakSeconds,
+			&i.PassScore,
+			&i.AutoAdvance,
+			&i.AutoReject,
 		); err != nil {
 			return nil, err
 		}
@@ -681,8 +693,9 @@ func (q *Queries) UpdateJob(ctx context.Context, arg UpdateJobParams) (Job, erro
 
 const updateStage = `-- name: UpdateStage :one
 update stage set name = $2, kind = $3, terminal_status = $4, unblind = $5, default_vetter_id = $6,
-    interview_format = $7, duration_minutes = $8, round_seconds = $9, break_seconds = $10
-where id = $1 returning id, org_id, job_id, position, name, kind, unblind, scorecard_rubric_id, default_vetter_id, assessment_id, terminal_status, interview_format, duration_minutes, round_seconds, break_seconds
+    interview_format = $7, duration_minutes = $8, round_seconds = $9, break_seconds = $10,
+    pass_score = $11, auto_advance = $12, auto_reject = $13
+where id = $1 returning id, org_id, job_id, position, name, kind, unblind, scorecard_rubric_id, default_vetter_id, assessment_id, terminal_status, interview_format, duration_minutes, round_seconds, break_seconds, pass_score, auto_advance, auto_reject
 `
 
 type UpdateStageParams struct {
@@ -696,6 +709,9 @@ type UpdateStageParams struct {
 	DurationMinutes *int32
 	RoundSeconds    *int32
 	BreakSeconds    *int32
+	PassScore       *int32
+	AutoAdvance     bool
+	AutoReject      bool
 }
 
 func (q *Queries) UpdateStage(ctx context.Context, arg UpdateStageParams) (Stage, error) {
@@ -710,6 +726,9 @@ func (q *Queries) UpdateStage(ctx context.Context, arg UpdateStageParams) (Stage
 		arg.DurationMinutes,
 		arg.RoundSeconds,
 		arg.BreakSeconds,
+		arg.PassScore,
+		arg.AutoAdvance,
+		arg.AutoReject,
 	)
 	var i Stage
 	err := row.Scan(
@@ -728,6 +747,9 @@ func (q *Queries) UpdateStage(ctx context.Context, arg UpdateStageParams) (Stage
 		&i.DurationMinutes,
 		&i.RoundSeconds,
 		&i.BreakSeconds,
+		&i.PassScore,
+		&i.AutoAdvance,
+		&i.AutoReject,
 	)
 	return i, err
 }

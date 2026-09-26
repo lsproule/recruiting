@@ -20,13 +20,20 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"recruiting/runner/wire"
 )
 
+// spec is what the app sends. Signature, when set, makes this a function
+// run: the source is a function of that signature rather than a program,
+// each test's input is a JSON array of arguments, and its expected value is
+// JSON the function's result is compared against.
 type spec struct {
-	Language string `json:"language"`
-	Source   string `json:"source"`
-	Tests    []test `json:"tests"`
-	Limits   limits `json:"limits"`
+	Language  string          `json:"language"`
+	Source    string          `json:"source"`
+	Signature *wire.Signature `json:"signature,omitempty"`
+	Tests     []test          `json:"tests"`
+	Limits    limits          `json:"limits"`
 }
 
 type test struct {
@@ -83,7 +90,13 @@ func run(s spec) response {
 	if err != nil {
 		return response{Status: "error", CompileOutput: err.Error()}
 	}
-	cmdline, compileOut, err := prepare(s.Language, s.Source, work)
+	var cmdline []string
+	var compileOut string
+	if s.Signature != nil {
+		cmdline, compileOut, err = prepareFunction(s.Language, s.Source, *s.Signature, work)
+	} else {
+		cmdline, compileOut, err = prepare(s.Language, s.Source, work)
+	}
 	if err != nil {
 		st := "compile_error"
 		if compileOut == "" {
@@ -94,9 +107,110 @@ func run(s spec) response {
 	}
 	out := response{Status: "ok", CompileOutput: compileOut}
 	for _, t := range s.Tests {
-		out.Results = append(out.Results, runTest(cmdline, work, t, s.Limits))
+		if s.Signature != nil {
+			out.Results = append(out.Results, runFunctionTest(cmdline, work, *s.Signature, t, s.Limits))
+		} else {
+			out.Results = append(out.Results, runTest(cmdline, work, t, s.Limits))
+		}
 	}
 	return out
+}
+
+// stageFunction writes the candidate's function and the generated driver
+// under the language's function layout and resolves the argv pair.
+func stageFunction(lang, source string, sig wire.Signature, work string) (compile, run []string, err error) {
+	layout, ok := wire.Layouts[lang]
+	if !ok {
+		return nil, nil, fmt.Errorf("unsupported language %q", lang)
+	}
+	driver, err := wire.Driver(lang, sig)
+	if err != nil {
+		return nil, nil, err
+	}
+	if layout.Concat {
+		if err := os.WriteFile(filepath.Join(work, layout.Candidate), []byte(source+"\n"+driver), 0o644); err != nil {
+			return nil, nil, err
+		}
+	} else {
+		if err := os.WriteFile(filepath.Join(work, layout.Candidate), []byte(source), 0o644); err != nil {
+			return nil, nil, err
+		}
+		if err := os.WriteFile(filepath.Join(work, layout.Driver), []byte(driver), 0o644); err != nil {
+			return nil, nil, err
+		}
+	}
+	for name, body := range extraFiles[lang] {
+		if err := os.WriteFile(filepath.Join(work, name), []byte(body), 0o644); err != nil {
+			return nil, nil, err
+		}
+	}
+	sub := strings.NewReplacer("{work}", work, "{bin}", filepath.Join(work, "candidate"))
+	expand := func(argv []string) []string {
+		if len(argv) == 0 {
+			return nil
+		}
+		out := make([]string, len(argv))
+		for i, a := range argv {
+			out[i] = sub.Replace(a)
+		}
+		return out
+	}
+	return expand(layout.Compile), expand(layout.Run), nil
+}
+
+// prepareFunction is prepare for a function run.
+func prepareFunction(lang, source string, sig wire.Signature, work string) (cmdline []string, compileOut string, err error) {
+	compileArgv, runArgv, err := stageFunction(lang, source, sig, work)
+	if err != nil {
+		return nil, "", err
+	}
+	return compileWith(compileArgv, runArgv, work)
+}
+
+// runFunctionTest runs one call: the arguments travel to the driver in the
+// stream format, the result comes back after the marker and is compared
+// against the expected value by type. What the candidate printed on their
+// own is kept apart from the result and reported with stderr.
+func runFunctionTest(cmdline []string, work string, sig wire.Signature, t test, l limits) result {
+	args, err := sig.ArgsOf(json.RawMessage(t.Input))
+	if err != nil {
+		return result{TestID: t.ID, Status: "error", StderrTail: "bad test case arguments: " + err.Error()}
+	}
+	want, err := wire.DecodeTyped(sig.Returns, json.RawMessage(t.Expected))
+	if err != nil {
+		return result{TestID: t.ID, Status: "error", StderrTail: "bad expected value: " + err.Error()}
+	}
+	res, stdout := execute(cmdline, work, string(wire.Encode(sig, args)), t.ID, l)
+	printed, raw, ok := wire.SplitResult(stdout)
+	if p := strings.TrimSpace(string(printed)); p != "" {
+		res.StderrTail = strings.TrimSpace(res.StderrTail + "\n[printed]\n" + clip(p, 1024))
+	}
+	if res.Status != "" {
+		return res
+	}
+	if !ok {
+		res.Status = "error"
+		if res.StderrTail == "" {
+			res.StderrTail = "the function returned nothing"
+		}
+		return res
+	}
+	got, err := wire.Decode(sig.Returns, raw)
+	if err != nil {
+		res.Status = "error"
+		res.StderrTail = strings.TrimSpace(res.StderrTail + "\nthe result could not be read as " + sig.Returns + ": " + err.Error())
+		return res
+	}
+	canon := wire.CanonicalJSON(got)
+	h := sha256.Sum256([]byte(canon))
+	res.StdoutHash = hex.EncodeToString(h[:])
+	res.StdoutTail = clip(canon, outputTailBytes)
+	if wire.ValuesEqual(sig.Returns, got, want) {
+		res.Status = "pass"
+	} else {
+		res.Status = "fail"
+	}
+	return res
 }
 
 // langSpec is how one language is built and run. {work} is the work dir,
@@ -117,10 +231,6 @@ var langs = map[string]langSpec{
 	"javascript": {File: "main.js",
 		Compile: []string{"node", "--check", "{src}"},
 		Run:     []string{"node", "--stack-size=2048", "{src}"}},
-	// No compile step: node's --check parses .ts as JavaScript, so a type
-	// annotation is reported as a syntax error before stripping ever runs.
-	"typescript": {File: "main.ts",
-		Run: []string{"node", "--experimental-strip-types", "--stack-size=2048", "{src}"}},
 	"go": {File: "main.go",
 		Compile: []string{"go", "build", "-o", "{bin}", "."},
 		Run:     []string{"{bin}"}},
@@ -142,15 +252,6 @@ var langs = map[string]langSpec{
 	"ruby": {File: "main.rb",
 		Compile: []string{"ruby", "-c", "{src}"},
 		Run:     []string{"ruby", "{src}"}},
-	"haskell": {File: "main.hs",
-		Compile: []string{"ghc", "-O0", "-o", "{bin}", "{src}"},
-		Run:     []string{"{bin}"}},
-	"lua": {File: "main.lua",
-		Run: []string{"lua", "{src}"}},
-	// -jar keeps "java" first in the argv, so the memory flag still applies.
-	"kotlin": {File: "main.kt",
-		Compile: []string{"kotlinc", "{src}", "-include-runtime", "-d", "{work}/candidate.jar"},
-		Run:     []string{"java", "-Xss8m", "-XX:+UseSerialGC", "-XX:TieredStopAtLevel=1", "-jar", "{work}/candidate.jar"}},
 	"csharp": {File: "Program.cs",
 		Compile: []string{"dotnet", "build", "--nologo", "-c", "Release", "-o", "{work}/out"},
 		Run:     []string{"dotnet", "{work}/out/candidate.dll"}},
@@ -202,6 +303,12 @@ func prepare(lang, source, work string) (cmdline []string, compileOut string, er
 	if err != nil {
 		return nil, "", err
 	}
+	return compileWith(compileArgv, runArgv, work)
+}
+
+// compileWith runs the compile step, when there is one, and hands back the
+// argv that runs a test.
+func compileWith(compileArgv, runArgv []string, work string) (cmdline []string, compileOut string, err error) {
 	if len(compileArgv) == 0 {
 		return runArgv, "", nil
 	}
@@ -219,7 +326,27 @@ func prepare(lang, source, work string) (cmdline []string, compileOut string, er
 }
 
 func runTest(cmdline []string, work string, t test, l limits) result {
-	res := result{TestID: t.ID, Status: "error"}
+	res, stdout := execute(cmdline, work, t.Input, t.ID, l)
+	trimmed := strings.TrimSpace(string(stdout))
+	h := sha256.Sum256([]byte(trimmed))
+	res.StdoutHash = hex.EncodeToString(h[:])
+	res.StdoutTail = clip(trimmed, outputTailBytes)
+	if res.Status != "" {
+		return res
+	}
+	if trimmed == strings.TrimSpace(t.Expected) {
+		res.Status = "pass"
+	} else {
+		res.Status = "fail"
+	}
+	return res
+}
+
+// execute runs the program once with input on stdin under the limits. The
+// result's Status is set only when the run itself failed (timeout or a
+// crash); a clean run leaves it empty for the caller to judge the output.
+func execute(cmdline []string, work, input, testID string, l limits) (result, []byte) {
+	res := result{TestID: testID}
 	wall := time.Duration(l.WallMs) * time.Millisecond
 	if wall <= 0 {
 		wall = 5 * time.Second
@@ -243,7 +370,7 @@ func runTest(cmdline []string, work string, t test, l limits) result {
 	cmd := exec.CommandContext(ctx, cmdline[0], cmdline[1:]...)
 	cmd.Dir = work
 	cmd.Env = append(os.Environ(), "HOME=/tmp")
-	cmd.Stdin = strings.NewReader(t.Input)
+	cmd.Stdin = strings.NewReader(input)
 	// Own process group: a timeout kills every descendant, not only the leader.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
@@ -263,11 +390,6 @@ func runTest(cmdline []string, work string, t test, l limits) result {
 	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 
 	res.StderrTail = stderr.String()
-	trimmed := strings.TrimSpace(stdout.String())
-	h := sha256.Sum256([]byte(trimmed))
-	res.StdoutHash = hex.EncodeToString(h[:])
-	res.StdoutTail = clip(trimmed, outputTailBytes)
-
 	switch {
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
 		res.Status = "timeout"
@@ -276,12 +398,8 @@ func runTest(cmdline []string, work string, t test, l limits) result {
 		if res.StderrTail == "" {
 			res.StderrTail = err.Error()
 		}
-	case trimmed == strings.TrimSpace(t.Expected):
-		res.Status = "pass"
-	default:
-		res.Status = "fail"
 	}
-	return res
+	return res, stdout.buf.Bytes()
 }
 
 // outputTailBytes bounds what travels back as readable output. A program that

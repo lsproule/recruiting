@@ -46,7 +46,7 @@ templ listPage(page layout.Page, f service.ProblemFilter, found []service.Proble
 				Kind
 				<select name="kind">
 					<option value="">any</option>
-					for _, k := range []string{domain.ProblemKindCode, domain.ProblemKindSQL} {
+					for _, k := range domain.ProblemKinds {
 						if selected(f.Kind, k) {
 							<option value={ k } selected>{ k }</option>
 						} else {
@@ -62,14 +62,19 @@ templ listPage(page layout.Page, f service.ProblemFilter, found []service.Proble
 		} else {
 			<table>
 				<thead>
-					<tr><th>Problem</th><th>Kind</th><th>Difficulty</th><th>Skills</th><th>Proven in</th><th>Quality</th><th>Owner</th><th></th></tr>
+					<tr><th>Problem</th><th>Kind</th><th>Difficulty</th><th>Skills</th><th>Proven in</th><th>Owner</th><th></th></tr>
 				</thead>
 				<tbody>
 					for _, p := range found {
 						<tr>
 							<td>
 								<a href={ templ.SafeURL(problemPath(p)) }>{ p.Title }</a>
-								<div class="row-note">{ caseCount(p) }</div>
+								if entrypoint(p) != "" {
+									<div class="row-note"><code>{ entrypoint(p) }</code></div>
+								}
+								if !p.Attachable() {
+									<div class="row-note">draft · not attachable yet</div>
+								}
 							</td>
 							<td class="muted">{ p.Kind }</td>
 							<td><span class={ "tag", "diff-" + p.Difficulty }>{ p.Difficulty }</span></td>
@@ -77,7 +82,6 @@ templ listPage(page layout.Page, f service.ProblemFilter, found []service.Proble
 							<td>
 								@provenBadges(p.ProvenLanguages)
 							</td>
-							<td class="num">{ qualityLabel(p) }</td>
 							<td class="muted">{ ownerLabel(p) }</td>
 							<td class="row-actions">
 								<a href={ templ.SafeURL(tryPath(p)) }>Try it</a>
@@ -115,11 +119,14 @@ templ detailPage(page layout.Page, p service.Problem) {
 				<div class="page-kicker">{ ownerLabel(p) }</div>
 				<h1>{ p.Title }</h1>
 				<p class="muted">
-					{ p.Kind } { " · " } { p.Difficulty } { " · " } { caseCount(p) } { " · " } quality { qualityLabel(p) }
+					{ p.Kind } { " · " } { p.Difficulty }
 					if tagsText(p) != "" {
 						{ " · " } { tagsText(p) }
 					}
 				</p>
+				if entrypoint(p) != "" {
+					<p><code class="entrypoint">{ entrypoint(p) }</code></p>
+				}
 			</div>
 			<div class="page-actions">
 				<a class="btn btn-secondary" href={ templ.SafeURL(tryPath(p)) }>Try it</a>
@@ -150,6 +157,18 @@ templ detailPage(page layout.Page, p service.Problem) {
 		<div class="prose">
 			@markdown.Render(p.Statement)
 		</div>
+		if len(stubLanguages(p)) > 0 {
+			<h2>What the candidate starts from</h2>
+			<p class="muted">The entrypoint in each allowed language. The candidate fills in the body; the harness calls it with each case's arguments and compares what comes back.</p>
+			<div class="stubs">
+				for _, lang := range stubLanguages(p) {
+					<details class="stub">
+						<summary>{ languageLabel(lang) }</summary>
+						<pre class="statement">{ p.Stubs()[lang] }</pre>
+					</details>
+				}
+			</div>
+		}
 		if p.Guidelines != "" {
 			<h2>Interviewer guidelines</h2>
 			<p class="muted">Internal. A candidate and a client never see this.</p>
@@ -171,7 +190,7 @@ templ detailPage(page layout.Page, p service.Problem) {
 		<h2>Test cases</h2>
 		<table>
 			<thead>
-				<tr><th>#</th><th>Name</th><th>Class</th><th>Input</th><th>Expected</th><th>Visibility</th><th>Points</th></tr>
+				<tr><th>#</th><th>Name</th><th>Class</th><th>{ caseInputHeader(p) }</th><th>{ caseExpectedHeader(p) }</th><th>Visibility</th><th>Points</th></tr>
 			</thead>
 			<tbody>
 				for _, c := range p.TestCases {
@@ -308,15 +327,26 @@ templ stepDetailsPanel(f problemForm) {
 				<input type="text" name="title" value={ f.Title } required/>
 			</label>
 			<label>
-				Recommended time (min)
-				<input type="number" name="recommended_minutes" value={ itoa(f.RecommendedMinutes) } min="1" max={ itoa(domain.MaxRecommendedMinutes) }/>
+				Kind
+				<select name="kind" hx-post={ StepPath } hx-include="#authoring" hx-target="#wizard" hx-swap="outerHTML" hx-vals={ stepVals(stepDetails) } hx-trigger="change">
+					for _, k := range domain.ProblemKinds {
+						if selected(f.Kind, k) {
+							<option value={ k } selected>{ kindLabel(k) }</option>
+						} else {
+							<option value={ k }>{ kindLabel(k) }</option>
+						}
+					}
+				</select>
 			</label>
 		</div>
+		if f.isFunction() {
+			@signatureFields(f)
+		}
 		<label>
 			Statement (Markdown)
 			<textarea name="statement" rows="12" placeholder="What the candidate has to build, with the constraints that make it interesting.">{ f.Statement }</textarea>
 		</label>
-		<div class="grid-3">
+		<div class="grid-2">
 			<label>
 				Difficulty
 				<select name="difficulty">
@@ -332,18 +362,6 @@ templ stepDetailsPanel(f problemForm) {
 			<label>
 				Skill tags (comma separated)
 				<input type="text" name="tags" value={ f.Tags } placeholder="intervals, sorting"/>
-			</label>
-			<label>
-				Kind
-				<select name="kind">
-					for _, k := range []string{domain.ProblemKindCode, domain.ProblemKindSQL} {
-						if selected(f.Kind, k) {
-							<option value={ k } selected>{ k }</option>
-						} else {
-							<option value={ k }>{ k }</option>
-						}
-					}
-				</select>
 			</label>
 		</div>
 		<label>
@@ -361,6 +379,62 @@ templ stepDetailsPanel(f problemForm) {
 			</label>
 		</div>
 	</section>
+}
+
+// signatureFields is the entrypoint editor of a function problem: the name,
+// the typed parameters, the return type, and what the stub then reads as.
+templ signatureFields(f problemForm) {
+	<fieldset class="signature">
+		<legend>Entrypoint</legend>
+		<p class="muted">The function a candidate implements. The harness calls it with each case's arguments; types are the platform's, spelled per language in the stub.</p>
+		<div class="grid-2">
+			<label>
+				Function name
+				<input type="text" name="sig_name" value={ f.SigName } placeholder="receipt_total" required/>
+			</label>
+			<label>
+				Returns
+				<select name="sig_returns">
+					for _, t := range domain.SignatureTypes {
+						if selected(f.SigReturns, t) {
+							<option value={ t } selected>{ t }</option>
+						} else {
+							<option value={ t }>{ t }</option>
+						}
+					}
+				</select>
+			</label>
+		</div>
+		<div class="param-grid">
+			for i, p := range f.SigParams {
+				<div class="param-row">
+					<label>
+						Parameter { itoa(i + 1) }
+						<input type="text" name={ rowIndex("sig_param_name", i) } value={ p.Name } placeholder="prices"/>
+					</label>
+					<label>
+						Type
+						<select name={ rowIndex("sig_param_type", i) }>
+							<option value="">—</option>
+							for _, t := range domain.SignatureTypes {
+								if selected(p.Type, t) {
+									<option value={ t } selected>{ t }</option>
+								} else {
+									<option value={ t }>{ t }</option>
+								}
+							}
+						</select>
+					</label>
+				</div>
+			}
+		</div>
+		if lang, stub := f.stubPreview(); stub != "" {
+			<details class="stub" open>
+				<summary>What the candidate starts from ({ lang })</summary>
+				<pre class="statement">{ stub }</pre>
+			</details>
+		}
+	</fieldset>
 }
 
 templ stepLanguagesPanel(f problemForm) {
@@ -404,6 +478,9 @@ templ stepCasesPanel(f problemForm) {
 		<p class="muted">
 			Every case is scored whole: there is no partial credit inside one.
 			Total possible { f.totalPoints() } points.
+			if f.isFunction() {
+				{ " " } Arguments are a JSON array with one value per parameter; the return value is JSON. Floats compare within a small tolerance, and a map compares by key.
+			}
 		</p>
 		for i, tc := range f.TestCases {
 			<fieldset class="case-row">
@@ -444,22 +521,24 @@ templ stepCasesPanel(f problemForm) {
 				</div>
 				<div class="grid-2">
 					<label>
-						Input
-						<textarea name={ rowIndex("tc_input", i) } rows="3">{ tc.Input }</textarea>
+						{ f.caseInputLabel() }
+						<textarea name={ rowIndex("tc_input", i) } rows="3" placeholder={ f.caseInputPlaceholder() }>{ tc.Input }</textarea>
 					</label>
 					<label>
-						Expected output
-						<textarea name={ rowIndex("tc_expected", i) } rows="3">{ tc.Expected }</textarea>
+						{ f.caseExpectedLabel() }
+						<textarea name={ rowIndex("tc_expected", i) } rows="3" placeholder={ f.caseExpectedPlaceholder() }>{ tc.Expected }</textarea>
 					</label>
 				</div>
-				<label class="check">
-					if tc.Unordered {
-						<input type="checkbox" name={ rowIndex("tc_unordered", i) } value="1" checked/>
-					} else {
-						<input type="checkbox" name={ rowIndex("tc_unordered", i) } value="1"/>
-					}
-					Compare rows in any order (SQL)
-				</label>
+				if f.Kind == domain.ProblemKindSQL {
+					<label class="check">
+						if tc.Unordered {
+							<input type="checkbox" name={ rowIndex("tc_unordered", i) } value="1" checked/>
+						} else {
+							<input type="checkbox" name={ rowIndex("tc_unordered", i) } value="1"/>
+						}
+						Compare rows in any order
+					</label>
+				}
 			</fieldset>
 		}
 	</section>
@@ -467,7 +546,12 @@ templ stepCasesPanel(f problemForm) {
 
 templ stepReferencesPanel(f problemForm) {
 	<section class="wizard-panel" hidden?={ f.Step != stepRefs }>
-		<p class="muted">One solution per language you want proven. Verify runs each of them against every case; the problem cannot be saved while one of them fails.</p>
+		<p class="muted">
+			One solution per language you want proven. Verify runs each of them against every case; the problem cannot be saved while one of them fails.
+			if f.isFunction() {
+				{ " " } A solution is the filled-in entrypoint: the same file a candidate would submit, starting from the stub on step 1.
+			}
+		</p>
 		for i, ref := range f.References {
 			<fieldset class="ref-row">
 				<legend>Solution { itoa(i + 1) }</legend>

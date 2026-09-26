@@ -219,7 +219,7 @@ func (q *Queries) CreatePipelineTemplate(ctx context.Context, arg CreatePipeline
 
 const createPipelineTemplateStage = `-- name: CreatePipelineTemplateStage :one
 insert into pipeline_template_stage (org_id, template_id, position, name, kind, unblind, interview_format, duration_minutes, round_seconds, break_seconds, terminal_status)
-values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) returning id, org_id, template_id, position, name, kind, unblind, interview_format, duration_minutes, round_seconds, break_seconds, terminal_status
+values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) returning id, org_id, template_id, position, name, kind, unblind, interview_format, duration_minutes, round_seconds, break_seconds, terminal_status, pass_score, auto_advance, auto_reject
 `
 
 type CreatePipelineTemplateStageParams struct {
@@ -264,6 +264,9 @@ func (q *Queries) CreatePipelineTemplateStage(ctx context.Context, arg CreatePip
 		&i.RoundSeconds,
 		&i.BreakSeconds,
 		&i.TerminalStatus,
+		&i.PassScore,
+		&i.AutoAdvance,
+		&i.AutoReject,
 	)
 	return i, err
 }
@@ -678,7 +681,7 @@ func (q *Queries) ListOrgUsers(ctx context.Context, orgID uuid.UUID) ([]OrgUser,
 }
 
 const listPipelineTemplateStages = `-- name: ListPipelineTemplateStages :many
-select id, org_id, template_id, position, name, kind, unblind, interview_format, duration_minutes, round_seconds, break_seconds, terminal_status from pipeline_template_stage where template_id = $1 order by position
+select id, org_id, template_id, position, name, kind, unblind, interview_format, duration_minutes, round_seconds, break_seconds, terminal_status, pass_score, auto_advance, auto_reject from pipeline_template_stage where template_id = $1 order by position
 `
 
 func (q *Queries) ListPipelineTemplateStages(ctx context.Context, templateID uuid.UUID) ([]PipelineTemplateStage, error) {
@@ -703,6 +706,9 @@ func (q *Queries) ListPipelineTemplateStages(ctx context.Context, templateID uui
 			&i.RoundSeconds,
 			&i.BreakSeconds,
 			&i.TerminalStatus,
+			&i.PassScore,
+			&i.AutoAdvance,
+			&i.AutoReject,
 		); err != nil {
 			return nil, err
 		}

@@ -348,6 +348,142 @@ func (q *Queries) ListQueueShortlistDrafts(ctx context.Context) ([]ListQueueShor
 	return items, nil
 }
 
+const listQueueSteps = `-- name: ListQueueSteps :many
+select a.id as application_id, a.job_id, a.stage_id, a.created_at as applied_at, a.released_at,
+    c.name as candidate_name, j.title as job_title, cc.id as client_id, cc.name as client_name,
+    st.name as stage_name, st.kind as stage_kind, st.position as stage_position,
+    (st.position = (select min(s.position) from stage s where s.job_id = a.job_id and s.kind <> 'terminal'))::bool as first_stage,
+    coalesce((select max(e.created_at) from application_event e where e.application_id = a.id and e.kind = 'moved'), a.created_at)::timestamptz as entered_at,
+    (select max(e.created_at) from application_event e where e.application_id = a.id and e.actor_kind = 'client_user')::timestamptz as last_client_at,
+    exists (select 1 from scorecard sc where sc.application_id = a.id and sc.stage_id = a.stage_id)::bool as has_scorecard,
+    exists (select 1 from sprint_rating r join sprint s on s.id = r.sprint_id where r.application_id = a.id and s.stage_id = a.stage_id)::bool as has_rating,
+    exists (select 1 from sprint_candidate k join sprint s on s.id = k.sprint_id where k.application_id = a.id and s.stage_id = a.stage_id and s.status <> 'cancelled')::bool as in_sprint,
+    -- The lateral columns are nullable; a missing row reads as the zero
+    -- value so the Go side can test for it without a nullable wrapper.
+    coalesce(slot.id, '00000000-0000-0000-0000-000000000000'::uuid) as slot_id, coalesce(slot.status, '') as slot_status,
+    slot.starts_at as slot_starts_at, slot.ends_at as slot_ends_at,
+    coalesce(att.id, '00000000-0000-0000-0000-000000000000'::uuid) as attempt_id, coalesce(att.status, '') as attempt_status,
+    att.invite_expires_at as attempt_invite_expires_at,
+    att.score as attempt_score, att.finished_at as attempt_finished_at,
+    coalesce(rv.verdict, '') as verdict,
+    coalesce(nxt.id, '00000000-0000-0000-0000-000000000000'::uuid) as next_stage_id, coalesce(nxt.name, '') as next_stage_name,
+    coalesce(rej.id, '00000000-0000-0000-0000-000000000000'::uuid) as reject_stage_id
+from application a
+join candidate c on c.id = a.candidate_id
+join job j on j.id = a.job_id
+join client_company cc on cc.id = j.client_company_id
+join stage st on st.id = a.stage_id
+left join lateral (
+    select s.id, s.status, s.starts_at, s.ends_at from interview_slot s
+    where s.application_id = a.id and s.stage_id = a.stage_id and s.status in ('booked', 'completed')
+    order by s.starts_at desc limit 1) slot on true
+left join lateral (
+    select t.id, t.status, t.invite_expires_at, t.score, t.finished_at from attempt t
+    where t.application_id = a.id and t.stage_id = a.stage_id and not t.preview
+    order by t.created_at desc limit 1) att on true
+left join review rv on rv.attempt_id = att.id
+left join lateral (
+    select s.id, s.name from stage s
+    where s.job_id = a.job_id and s.position > st.position and s.kind <> 'terminal'
+    order by s.position limit 1) nxt on true
+left join lateral (
+    select s.id from stage s
+    where s.job_id = a.job_id and s.kind = 'terminal' and s.terminal_status = 'rejected'
+    limit 1) rej on true
+where a.status = 'active' and st.kind <> 'terminal'
+order by cc.name, j.title, a.created_at, a.id
+`
+
+type ListQueueStepsRow struct {
+	ApplicationID          uuid.UUID
+	JobID                  uuid.UUID
+	StageID                uuid.UUID
+	AppliedAt              pgtype.Timestamptz
+	ReleasedAt             pgtype.Timestamptz
+	CandidateName          string
+	JobTitle               string
+	ClientID               uuid.UUID
+	ClientName             string
+	StageName              string
+	StageKind              string
+	StagePosition          int32
+	FirstStage             bool
+	EnteredAt              pgtype.Timestamptz
+	LastClientAt           pgtype.Timestamptz
+	HasScorecard           bool
+	HasRating              bool
+	InSprint               bool
+	SlotID                 uuid.UUID
+	SlotStatus             string
+	SlotStartsAt           pgtype.Timestamptz
+	SlotEndsAt             pgtype.Timestamptz
+	AttemptID              uuid.UUID
+	AttemptStatus          string
+	AttemptInviteExpiresAt pgtype.Timestamptz
+	AttemptScore           pgtype.Numeric
+	AttemptFinishedAt      pgtype.Timestamptz
+	Verdict                string
+	NextStageID            uuid.UUID
+	NextStageName          string
+	RejectStageID          uuid.UUID
+}
+
+// One row per open application, with everything the step rules read: where
+// it stands, when it got there, what its stage has collected, and the two
+// stages a decision can send it to. The rules themselves live in Go so
+// each can be read and tested on its own; this is the one scan behind them.
+func (q *Queries) ListQueueSteps(ctx context.Context) ([]ListQueueStepsRow, error) {
+	rows, err := q.db.Query(ctx, listQueueSteps)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListQueueStepsRow{}
+	for rows.Next() {
+		var i ListQueueStepsRow
+		if err := rows.Scan(
+			&i.ApplicationID,
+			&i.JobID,
+			&i.StageID,
+			&i.AppliedAt,
+			&i.ReleasedAt,
+			&i.CandidateName,
+			&i.JobTitle,
+			&i.ClientID,
+			&i.ClientName,
+			&i.StageName,
+			&i.StageKind,
+			&i.StagePosition,
+			&i.FirstStage,
+			&i.EnteredAt,
+			&i.LastClientAt,
+			&i.HasScorecard,
+			&i.HasRating,
+			&i.InSprint,
+			&i.SlotID,
+			&i.SlotStatus,
+			&i.SlotStartsAt,
+			&i.SlotEndsAt,
+			&i.AttemptID,
+			&i.AttemptStatus,
+			&i.AttemptInviteExpiresAt,
+			&i.AttemptScore,
+			&i.AttemptFinishedAt,
+			&i.Verdict,
+			&i.NextStageID,
+			&i.NextStageName,
+			&i.RejectStageID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const upsertQueueSnooze = `-- name: UpsertQueueSnooze :exec
 insert into queue_snooze (org_id, user_id, kind, subject_id, until)
 values ($1, $2, $3, $4, $5)

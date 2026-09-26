@@ -101,6 +101,26 @@ type Stage struct {
 	// zero elsewhere.
 	RoundSeconds int
 	BreakSeconds int
+	// PassScore is an assessment stage's pass mark out of 100, zero when
+	// the stage sets none. AutoAdvance moves a sitting at or above the mark
+	// to the next stage on its own; AutoReject closes one below it as
+	// rejected. Either needs a mark. Zero and false on every other kind.
+	PassScore   int
+	AutoAdvance bool
+	AutoReject  bool
+}
+
+// AutoDecision is what an assessment score does on its own under the
+// stage's settings: advance, reject, or neither. A stage without a pass mark
+// decides nothing, and a score exactly at the mark passes.
+func AutoDecision(s Stage, score float64) (advance, reject bool) {
+	if s.Kind != StageAssessment || s.PassScore <= 0 {
+		return false, false
+	}
+	if score >= float64(s.PassScore) {
+		return s.AutoAdvance, false
+	}
+	return false, s.AutoReject
 }
 
 // NormalizeStage fills in the defaults a stage's kind needs and clears the
@@ -128,6 +148,9 @@ func NormalizeStage(s Stage) Stage {
 		s.InterviewFormat, s.DurationMinutes, s.DefaultVetterID = "", 0, uuid.Nil
 		s.RoundSeconds, s.BreakSeconds = 0, 0
 	}
+	if s.Kind != StageAssessment {
+		s.PassScore, s.AutoAdvance, s.AutoReject = 0, false, false
+	}
 	if s.Kind != StageTerminal {
 		s.Terminal = ""
 	}
@@ -151,6 +174,13 @@ func ValidateStageSettings(s Stage) error {
 		}
 		if s.BreakSeconds < 0 || s.BreakSeconds > MaxBreakSeconds {
 			return fmt.Errorf("%w: sprint %q breaks must be between zero and an hour", ErrInvalidPipeline, s.Name)
+		}
+	case StageAssessment:
+		if s.PassScore < 0 || s.PassScore > 100 {
+			return fmt.Errorf("%w: assessment %q pass mark must be between 0 and 100", ErrInvalidPipeline, s.Name)
+		}
+		if (s.AutoAdvance || s.AutoReject) && s.PassScore == 0 {
+			return fmt.Errorf("%w: assessment %q cannot decide on its own without a pass mark", ErrInvalidPipeline, s.Name)
 		}
 	}
 	return nil
@@ -201,7 +231,8 @@ var (
 // prerequisites the source stage has collected.
 //
 // Who may leave a stage depends on its kind: a generic stage is the
-// recruiter's (or admin's); an interview or assessment stage also lets the
+// recruiter's (or admin's, or the system's under a stage's own automation);
+// an interview or assessment stage also lets the
 // vetter advance the application once their scorecard or verdict is in; a
 // client review stage lets the client move to another client review or
 // reject; a terminal stage is left by nobody. Rejecting always needs a
@@ -216,7 +247,10 @@ func ValidateMove(actor ActorRole, app Application, from, to Stage, prereqs Prer
 	}
 	reason := strings.TrimSpace(req.Reason) != ""
 	rejecting := to.Kind == StageTerminal && to.Terminal == StatusRejected
-	owner := actor == ActorAdmin || actor == ActorRecruiter
+	// The system moves under the org's own rules (an assessment stage that
+	// decides on its score), so it acts with the recruiter's authority and,
+	// like an override, always says why.
+	owner := actor == ActorAdmin || actor == ActorRecruiter || actor == ActorSystem
 	if req.OverridePrereq && !owner {
 		return ErrForbiddenMove
 	}

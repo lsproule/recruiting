@@ -109,18 +109,14 @@ func one(input, expected string) []Test {
 var helloWorlds = []struct{ lang, source string }{
 	{"python", "import sys\nprint(sys.stdin.readline().strip() + ' world')\n"},
 	{"javascript", "const s=require('fs').readFileSync(0,'utf8');console.log(s.split('\\n')[0].trim()+' world');\n"},
-	{"typescript", "const s: string = require('fs').readFileSync(0,'utf8');const line: string = s.split('\\n')[0];console.log(line.trim()+' world');\n"},
+	{"ruby", "puts \"#{$stdin.gets.strip} world\"\n"},
+	{"php", "<?php\n$s = trim(fgets(STDIN));\necho $s . \" world\\n\";\n"},
 	{"go", "package main\n\nimport (\n\t\"bufio\"\n\t\"fmt\"\n\t\"os\"\n\t\"strings\"\n)\n\nfunc main() {\n\tline, _ := bufio.NewReader(os.Stdin).ReadString('\\n')\n\tfmt.Println(strings.TrimSpace(line) + \" world\")\n}\n"},
 	{"java", "import java.util.*;\npublic class Main{public static void main(String[] a){Scanner s=new Scanner(System.in);System.out.println(s.nextLine().trim()+\" world\");}}\n"},
-	{"c", "#include <stdio.h>\n#include <string.h>\nint main(void){char b[256];if(!fgets(b,sizeof b,stdin))return 1;b[strcspn(b,\"\\r\\n\")]=0;printf(\"%s world\\n\",b);return 0;}\n"},
-	{"cpp", "#include <iostream>\n#include <string>\nint main(){std::string s;std::getline(std::cin,s);while(!s.empty()&&(s.back()=='\\r'||s.back()==' '))s.pop_back();std::cout<<s<<\" world\"<<std::endl;}\n"},
-	{"rust", "use std::io::BufRead;\nfn main(){let mut s=String::new();std::io::stdin().lock().read_line(&mut s).unwrap();println!(\"{} world\", s.trim());}\n"},
-	{"php", "<?php\n$s = trim(fgets(STDIN));\necho $s . \" world\\n\";\n"},
-	{"ruby", "puts \"#{$stdin.gets.strip} world\"\n"},
-	{"haskell", "main :: IO ()\nmain = do\n  l <- getLine\n  putStrLn (l ++ \" world\")\n"},
-	{"lua", "print(io.read(\"l\") .. \" world\")\n"},
-	{"kotlin", "fun main() {\n    println(readLine()!!.trim() + \" world\")\n}\n"},
 	{"csharp", "class Program { static void Main() { System.Console.WriteLine(System.Console.ReadLine().Trim() + \" world\"); } }\n"},
+	{"cpp", "#include <iostream>\n#include <string>\nint main(){std::string s;std::getline(std::cin,s);while(!s.empty()&&(s.back()=='\\r'||s.back()==' '))s.pop_back();std::cout<<s<<\" world\"<<std::endl;}\n"},
+	{"c", "#include <stdio.h>\n#include <string.h>\nint main(void){char b[256];if(!fgets(b,sizeof b,stdin))return 1;b[strcspn(b,\"\\r\\n\")]=0;printf(\"%s world\\n\",b);return 0;}\n"},
+	{"rust", "use std::io::BufRead;\nfn main(){let mut s=String::new();std::io::stdin().lock().read_line(&mut s).unwrap();println!(\"{} world\", s.trim());}\n"},
 }
 
 // The hello-world table, the images on disk, and build.sh's default set must
@@ -206,8 +202,6 @@ func TestCompileErrorReported(t *testing.T) {
 var busyLoops = []struct{ lang, source string }{
 	{"c", "int main(void){ for(;;){} }\n"},
 	{"rust", "fn main(){ loop { std::hint::spin_loop(); } }\n"},
-	{"haskell", "main :: IO ()\nmain = let go n = if n > (0 :: Int) then go n else go n in go 1\n"},
-	{"kotlin", "fun main() { while (true) { } }\n"},
 }
 
 func TestCompiledLanguageBusyLoopKilled(t *testing.T) {

@@ -288,6 +288,7 @@ func settingsFromForm(r *http.Request) (service.Settings, error) {
 	intField(service.SettingPoolScoreThreshold, &s.PoolScoreThreshold)
 	intField(service.SettingAssessmentInviteDays, &s.AssessmentInviteDays)
 	intField(service.SettingSnapshotRetentionDays, &s.SnapshotRetentionDays)
+	s.RejectionEmail = r.PostFormValue(service.SettingRejectionEmail) == "1"
 	for _, name := range service.IntegritySignalNames {
 		v := strings.TrimSpace(r.PostFormValue("weight." + name))
 		if v == "" {

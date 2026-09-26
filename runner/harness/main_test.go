@@ -11,8 +11,7 @@ import (
 // The ids the app may send; kept as a literal so a drift in either list is a
 // failure here rather than an "unsupported language" at run time.
 var codeLanguages = []string{
-	"python", "javascript", "typescript", "go", "java", "c", "cpp",
-	"rust", "php", "ruby", "haskell", "lua", "kotlin", "csharp",
+	"python", "javascript", "ruby", "php", "go", "java", "csharp", "cpp", "c", "rust",
 }
 
 func TestLangsCoverEveryCodeLanguage(t *testing.T) {

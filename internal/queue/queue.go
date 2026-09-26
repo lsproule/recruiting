@@ -45,6 +45,9 @@ const (
 	// snapshot.purge sweeps every org under its own retention; its payload
 	// is empty.
 	KindSnapshotPurge = "snapshot.purge"
+	// jobpost.publish places one job posting on its board through the
+	// browser automation; payload {posting_id, org_id}.
+	KindJobPostPublish = "jobpost.publish"
 )
 
 // MaxAttempts is how many times a job is tried before it is discarded.

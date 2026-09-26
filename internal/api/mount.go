@@ -32,6 +32,7 @@ type Deps struct {
 
 	Links        *service.MagicLinkService
 	Jobs         *service.JobService
+	Postings     *service.JobPostingService
 	Applications *service.ApplicationService
 	Releases     *service.ReleaseService
 	Candidates   *service.CandidateService
@@ -151,6 +152,7 @@ func mountAll(a huma.API, d Deps) map[string]guarded {
 	m.authenticate()
 
 	m.mountJobs()
+	m.mountJobPostings()
 	m.mountStages()
 	m.mountApplications()
 	m.mountCandidates()
