@@ -64,7 +64,7 @@ func (s *ProblemService) Try(ctx context.Context, p Principal, id uuid.UUID, lan
 	}
 	res, err := s.exec.Execute(ctx, req)
 	if err != nil {
-		return TryResult{}, fmt.Errorf("try problem: %w", err)
+		return TryResult{}, fmt.Errorf("%w: %v", ErrRunnerUnavailable, err)
 	}
 	return tryResult(res, req, cases), nil
 }
@@ -79,10 +79,6 @@ func tryRequest(p Problem, language, source string) (server.Request, []ProblemTe
 			cases = append(cases, c)
 		}
 	}
-	memMB := p.MemoryLimitKB / 1024
-	if memMB <= 0 {
-		memMB = 1
-	}
 	tests := make([]server.Test, 0, len(cases))
 	for i, c := range cases {
 		tests = append(tests, server.Test{
@@ -93,14 +89,15 @@ func tryRequest(p Problem, language, source string) (server.Request, []ProblemTe
 	// The id is derived from what is being run, so the runner's cache answers
 	// a repeated try without another sandbox.
 	sum := sha256.New()
-	fmt.Fprintf(sum, "%s\x00%s\x00%s\x00%d\x00", p.ID, language, source, len(tests))
+	fmt.Fprintf(sum, "%s\x00%s\x00%s\x00%d\x00%s\x00", p.ID, language, source, len(tests), signatureKey(p.Signature))
 	return server.Request{
 		ID:        uuid.NewSHA1(tryNamespace, sum.Sum(nil)).String(),
 		Language:  language,
 		Source:    source,
 		SQLSchema: sqlSeedScript(p.AsImport()),
+		Signature: signatureFor(p.AsImport()),
 		Tests:     tests,
-		Limits:    server.Limits{CPUMs: p.TimeLimitMs, WallMs: p.TimeLimitMs, MemMB: memMB},
+		Limits:    problemLimits(p.Kind, p.TimeLimitMs, p.MemoryLimitKB),
 	}, cases
 }
 

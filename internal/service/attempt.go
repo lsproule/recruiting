@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"recruiting/internal/domain"
 	"recruiting/internal/queue"
 	"recruiting/internal/store"
 	"recruiting/internal/store/db"
@@ -123,6 +124,10 @@ type SessionProblem struct {
 	Languages   []string
 	PublicTests []ProblemTestCase
 	SQLSchema   string
+	// Signature and Stubs are the entrypoint of a function problem and the
+	// starting source for it in every allowed language.
+	Signature *domain.Signature
+	Stubs     map[string]string
 	// Language and Source are the last synced editor state, if any.
 	Language string
 	Source   string
@@ -816,6 +821,7 @@ func (s *AttemptService) session(ctx context.Context, tx *store.Tx, att db.Attem
 		sp := SessionProblem{
 			ID: p.ID, Kind: p.Kind, Title: p.Title, Statement: p.Statement, Difficulty: p.Difficulty,
 			Languages: sessionLanguages(a, p), SQLSchema: p.SQLSchema,
+			Signature: p.Signature, Stubs: p.Stubs(),
 		}
 		for _, tc := range p.TestCases {
 			if tc.Visibility == "public" {

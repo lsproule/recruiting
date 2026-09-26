@@ -3,6 +3,7 @@ FROM golang@sha256:4c9fe60190a2a3350ddc51de80d0224b8a6698d12bdfc999fee45ea9d6c46
 WORKDIR /src
 COPY go.mod go.sum ./
 COPY runner/harness ./runner/harness
+COPY runner/wire ./runner/wire
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /harness ./runner/harness
 
 # python:3.12.11-slim-bookworm

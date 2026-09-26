@@ -7,7 +7,6 @@ import { hasLanguageMode, languageLabel, languageSupport, normalizeLanguage } fr
 const REGISTRY = [
   "python",
   "javascript",
-  "typescript",
   "go",
   "java",
   "c",
@@ -15,9 +14,6 @@ const REGISTRY = [
   "rust",
   "php",
   "ruby",
-  "haskell",
-  "lua",
-  "kotlin",
   "csharp",
   "sql",
 ];

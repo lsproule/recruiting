@@ -40,12 +40,16 @@ type tryProblem struct {
 	// StatementHTML is the statement rendered from Markdown here rather than
 	// in the browser: the island has no parser, and this way every surface
 	// shows the same document.
-	StatementHTML string    `json:"statement_html"`
-	Languages     []string  `json:"languages"`
-	Language      string    `json:"language"`
-	Source        string    `json:"source"`
-	SQLSchema     string    `json:"sql_schema"`
-	PublicTests   []tryTest `json:"public_tests"`
+	StatementHTML string   `json:"statement_html"`
+	Languages     []string `json:"languages"`
+	Language      string   `json:"language"`
+	Source        string   `json:"source"`
+	SQLSchema     string   `json:"sql_schema"`
+	// Signature is a function problem's entrypoint as a person reads it, and
+	// Stubs the starting source per language; both empty on the other kinds.
+	Signature   string            `json:"signature,omitempty"`
+	Stubs       map[string]string `json:"stubs,omitempty"`
+	PublicTests []tryTest         `json:"public_tests"`
 }
 
 type tryTest struct {
@@ -61,10 +65,15 @@ func tryIslandConfig(p service.Problem, csrf string) (string, error) {
 		ID: p.ID.String(), Title: p.Title, Kind: p.Kind, Statement: p.Statement,
 		StatementHTML: markdown.ToHTML(p.Statement),
 		Languages:     p.AllowedLanguages, SQLSchema: p.SQLSchema,
+		Stubs:       p.Stubs(),
 		PublicTests: []tryTest{},
+	}
+	if p.Signature != nil {
+		tp.Signature = p.Signature.Describe()
 	}
 	if len(tp.Languages) > 0 {
 		tp.Language = tp.Languages[0]
+		tp.Source = tp.Stubs[tp.Language]
 	}
 	for _, c := range p.TestCases {
 		if c.Visibility == "public" {

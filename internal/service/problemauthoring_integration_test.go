@@ -62,7 +62,7 @@ func TestSaveScoresQualityAndProvenLanguages(t *testing.T) {
 	if !good.Attachable() {
 		t.Error("a problem meeting every rule is not attachable")
 	}
-	if good.Guidelines == "" || good.RecommendedMinutes == 0 {
+	if good.Guidelines == "" {
 		t.Errorf("authoring fields were not stored: %+v", good)
 	}
 	if good.TestCases[0].Name == "" || good.TestCases[0].Class != domain.CaseClassSample {

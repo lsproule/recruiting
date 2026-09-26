@@ -1725,3 +1725,19 @@ main:has(> .try-editor) {
   .talent-layout aside { position: static; }
   .join-form .grid-2 { grid-template-columns: 1fr; }
 }
+
+/* Function problems: the entrypoint editor and the stubs it produces. */
+.signature { border: 1px solid var(--border); border-radius: var(--radius); padding: var(--space-3); margin: var(--space-3) 0; }
+.signature legend { font-weight: 600; padding: 0 var(--space-1); }
+.param-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--space-2) var(--space-3); }
+.param-row { display: grid; grid-template-columns: 1fr 10rem; gap: var(--space-2); align-items: end; }
+.entrypoint { font-size: 0.95rem; padding: 0.2rem 0.5rem; background: var(--surface-2, rgba(0,0,0,0.04)); border-radius: var(--radius); }
+.row-note code { font-size: 0.8rem; }
+.stubs { display: grid; gap: var(--space-2); }
+.stub summary { cursor: pointer; font-weight: 600; }
+.stub pre { margin-top: var(--space-2); }
+@media (max-width: 720px) {
+  .param-grid { grid-template-columns: 1fr; }
+}
+.assess-entrypoint { margin: var(--space-2) 0; }
+.assess-entrypoint code { padding: 0.15rem 0.4rem; background: var(--surface-2, rgba(0,0,0,0.04)); border-radius: var(--radius); }

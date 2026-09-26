@@ -194,12 +194,16 @@ type islandProblem struct {
 	Statement string `json:"statement"`
 	// StatementHTML is the statement rendered from Markdown on the server;
 	// the island has no Markdown parser and shows this instead.
-	StatementHTML string       `json:"statement_html"`
-	Languages     []string     `json:"languages"`
-	Language      string       `json:"language"`
-	Source        string       `json:"source"`
-	SQLSchema     string       `json:"sql_schema"`
-	PublicTests   []islandTest `json:"public_tests"`
+	StatementHTML string   `json:"statement_html"`
+	Languages     []string `json:"languages"`
+	Language      string   `json:"language"`
+	Source        string   `json:"source"`
+	SQLSchema     string   `json:"sql_schema"`
+	// Signature is the entrypoint of a function problem, as a person reads
+	// it, and Stubs the starting source per language; both empty otherwise.
+	Signature   string            `json:"signature,omitempty"`
+	Stubs       map[string]string `json:"stubs,omitempty"`
+	PublicTests []islandTest      `json:"public_tests"`
 }
 
 type islandTest struct {
@@ -227,6 +231,10 @@ func configFor(s service.AttemptSession) islandConfig {
 			ID: p.ID.String(), Title: p.Title, Kind: p.Kind, Statement: p.Statement,
 			StatementHTML: markdown.ToHTML(p.Statement), Languages: p.Languages,
 			Language: p.Language, Source: p.Source, SQLSchema: p.SQLSchema, PublicTests: []islandTest{},
+			Stubs: p.Stubs,
+		}
+		if p.Signature != nil {
+			ip.Signature = p.Signature.Describe()
 		}
 		if ip.Languages == nil {
 			ip.Languages = []string{}

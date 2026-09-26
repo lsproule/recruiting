@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"time"
 
@@ -24,8 +25,10 @@ type ProblemTestCase struct {
 	Position   int       `json:"position,omitempty"`
 	Name       string    `json:"name,omitempty"`
 	Class      string    `json:"class,omitempty" enum:"sample,edge,perf,core"`
-	Input      string    `json:"input"`
-	Expected   string    `json:"expected"`
+	Input      string    `json:"input,omitempty" doc:"stdin for a code problem, the query's expected rows for sql, or the canonical JSON argument array of a function problem"`
+	Expected   string    `json:"expected,omitempty" doc:"The expected stdout, rows, or the canonical JSON return value"`
+	Args       any       `json:"args,omitempty" doc:"Function problems: the arguments as a JSON array, one per parameter; an alternative to input"`
+	Returns    any       `json:"returns,omitempty" doc:"Function problems: the expected return value as JSON; an alternative to expected"`
 	Visibility string    `json:"visibility" enum:"public,hidden"`
 	Weight     float64   `json:"weight,omitempty"`
 	Unordered  bool      `json:"unordered,omitempty" doc:"Compare SQL rows as a multiset"`
@@ -33,46 +36,47 @@ type ProblemTestCase struct {
 
 // Problem is one bank problem with everything an author edits.
 type Problem struct {
-	ID                 uuid.UUID          `json:"id"`
-	Kind               string             `json:"kind"`
-	Title              string             `json:"title"`
-	Statement          string             `json:"statement"`
-	Difficulty         string             `json:"difficulty"`
-	Tags               []string           `json:"tags"`
-	AllowedLanguages   []string           `json:"allowed_languages"`
-	TimeLimitMs        int                `json:"time_limit_ms"`
-	MemoryLimitKB      int                `json:"memory_limit_kb"`
-	SQLSchema          string             `json:"sql_schema,omitempty"`
-	SQLSeed            string             `json:"sql_seed,omitempty"`
-	RecommendedMinutes int                `json:"recommended_minutes"`
-	Guidelines         string             `json:"guidelines,omitempty" doc:"Internal interviewer notes; never shown to a candidate or a client"`
-	OriginProblemID    uuid.UUID          `json:"origin_problem_id,omitempty" doc:"The problem this one was cloned from"`
-	Quality            int                `json:"quality" doc:"The quality review score out of 100; below 60 the problem cannot be attached to an assessment"`
-	ProvenLanguages    []string           `json:"proven_languages"`
-	References         []ProblemReference `json:"reference_solutions"`
-	TestCases          []ProblemTestCase  `json:"test_cases"`
-	Platform           bool               `json:"platform" doc:"A platform seed problem, which is read-only"`
-	CreatedAt          time.Time          `json:"created_at"`
-	UpdatedAt          time.Time          `json:"updated_at"`
+	ID               uuid.UUID          `json:"id"`
+	Kind             string             `json:"kind"`
+	Title            string             `json:"title"`
+	Statement        string             `json:"statement"`
+	Difficulty       string             `json:"difficulty"`
+	Tags             []string           `json:"tags"`
+	AllowedLanguages []string           `json:"allowed_languages"`
+	TimeLimitMs      int                `json:"time_limit_ms"`
+	MemoryLimitKB    int                `json:"memory_limit_kb"`
+	SQLSchema        string             `json:"sql_schema,omitempty"`
+	SQLSeed          string             `json:"sql_seed,omitempty"`
+	Signature        *domain.Signature  `json:"signature,omitempty" doc:"Function problems: the entrypoint a candidate implements"`
+	Stubs            map[string]string  `json:"stubs,omitempty" doc:"Function problems: the starting source per allowed language"`
+	Guidelines       string             `json:"guidelines,omitempty" doc:"Internal interviewer notes; never shown to a candidate or a client"`
+	OriginProblemID  uuid.UUID          `json:"origin_problem_id,omitempty" doc:"The problem this one was cloned from"`
+	Quality          int                `json:"quality" doc:"The quality review score out of 100; below 60 the problem cannot be attached to an assessment"`
+	ProvenLanguages  []string           `json:"proven_languages"`
+	References       []ProblemReference `json:"reference_solutions"`
+	TestCases        []ProblemTestCase  `json:"test_cases"`
+	Platform         bool               `json:"platform" doc:"A platform seed problem, which is read-only"`
+	CreatedAt        time.Time          `json:"created_at"`
+	UpdatedAt        time.Time          `json:"updated_at"`
 }
 
 // ProblemInput is the body of a problem create or update; it is the same
 // shape as one entry of the import document.
 type ProblemInput struct {
-	Kind               string             `json:"kind"`
-	Title              string             `json:"title" minLength:"1"`
-	Statement          string             `json:"statement"`
-	Difficulty         string             `json:"difficulty"`
-	Tags               []string           `json:"tags,omitempty"`
-	AllowedLanguages   []string           `json:"allowed_languages,omitempty"`
-	TimeLimitMs        int                `json:"time_limit_ms,omitempty"`
-	MemoryLimitKB      int                `json:"memory_limit_kb,omitempty"`
-	SQLSchema          string             `json:"sql_schema,omitempty"`
-	SQLSeed            string             `json:"sql_seed,omitempty"`
-	RecommendedMinutes int                `json:"recommended_minutes,omitempty"`
-	Guidelines         string             `json:"guidelines,omitempty"`
-	References         []ProblemReference `json:"reference_solutions,omitempty"`
-	TestCases          []ProblemTestCase  `json:"test_cases"`
+	Kind             string             `json:"kind"`
+	Title            string             `json:"title" minLength:"1"`
+	Statement        string             `json:"statement"`
+	Difficulty       string             `json:"difficulty"`
+	Tags             []string           `json:"tags,omitempty"`
+	AllowedLanguages []string           `json:"allowed_languages,omitempty"`
+	TimeLimitMs      int                `json:"time_limit_ms,omitempty"`
+	MemoryLimitKB    int                `json:"memory_limit_kb,omitempty"`
+	SQLSchema        string             `json:"sql_schema,omitempty"`
+	SQLSeed          string             `json:"sql_seed,omitempty"`
+	Signature        *domain.Signature  `json:"signature,omitempty" doc:"Required on a function problem: the entrypoint, its typed parameters, and its return type"`
+	Guidelines       string             `json:"guidelines,omitempty"`
+	References       []ProblemReference `json:"reference_solutions,omitempty"`
+	TestCases        []ProblemTestCase  `json:"test_cases"`
 }
 
 func (in ProblemInput) importProblem() domain.ImportProblem {
@@ -81,7 +85,7 @@ func (in ProblemInput) importProblem() domain.ImportProblem {
 		Tags: in.Tags, AllowedLanguages: in.AllowedLanguages,
 		TimeLimitMs: in.TimeLimitMs, MemoryLimitKB: in.MemoryLimitKB,
 		SQLSchema: in.SQLSchema, SQLSeed: in.SQLSeed,
-		RecommendedMinutes: in.RecommendedMinutes, Guidelines: in.Guidelines,
+		Signature: in.Signature, Guidelines: in.Guidelines,
 	}
 	for _, r := range in.References {
 		out.References = append(out.References, domain.ImportReference{Language: r.Language, Source: r.Source})
@@ -89,6 +93,7 @@ func (in ProblemInput) importProblem() domain.ImportProblem {
 	for _, c := range in.TestCases {
 		tc := domain.ImportTestCase{
 			Name: c.Name, Class: c.Class, Input: c.Input, Expected: c.Expected,
+			Args: rawJSON(c.Args), Returns: rawJSON(c.Returns),
 			Visibility: c.Visibility, Unordered: c.Unordered,
 		}
 		if c.Weight != 0 {
@@ -100,13 +105,26 @@ func (in ProblemInput) importProblem() domain.ImportProblem {
 	return out
 }
 
+// rawJSON re-encodes a decoded JSON value so the import layer reads it the
+// way it reads a document; nil stays absent.
+func rawJSON(v any) json.RawMessage {
+	if v == nil {
+		return nil
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
 func problemView(p service.Problem) Problem {
 	out := Problem{
 		ID: p.ID, Kind: p.Kind, Title: p.Title, Statement: p.Statement, Difficulty: p.Difficulty,
 		Tags: list(p.Tags), AllowedLanguages: list(p.AllowedLanguages),
 		TimeLimitMs: p.TimeLimitMs, MemoryLimitKB: p.MemoryLimitKB,
 		SQLSchema: p.SQLSchema, SQLSeed: p.SQLSeed,
-		RecommendedMinutes: p.RecommendedMinutes, Guidelines: p.Guidelines,
+		Signature: p.Signature, Stubs: p.Stubs(), Guidelines: p.Guidelines,
 		OriginProblemID: p.OriginProblemID, Quality: p.Quality,
 		ProvenLanguages: list(p.ProvenLanguages),
 		Platform:        p.Platform(),

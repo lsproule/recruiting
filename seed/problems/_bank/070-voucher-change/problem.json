@@ -1,0 +1,211 @@
+{
+  "kind": "function",
+  "title": "Voucher Change",
+  "difficulty": "medium",
+  "tags": [
+    "dynamic-programming",
+    "greedy-traps"
+  ],
+  "signature": {
+    "name": "min_coins",
+    "params": [
+      {
+        "name": "coins",
+        "type": "int[]"
+      },
+      {
+        "name": "amount",
+        "type": "int"
+      }
+    ],
+    "returns": "int"
+  },
+  "allowed_languages": [
+    "any"
+  ],
+  "time_limit_ms": 2000,
+  "memory_limit_kb": 262144,
+  "statement": "A gift desk hands out vouchers in a few fixed denominations and wants to give a\ncustomer an exact amount using as few vouchers as possible. Any denomination\ncan be used any number of times.\n\nReturn the fewest vouchers that add up to `amount` exactly, or `-1` when no\ncombination does. An amount of `0` needs no vouchers.\n\n**Example 1**\n\n`min_coins([1, 5, 10, 25], 30)` returns `2`: a 25 and a 5.\n\n**Example 2**\n\n`min_coins([4, 7], 11)` returns `2`, while `min_coins([4, 7], 9)` returns `-1`.\n\n**Constraints**\n\n- `1 <= coins.length <= 50`\n- `1 <= coins[i] <= 10000`, all distinct\n- `0 <= amount <= 10000`\n",
+  "guidelines": "Bottom-up DP over the amount. The greedy largest-first answer is wrong on the [1, 3, 4] with 6 case, which is there to catch it. Ask what the memory would be if the amount were a billion and whether the coin set changes the answer.",
+  "test_cases": [
+    {
+      "name": "a twenty-five and a five",
+      "class": "sample",
+      "args": [
+        [
+          1,
+          5,
+          10,
+          25
+        ],
+        30
+      ],
+      "returns": 2,
+      "visibility": "public",
+      "weight": 1
+    },
+    {
+      "name": "sevens and fours",
+      "class": "sample",
+      "args": [
+        [
+          4,
+          7
+        ],
+        11
+      ],
+      "returns": 2,
+      "visibility": "public",
+      "weight": 1
+    },
+    {
+      "name": "nothing owed",
+      "class": "edge",
+      "args": [
+        [
+          2,
+          5
+        ],
+        0
+      ],
+      "returns": 0,
+      "visibility": "hidden",
+      "weight": 1
+    },
+    {
+      "name": "cannot be made",
+      "class": "edge",
+      "args": [
+        [
+          4,
+          7
+        ],
+        9
+      ],
+      "returns": -1,
+      "visibility": "hidden",
+      "weight": 1
+    },
+    {
+      "name": "greedy gets it wrong",
+      "class": "core",
+      "args": [
+        [
+          1,
+          3,
+          4
+        ],
+        6
+      ],
+      "returns": 2,
+      "visibility": "hidden",
+      "weight": 2
+    },
+    {
+      "name": "only one denomination",
+      "class": "core",
+      "args": [
+        [
+          7
+        ],
+        49
+      ],
+      "returns": 7,
+      "visibility": "hidden",
+      "weight": 1
+    },
+    {
+      "name": "single unit vouchers everywhere",
+      "class": "core",
+      "args": [
+        [
+          1
+        ],
+        10000
+      ],
+      "returns": 10000,
+      "visibility": "hidden",
+      "weight": 1
+    },
+    {
+      "name": "awkward set at the limit",
+      "class": "perf",
+      "args": [
+        [
+          3,
+          7,
+          11,
+          13,
+          19,
+          29
+        ],
+        9997
+      ],
+      "returns": 347,
+      "visibility": "hidden",
+      "weight": 2
+    },
+    {
+      "name": "fifty denominations",
+      "class": "perf",
+      "args": [
+        [
+          2,
+          201,
+          400,
+          599,
+          798,
+          997,
+          196,
+          395,
+          594,
+          793,
+          992,
+          191,
+          390,
+          589,
+          788,
+          987,
+          186,
+          385,
+          584,
+          783,
+          982,
+          181,
+          380,
+          579,
+          778,
+          977,
+          176,
+          375,
+          574,
+          773,
+          972,
+          171,
+          370,
+          569,
+          768,
+          967,
+          166,
+          365,
+          564,
+          763,
+          962,
+          161,
+          360,
+          559,
+          758,
+          957,
+          156,
+          355,
+          554,
+          753
+        ],
+        10000
+      ],
+      "returns": 11,
+      "visibility": "hidden",
+      "weight": 2
+    }
+  ]
+}

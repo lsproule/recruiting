@@ -366,25 +366,25 @@ type PipelineTemplateStage struct {
 }
 
 type Problem struct {
-	ID                 uuid.UUID
-	OrgID              uuid.UUID
-	Kind               string
-	Title              string
-	Statement          string
-	Difficulty         string
-	Tags               []string
-	AllowedLanguages   []string
-	TimeLimitMs        int32
-	MemoryLimitKb      int32
-	SqlSchema          *string
-	SqlSeed            *string
-	CreatedAt          pgtype.Timestamptz
-	UpdatedAt          pgtype.Timestamptz
-	RecommendedMinutes int32
-	Guidelines         string
-	OriginProblemID    uuid.NullUUID
-	Quality            int32
-	ProvenLanguages    []string
+	ID               uuid.UUID
+	OrgID            uuid.UUID
+	Kind             string
+	Title            string
+	Statement        string
+	Difficulty       string
+	Tags             []string
+	AllowedLanguages []string
+	TimeLimitMs      int32
+	MemoryLimitKb    int32
+	SqlSchema        *string
+	SqlSeed          *string
+	CreatedAt        pgtype.Timestamptz
+	UpdatedAt        pgtype.Timestamptz
+	Guidelines       string
+	OriginProblemID  uuid.NullUUID
+	Quality          int32
+	ProvenLanguages  []string
+	Signature        []byte
 }
 
 type ProblemReference struct {

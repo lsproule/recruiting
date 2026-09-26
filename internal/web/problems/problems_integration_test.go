@@ -426,10 +426,9 @@ func wizardForm(title, source string, step int) url.Values {
 	v := url.Values{
 		"id": {""}, "step": {strconv.Itoa(step)}, "lang_choice": {"1"},
 		"title": {title}, "kind": {"code"}, "difficulty": {"medium"},
-		"tags":                {"intervals"},
-		"recommended_minutes": {"40"},
-		"guidelines":          {"Watch for the eviction step."},
-		"time_limit_ms":       {"2000"}, "memory_limit_kb": {"262144"},
+		"tags":          {"intervals"},
+		"guidelines":    {"Watch for the eviction step."},
+		"time_limit_ms": {"2000"}, "memory_limit_kb": {"262144"},
 		"statement":      {strings.Repeat("Merge the overlapping intervals. ", 10)},
 		"ref_language_0": {"python"}, "ref_source_0": {source},
 		"ref_language_1": {""}, "ref_source_1": {""},

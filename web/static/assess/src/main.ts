@@ -35,6 +35,10 @@ interface Problem {
   language: string;
   source: string;
   sql_schema: string;
+  // signature is a function problem's entrypoint as a person reads it, and
+  // stubs the starting source per language. A program or a query has neither.
+  signature?: string;
+  stubs?: Record<string, string>;
   public_tests: TestCase[];
 }
 
@@ -49,6 +53,12 @@ interface Config {
   expires_at: number; // unix millis
   integrity?: IntegrityConfig;
   problems: Problem[];
+}
+
+// stubFor is the starting source of a problem in one language: the entrypoint
+// to fill in on a function problem, nothing on the other kinds.
+function stubFor(p: Problem, lang: string): string {
+  return p.stubs?.[lang] ?? "";
 }
 
 interface CandidateTest {
@@ -359,6 +369,11 @@ function mount(root: HTMLElement, cfg: Config): void {
     if (p.statement_html) statement.innerHTML = p.statement_html;
     else statement.textContent = p.statement;
     brief.appendChild(statement);
+    if (p.signature) {
+      const entry = el("p", "assess-entrypoint");
+      entry.append("Implement ", el("code", undefined, p.signature));
+      brief.appendChild(entry);
+    }
     if (p.sql_schema) {
       const schema = el("details");
       schema.open = true;
@@ -401,7 +416,9 @@ function mount(root: HTMLElement, cfg: Config): void {
       tests.appendChild(el("summary", undefined, "Example cases"));
       for (const t of p.public_tests) {
         const row = el("div", "assess-test");
-        row.append(el("pre", undefined, "input:\n" + t.input), el("pre", undefined, "expected:\n" + t.expected));
+        const inLabel = p.signature ? "arguments:\n" : "input:\n";
+        const outLabel = p.signature ? "returns:\n" : "expected:\n";
+        row.append(el("pre", undefined, inLabel + t.input), el("pre", undefined, outLabel + t.expected));
         tests.appendChild(row);
       }
       console_.appendChild(tests);
@@ -418,7 +435,7 @@ function mount(root: HTMLElement, cfg: Config): void {
     keymapConfs.set(p.id, keymapConf);
     const view = new EditorView({
       state: EditorState.create({
-        doc: p.source,
+        doc: p.source || stubFor(p, initialLang),
         extensions: [
           // Run and Submit are bound above every keymap so neither vim nor
           // emacs can shadow the only two actions that reach the server.
@@ -463,6 +480,12 @@ function mount(root: HTMLElement, cfg: Config): void {
     views.set(p.id, entry);
 
     select.addEventListener("change", () => {
+      // Switching language on an untouched editor swaps in that language's
+      // stub; anything the candidate typed is theirs and stays.
+      const before = view.state.doc.toString();
+      if (before.trim() === "" || before === stubFor(p, entry.language)) {
+        view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: stubFor(p, select.value) } });
+      }
       entry.language = select.value;
       view.dispatch({ effects: langConf.reconfigure(languageSupport(select.value)) });
       record("lang_change", p.id, { language: select.value });

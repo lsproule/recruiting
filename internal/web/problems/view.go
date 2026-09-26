@@ -38,20 +38,25 @@ type problemForm struct {
 	New  bool
 	Step int
 
-	Kind               string
-	Title              string
-	Statement          string
-	Difficulty         string
-	Tags               string
-	AllowedLanguages   string
-	RecommendedMinutes int
-	Guidelines         string
-	TimeLimitMs        int
-	MemoryLimitKB      int
-	SQLSchema          string
-	SQLSeed            string
-	References         []referenceRow
-	TestCases          []testCaseRow
+	Kind             string
+	Title            string
+	Statement        string
+	Difficulty       string
+	Tags             string
+	AllowedLanguages string
+	Guidelines       string
+	TimeLimitMs      int
+	MemoryLimitKB    int
+	SQLSchema        string
+	SQLSeed          string
+	References       []referenceRow
+	TestCases        []testCaseRow
+
+	// Signature is the entrypoint of a function problem: its name, one row
+	// per parameter (blank rows are dropped), and the return type.
+	SigName    string
+	SigParams  []paramRow
+	SigReturns string
 
 	// Proven are the languages the last verified save proved, so step 2 can
 	// mark them without re-running the runner.
@@ -79,6 +84,68 @@ func (f problemForm) returnPath(id uuid.UUID) string {
 type referenceRow struct {
 	Language string
 	Source   string
+}
+
+type paramRow struct {
+	Name string
+	Type string
+}
+
+// signature is what the form's signature rows spell, or nil when the problem
+// is not a function problem. Blank rows are skipped so the fixed number of
+// rows on the page never counts as parameters.
+func (f problemForm) signature() *domain.Signature {
+	if f.Kind != domain.ProblemKindFunction {
+		return nil
+	}
+	sig := &domain.Signature{Name: strings.TrimSpace(f.SigName), Returns: strings.TrimSpace(f.SigReturns), Params: []domain.Param{}}
+	for _, p := range f.SigParams {
+		if strings.TrimSpace(p.Name) == "" && strings.TrimSpace(p.Type) == "" {
+			continue
+		}
+		sig.Params = append(sig.Params, domain.Param{Name: strings.TrimSpace(p.Name), Type: strings.TrimSpace(p.Type)})
+	}
+	return sig
+}
+
+// stubPreview is the starting source a candidate would see in the first
+// allowed language, so an author can check the entrypoint reads right.
+func (f problemForm) stubPreview() (string, string) {
+	in := f.asImport()
+	in.Normalize()
+	for _, lang := range in.AllowedLanguages {
+		if stub := in.Stub(lang); stub != "" {
+			return languageLabel(lang), stub
+		}
+	}
+	return "", ""
+}
+
+// isFunction reports whether the wizard is authoring a function problem, which
+// is the kind with a signature and JSON-typed cases.
+func (f problemForm) isFunction() bool { return f.Kind == domain.ProblemKindFunction }
+
+// caseInputLabel and caseExpectedLabel name the two halves of a case for the
+// kind being authored: arguments and a return value, stdin and stdout, or a
+// query's expected rows.
+func (f problemForm) caseInputLabel() string {
+	switch f.Kind {
+	case domain.ProblemKindFunction:
+		return "Arguments (JSON array, one per parameter)"
+	case domain.ProblemKindSQL:
+		return "Input (unused for SQL)"
+	}
+	return "Input (stdin)"
+}
+
+func (f problemForm) caseExpectedLabel() string {
+	switch f.Kind {
+	case domain.ProblemKindFunction:
+		return "Returns (JSON)"
+	case domain.ProblemKindSQL:
+		return "Expected rows"
+	}
+	return "Expected output (stdout)"
 }
 
 type testCaseRow struct {
@@ -147,7 +214,7 @@ func (f problemForm) languages() []languageChoice {
 	out := make([]languageChoice, 0, len(domain.Languages)+1)
 	out = append(out, languageChoice{ID: domain.LanguageAny, Label: "Any", Chosen: chosen[domain.LanguageAny]})
 	for _, l := range domain.Languages {
-		if l.Kind != f.Kind {
+		if domain.CodeKind(l.Kind) != domain.CodeKind(f.Kind) {
 			continue
 		}
 		out = append(out, languageChoice{ID: l.ID, Label: l.Label, Chosen: chosen[l.ID], Proven: proven[l.ID]})
@@ -192,8 +259,9 @@ func (f problemForm) asImport() domain.ImportProblem {
 		Kind: f.Kind, Title: f.Title, Statement: f.Statement, Difficulty: f.Difficulty,
 		Tags: splitList(f.Tags), AllowedLanguages: splitList(f.AllowedLanguages),
 		TimeLimitMs: f.TimeLimitMs, MemoryLimitKB: f.MemoryLimitKB,
-		RecommendedMinutes: f.RecommendedMinutes, Guidelines: f.Guidelines,
-		SQLSchema: f.SQLSchema, SQLSeed: f.SQLSeed,
+		Guidelines: f.Guidelines,
+		SQLSchema:  f.SQLSchema, SQLSeed: f.SQLSeed,
+		Signature: f.signature(),
 	}
 	for _, ref := range f.References {
 		if strings.TrimSpace(ref.Source) == "" && strings.TrimSpace(ref.Language) == "" {
@@ -227,14 +295,19 @@ func (f problemForm) asImport() domain.ImportProblem {
 // newForm is a blank wizard on step 1.
 func newForm() problemForm {
 	return problemForm{
-		New: true, Step: stepDetails, Difficulty: "medium", Kind: domain.ProblemKindCode,
-		RecommendedMinutes: domain.DefaultRecommendedMinutes,
-		TimeLimitMs:        domain.DefaultProblemTimeLimitMs,
-		MemoryLimitKB:      domain.DefaultProblemMemoryLimitKB,
-		References:         make([]referenceRow, formRows),
-		TestCases:          make([]testCaseRow, formRows),
+		New: true, Step: stepDetails, Difficulty: "medium", Kind: domain.ProblemKindFunction,
+		TimeLimitMs:   domain.DefaultProblemTimeLimitMs,
+		MemoryLimitKB: domain.DefaultProblemMemoryLimitKB,
+		References:    make([]referenceRow, formRows),
+		TestCases:     make([]testCaseRow, formRows),
+		SigParams:     make([]paramRow, paramRows),
+		SigReturns:    "int",
 	}
 }
+
+// paramRows is how many parameter rows the wizard shows: every signature fits
+// in the wire's bound, and a blank row is simply not a parameter.
+const paramRows = domain.MaxSignatureParams
 
 // formOf fills the wizard from a stored problem, leaving blank rows to add
 // another reference solution or test case.
@@ -243,10 +316,20 @@ func formOf(p service.Problem) problemForm {
 		ID: p.ID, Step: stepDetails, Kind: p.Kind, Title: p.Title, Statement: p.Statement,
 		Difficulty: p.Difficulty,
 		Tags:       strings.Join(p.Tags, ", "), AllowedLanguages: strings.Join(p.AllowedLanguages, ", "),
-		RecommendedMinutes: p.RecommendedMinutes, Guidelines: p.Guidelines,
+		Guidelines:  p.Guidelines,
 		TimeLimitMs: p.TimeLimitMs, MemoryLimitKB: p.MemoryLimitKB,
 		SQLSchema: p.SQLSchema, SQLSeed: p.SQLSeed,
-		Proven: p.ProvenLanguages,
+		Proven:     p.ProvenLanguages,
+		SigParams:  make([]paramRow, paramRows),
+		SigReturns: "int",
+	}
+	if p.Signature != nil {
+		f.SigName, f.SigReturns = p.Signature.Name, p.Signature.Returns
+		for i, prm := range p.Signature.Params {
+			if i < len(f.SigParams) {
+				f.SigParams[i] = paramRow{Name: prm.Name, Type: prm.Type}
+			}
+		}
 	}
 	for _, r := range p.References {
 		f.References = append(f.References, referenceRow{Language: r.Language, Source: r.Source})
@@ -273,25 +356,31 @@ const langChoiceField = "lang_choice"
 // blanks, and empty rows are dropped rather than validated.
 func readForm(r *http.Request) problemForm {
 	f := problemForm{
-		Kind:               strings.TrimSpace(r.PostFormValue("kind")),
-		Title:              strings.TrimSpace(r.PostFormValue("title")),
-		Statement:          r.PostFormValue("statement"),
-		Difficulty:         strings.TrimSpace(r.PostFormValue("difficulty")),
-		Tags:               r.PostFormValue("tags"),
-		AllowedLanguages:   readLanguages(r),
-		RecommendedMinutes: atoiOr(r.PostFormValue("recommended_minutes"), domain.DefaultRecommendedMinutes),
-		Guidelines:         r.PostFormValue("guidelines"),
-		TimeLimitMs:        atoiOr(r.PostFormValue("time_limit_ms"), domain.DefaultProblemTimeLimitMs),
-		MemoryLimitKB:      atoiOr(r.PostFormValue("memory_limit_kb"), domain.DefaultProblemMemoryLimitKB),
-		SQLSchema:          r.PostFormValue("sql_schema"),
-		SQLSeed:            r.PostFormValue("sql_seed"),
-		Step:               clampStep(atoiOr(r.PostFormValue("step"), stepDetails)),
-		Return:             strings.TrimSpace(r.PostFormValue("return")),
+		Kind:             strings.TrimSpace(r.PostFormValue("kind")),
+		Title:            strings.TrimSpace(r.PostFormValue("title")),
+		Statement:        r.PostFormValue("statement"),
+		Difficulty:       strings.TrimSpace(r.PostFormValue("difficulty")),
+		Tags:             r.PostFormValue("tags"),
+		AllowedLanguages: readLanguages(r),
+		Guidelines:       r.PostFormValue("guidelines"),
+		SigName:          r.PostFormValue("sig_name"),
+		SigReturns:       r.PostFormValue("sig_returns"),
+		SigParams:        make([]paramRow, paramRows),
+		TimeLimitMs:      atoiOr(r.PostFormValue("time_limit_ms"), domain.DefaultProblemTimeLimitMs),
+		MemoryLimitKB:    atoiOr(r.PostFormValue("memory_limit_kb"), domain.DefaultProblemMemoryLimitKB),
+		SQLSchema:        r.PostFormValue("sql_schema"),
+		SQLSeed:          r.PostFormValue("sql_seed"),
+		Step:             clampStep(atoiOr(r.PostFormValue("step"), stepDetails)),
+		Return:           strings.TrimSpace(r.PostFormValue("return")),
 	}
 	if id, err := uuid.Parse(r.PostFormValue("id")); err == nil {
 		f.ID = id
 	}
 	f.New = f.ID == uuid.Nil
+	for i := range paramRows {
+		suffix := "_" + strconv.Itoa(i)
+		f.SigParams[i] = paramRow{Name: r.PostFormValue("sig_param_name" + suffix), Type: r.PostFormValue("sig_param_type" + suffix)}
+	}
 	for i := range maxFormRows {
 		suffix := "_" + strconv.Itoa(i)
 		lang, source := r.PostFormValue("ref_language"+suffix), r.PostFormValue("ref_source"+suffix)
@@ -402,22 +491,75 @@ func languagesText(p service.Problem) string { return strings.Join(p.AllowedLang
 
 func tagsText(p service.Problem) string { return strings.Join(p.Tags, ", ") }
 
-// caseCount summarises a bank row's size: how many cases it scores on and how
-// long it is meant to take.
-func caseCount(p service.Problem) string {
-	if p.RecommendedMinutes <= 0 {
-		return itoa(p.CaseCount) + " cases"
+// entrypoint is a function problem's signature as a person reads it; empty
+// on the other kinds.
+func entrypoint(p service.Problem) string {
+	if p.Signature == nil {
+		return ""
 	}
-	return itoa(p.CaseCount) + " cases · " + itoa(p.RecommendedMinutes) + " min"
+	return p.Signature.Describe()
 }
 
-// qualityLabel is how the bank reports a problem's score, naming the one
-// consequence a low score has.
-func qualityLabel(p service.Problem) string {
-	if p.Attachable() {
-		return itoa(p.Quality)
+// caseHeaders name a case's two halves for the problem's kind.
+func caseHeaders(p service.Problem) (string, string) {
+	switch p.Kind {
+	case domain.ProblemKindFunction:
+		return "Arguments", "Returns"
+	case domain.ProblemKindSQL:
+		return "Input", "Expected rows"
 	}
-	return itoa(p.Quality) + " · not attachable"
+	return "Stdin", "Stdout"
+}
+
+// kindLabel is a problem kind as a person reads it.
+func kindLabel(k string) string {
+	switch k {
+	case domain.ProblemKindFunction:
+		return "function — implement an entrypoint"
+	case domain.ProblemKindCode:
+		return "program — read stdin, write stdout"
+	case domain.ProblemKindSQL:
+		return "sql — one query"
+	}
+	return k
+}
+
+func caseInputHeader(p service.Problem) string    { h, _ := caseHeaders(p); return h }
+func caseExpectedHeader(p service.Problem) string { _, h := caseHeaders(p); return h }
+
+// caseInputPlaceholder and caseExpectedPlaceholder show the shape a case takes
+// for the kind being authored.
+func (f problemForm) caseInputPlaceholder() string {
+	switch f.Kind {
+	case domain.ProblemKindFunction:
+		return `[[3, 5, 2], "x"]`
+	case domain.ProblemKindSQL:
+		return ""
+	}
+	return "3\n1 2 3"
+}
+
+func (f problemForm) caseExpectedPlaceholder() string {
+	switch f.Kind {
+	case domain.ProblemKindFunction:
+		return "10"
+	case domain.ProblemKindSQL:
+		return "alice,3\nbob,1"
+	}
+	return "6"
+}
+
+// stubLanguages lists the languages a function problem has a stub in, in the
+// order the problem allows them.
+func stubLanguages(p service.Problem) []string {
+	stubs := p.Stubs()
+	out := make([]string, 0, len(stubs))
+	for _, lang := range p.AllowedLanguages {
+		if _, ok := stubs[lang]; ok {
+			out = append(out, lang)
+		}
+	}
+	return out
 }
 
 // selected marks the option matching the current value.

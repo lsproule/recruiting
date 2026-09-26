@@ -1,0 +1,1 @@
+select distinct c.name from customer c join subscription s on s.customer_id = c.id where s.status = 'active' order by c.name
