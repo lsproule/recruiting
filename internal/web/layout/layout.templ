@@ -11,6 +11,9 @@ templ Base(p Page) {
 			<meta charset="utf-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
 			<meta name="csrf-token" content={ p.CSRF }/>
+			<!-- A refused form (422) comes back as the same fragment with its
+			     reason inline, so htmx swaps it like a success. -->
+			<meta name="htmx-config" content={ htmxConfig }/>
 			<title>{ p.Title }</title>
 			<link rel="stylesheet" href={ NocturnePath }/>
 			<link rel="stylesheet" href={ AppCSSPath }/>

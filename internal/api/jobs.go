@@ -43,11 +43,12 @@ type JobInput struct {
 	SalaryMax       int       `json:"salary_max,omitempty"`
 	BlindMode       bool      `json:"blind_mode,omitempty"`
 	Status          string    `json:"status,omitempty"`
+	ProcessID       uuid.UUID `json:"process_id,omitempty" doc:"The hiring process to copy the pipeline from; the org's default when absent. Ignored on update"`
 }
 
 func (in JobInput) service() service.NewJob {
 	return service.NewJob{
-		ClientCompanyID: in.ClientCompanyID, Title: in.Title, Slug: in.Slug,
+		ClientCompanyID: in.ClientCompanyID, Title: in.Title, Slug: in.Slug, TemplateID: in.ProcessID,
 		Description: in.Description, Skills: in.Skills, Seniority: in.Seniority,
 		Location: in.Location, RemotePolicy: in.RemotePolicy,
 		SalaryMin: in.SalaryMin, SalaryMax: in.SalaryMax,

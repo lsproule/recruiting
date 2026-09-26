@@ -14,6 +14,7 @@ import (
 type Assessment struct {
 	ID               uuid.UUID `json:"id"`
 	Name             string    `json:"name"`
+	Format           string    `json:"format" enum:"timed,take_home" doc:"A timed, proctored sitting, or a take-home the candidate may leave and return to"`
 	DurationMinutes  int       `json:"duration_minutes"`
 	LanguageOverride string    `json:"language_override,omitempty"`
 	InviteWindowDays int       `json:"invite_window_days"`
@@ -26,7 +27,8 @@ type Assessment struct {
 // AssessmentInput is the body of an assessment create or update.
 type AssessmentInput struct {
 	Name             string      `json:"name" minLength:"1"`
-	DurationMinutes  int         `json:"duration_minutes" minimum:"1"`
+	Format           string      `json:"format,omitempty" enum:"timed,take_home," doc:"Defaults to timed; a take-home turns proctoring off and takes its window in minutes (default three days)"`
+	DurationMinutes  int         `json:"duration_minutes" minimum:"1" doc:"Minutes; up to 24 hours for a timed sitting, up to 30 days for a take-home"`
 	LanguageOverride string      `json:"language_override,omitempty"`
 	InviteWindowDays int         `json:"invite_window_days" minimum:"1"`
 	AllowedLanguages []string    `json:"allowed_languages,omitempty" doc:"Empty, or \"any\", means every language each problem offers"`
@@ -49,7 +51,7 @@ func assessmentView(a service.Assessment) Assessment {
 		a.AllowedLanguages = []string{}
 	}
 	return Assessment{
-		ID: a.ID, Name: a.Name, DurationMinutes: a.DurationMinutes,
+		ID: a.ID, Name: a.Name, Format: a.Format, DurationMinutes: a.DurationMinutes,
 		LanguageOverride: a.LanguageOverride, InviteWindowDays: a.InviteWindowDays,
 		AllowedLanguages: a.AllowedLanguages, Integrity: Integrity(a.Integrity),
 		ProblemCount: a.ProblemCount, Problems: problemViews(a.Problems),
@@ -123,7 +125,7 @@ type stageAssessmentInput struct {
 
 func (in AssessmentInput) service() service.AssessmentInput {
 	return service.AssessmentInput{
-		Name: in.Name, DurationMinutes: in.DurationMinutes,
+		Name: in.Name, Format: in.Format, DurationMinutes: in.DurationMinutes,
 		LanguageOverride: in.LanguageOverride, InviteWindowDays: in.InviteWindowDays,
 		AllowedLanguages: in.AllowedLanguages, Integrity: service.IntegritySettings(in.Integrity),
 		ProblemIDs: in.ProblemIDs,

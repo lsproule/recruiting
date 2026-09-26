@@ -20,8 +20,9 @@ import (
 // PasswordSetTTL is how long a bootstrap admin has to choose a password.
 const PasswordSetTTL = 7 * 24 * time.Hour
 
-// DefaultPipelineTemplateName names the pipeline every new org starts with.
-const DefaultPipelineTemplateName = "Default"
+// DefaultPipelineTemplateName names the pipeline every new org starts with:
+// the first process of the built-in library.
+const DefaultPipelineTemplateName = "Agency standard"
 
 // StageSpec is one stage of a pipeline template as the bootstrap seeds it.
 type StageSpec struct {

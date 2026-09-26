@@ -75,17 +75,20 @@ type Job struct {
 // derived from Title when empty.
 type NewJob struct {
 	ClientCompanyID uuid.UUID
-	Title           string
-	Slug            string
-	Description     string
-	Skills          []string
-	Seniority       string
-	Location        string
-	RemotePolicy    string
-	SalaryMin       int
-	SalaryMax       int
-	BlindMode       bool
-	Status          string
+	// TemplateID is the process the pipeline is copied from; Nil takes the
+	// org's default.
+	TemplateID   uuid.UUID
+	Title        string
+	Slug         string
+	Description  string
+	Skills       []string
+	Seniority    string
+	Location     string
+	RemotePolicy string
+	SalaryMin    int
+	SalaryMax    int
+	BlindMode    bool
+	Status       string
 }
 
 // StageInput is one stage of the per-job pipeline editor.
@@ -244,7 +247,7 @@ func (s *JobService) CreateJob(ctx context.Context, p Principal, in NewJob) (Job
 		if err != nil {
 			return err
 		}
-		if _, err := copyTemplateStages(ctx, tx, p.OrgID, row.ID, uuid.Nil); err != nil {
+		if _, err := copyTemplateStages(ctx, tx, p.OrgID, row.ID, in.TemplateID); err != nil {
 			return err
 		}
 		out = toJob(row, company.Name)

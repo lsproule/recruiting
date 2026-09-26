@@ -14,7 +14,11 @@ SQLC  := $(GO) run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION)
 GOOSE := $(GO) run github.com/pressly/goose/v3/cmd/goose@$(GOOSE_VERSION)
 
 GOLANGCI_VERSION ?= v2.12.2
-GOLANGCI_LINT := $(GO) run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
+# The linter has to be built with the module's own Go: `go run pkg@version`
+# otherwise picks the oldest toolchain the tool accepts, which then refuses
+# to lint a module that targets a newer language version.
+MODULE_GO := $(shell $(GO) list -m -f '{{.GoVersion}}')
+GOLANGCI_LINT := GOTOOLCHAIN=go$(MODULE_GO) $(GO) run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
 
 COMPOSE ?= docker compose
 

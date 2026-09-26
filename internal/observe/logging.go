@@ -17,6 +17,11 @@ type statusWriter struct {
 	status int
 }
 
+// Unwrap exposes the writer underneath, so http.ResponseController can
+// reach its Flusher: a streamed response (an interview room's event stream)
+// has to be flushed event by event through this wrapper.
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
 func (w *statusWriter) WriteHeader(code int) {
 	w.status = code
 	w.ResponseWriter.WriteHeader(code)

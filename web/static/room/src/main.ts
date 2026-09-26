@@ -175,7 +175,7 @@ export function mountRoom(root: HTMLElement, cfg: RoomConfig): RoomHandle {
   const runButton = el("button", "btn btn-primary", "Run");
   runButton.type = "button";
   runButton.disabled = !cfg.run;
-  const saved = el("span", "room-note", "");
+  const saved = el("span", "room-saved", "");
   bar.append(langSelect, keymapSelect, runButton, saved);
 
   const editorHost = el("div", "assess-editor");

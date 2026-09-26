@@ -144,13 +144,13 @@ templ planScript() {
 				candidates: 0, interviewers: 0, round: 5, brk: 60,
 				init() {
 					try { this.$refs.tz.value = this.$refs.tz.value || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch (e) { this.$refs.tz.value = 'UTC'; }
-					const form = this.$el;
+					const form = this.$root;
 					this.round = parseFloat(form.querySelector('[name=round_minutes]').value) || 5;
 					this.brk = parseInt(form.querySelector('[name=break_seconds]').value, 10) || 0;
 					this.count();
 				},
 				count() {
-					const form = this.$el;
+					const form = this.$root;
 					this.candidates = form.querySelectorAll('[name=candidate]:checked').length;
 					this.interviewers = form.querySelectorAll('[name=interviewer]:checked').length;
 				},

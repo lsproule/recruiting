@@ -26,6 +26,12 @@ set -a
 . "$root/.env"
 set +a
 
+# Object storage: the Compose MinIO when it answers, otherwise the in-memory
+# stand-in from tools/fakes3 on a port of its own, so a host that cannot run
+# MinIO still runs the whole suite.
+: "${E2E_FAKE_S3_PORT:=9100}"
+export E2E_DATABASE_NAME
+
 export BASE_URL="http://localhost:$E2E_LISTEN_PORT"
 export LISTEN_ADDR=":$E2E_LISTEN_PORT"
 export RUNNER_LISTEN=":$E2E_RUNNER_PORT"
@@ -63,6 +69,16 @@ wait_http() {
 echo "==> building"
 (cd "$root" && go build -o bin/recruiting ./cmd/recruiting)
 bin="$root/bin/recruiting"
+
+if ! curl -fsS -o /dev/null --max-time 3 "${BLOB_ENDPOINT:-http://localhost:9000}/minio/health/live" 2>/dev/null; then
+  echo "==> no object store at ${BLOB_ENDPOINT:-http://localhost:9000}; starting tools/fakes3 on :$E2E_FAKE_S3_PORT"
+  # Built rather than `go run`, so the pid the trap kills is the server's own.
+  (cd "$root" && go build -o "$work/fakes3" ./tools/fakes3)
+  "$work/fakes3" -listen "127.0.0.1:$E2E_FAKE_S3_PORT" >"$work/fakes3.log" 2>&1 &
+  pids+=($!)
+  export BLOB_ENDPOINT="http://127.0.0.1:$E2E_FAKE_S3_PORT"
+  wait_http "$BLOB_ENDPOINT/" fakes3 "$work/fakes3.log"
+fi
 
 # The suite seeds the problem bank and sits real attempts, which would break
 # `make test-integration`'s assertions if they shared a database. It gets its

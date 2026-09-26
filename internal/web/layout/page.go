@@ -162,6 +162,11 @@ func csrfHeader(token string) string {
 	return string(b)
 }
 
+// htmxConfig is read by htmx at boot. It swaps a 422 like a 2xx: every
+// refused form here answers with the fragment re-rendered around its reason,
+// and htmx's default of leaving a 4xx unswapped would hide that reason.
+const htmxConfig = `{"responseHandling":[{"code":"204","swap":false},{"code":"[23]..","swap":true},{"code":"422","swap":true},{"code":"[45]..","swap":false,"error":true}]}`
+
 // ClientNav is the client-portal navigation, with the entry matching current
 // marked active.
 func ClientNav(current string) []NavItem {
