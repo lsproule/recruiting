@@ -1,5 +1,10 @@
 version: "2"
 
+run:
+  # The linters fan out per package; four keeps a laptop responsive while
+  # `make check` runs.
+  concurrency: 4
+
 linters:
   # staticcheck and unused are disabled: their IR builder (honnef.co/go/tools
   # v0.7.0) panics on the Go 1.27 standard library. Re-enable once golangci-lint
@@ -21,6 +26,12 @@ linters:
           disabled: true
   exclusions:
     generated: lax
+    # Generated code is not analysed at all: `generated: lax` only hides
+    # reports, and templ and sqlc together add tens of thousands of lines
+    # that are not ours to fix.
+    paths:
+      - _templ\.go$
+      - internal/store/db/
     presets:
       - comments
       - common-false-positives

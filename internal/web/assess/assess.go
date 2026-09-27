@@ -266,6 +266,8 @@ func (h *handlers) beacon(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, service.ErrEventSeq):
 			status = http.StatusConflict
+		case errors.Is(err, service.ErrRecordingFull):
+			status = http.StatusRequestEntityTooLarge
 		case errors.Is(err, service.ErrAttemptExpired), errors.Is(err, service.ErrInviteExpired):
 			status = http.StatusGone
 		case errors.Is(err, service.ErrNotFound), errors.Is(err, service.ErrForbidden):

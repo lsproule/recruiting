@@ -6,7 +6,6 @@ package talent
 
 import (
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -157,7 +156,8 @@ func (h *handlers) join(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	in, form, err := joinFromForm(r)
+	in, form, done, err := joinFromForm(r)
+	defer done()
 	if err == nil {
 		_, err = h.d.Talent.Join(r.Context(), slug, in)
 	}
@@ -176,7 +176,7 @@ func (h *handlers) join(w http.ResponseWriter, r *http.Request) {
 
 // joinFromForm reads the multipart form. The résumé is optional here: a
 // member may join with a profile alone and send one later.
-func joinFromForm(r *http.Request) (service.TalentProfileInput, joinForm, error) {
+func joinFromForm(r *http.Request) (service.TalentProfileInput, joinForm, func(), error) {
 	form := joinForm{
 		Name: r.PostFormValue("name"), Email: r.PostFormValue("email"), Phone: r.PostFormValue("phone"),
 		Links: r.PostFormValue("links"), Headline: r.PostFormValue("headline"), Skills: r.PostFormValue("skills"),
@@ -192,23 +192,23 @@ func joinFromForm(r *http.Request) (service.TalentProfileInput, joinForm, error)
 	if raw := strings.TrimSpace(form.SalaryMin); raw != "" {
 		n, err := strconv.Atoi(raw)
 		if err != nil || n < 0 {
-			return in, form, errBadSalary
+			return in, form, func() {}, errBadSalary
 		}
 		in.SalaryMin = n
 	}
 	if raw := strings.TrimSpace(form.AvailableFrom); raw != "" {
 		d, err := time.Parse("2006-01-02", raw)
 		if err != nil {
-			return in, form, errBadDate
+			return in, form, func() {}, errBadDate
 		}
 		in.AvailableFrom = &d
 	}
-	up, err := readResume(r)
+	up, done, err := readResume(r)
 	if err != nil {
-		return in, form, err
+		return in, form, nil, err
 	}
 	in.Resume = up
-	return in, form, nil
+	return in, form, done, nil
 }
 
 var (
@@ -216,22 +216,29 @@ var (
 	errBadDate   = errors.New("the start date must be a date")
 )
 
-// readResume reads the optional upload, one byte past the cap so an
-// oversized file is refused without being held.
-func readResume(r *http.Request) (*service.ResumeUpload, error) {
+// readResume opens the optional upload without loading it: the part sits on
+// disk past MaxBody's memory threshold and the service streams it from
+// there. Its declared size and its head are checked first, so an oversized
+// file or one of the wrong kind is refused without being read. done closes
+// the part; the caller runs it once the service has finished with the input.
+func readResume(r *http.Request) (*service.ResumeUpload, func(), error) {
 	file, header, err := r.FormFile(resumeField)
 	if err != nil {
-		return nil, nil
+		return nil, func() {}, nil
 	}
-	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(file, domain.MaxResumeBytes+1))
-	if err != nil {
-		return nil, domain.ErrResumeEmpty
+	if header.Size == 0 {
+		_ = file.Close()
+		return nil, func() {}, nil
 	}
-	if len(data) == 0 {
-		return nil, nil
+	if header.Size > domain.MaxResumeBytes {
+		_ = file.Close()
+		return nil, func() {}, domain.ErrResumeTooLarge
 	}
-	return &service.ResumeUpload{Filename: header.Filename, Data: data}, nil
+	if _, err := domain.SniffResumeAt(file, header.Size); err != nil {
+		_ = file.Close()
+		return nil, func() {}, err
+	}
+	return &service.ResumeUpload{Filename: header.Filename, File: file, Size: header.Size}, func() { _ = file.Close() }, nil
 }
 
 // profileView is the member's page: their profile and the form to change it.
@@ -261,7 +268,8 @@ func tokenPath(r *http.Request) string {
 
 func (h *handlers) updateProfile(w http.ResponseWriter, r *http.Request) {
 	p, _ := middleware.PrincipalFrom(r.Context())
-	in, _, err := joinFromForm(r)
+	in, _, done, err := joinFromForm(r)
+	defer done()
 	if err == nil {
 		_, err = h.d.Talent.UpdateProfile(r.Context(), p, service.TalentProfileEdit{
 			Phone: in.Phone, Links: in.Links, Headline: in.Headline, Skills: in.Skills, Seniority: in.Seniority,

@@ -147,9 +147,12 @@ func TestRoomHubRelaysAndCompacts(t *testing.T) {
 	if hub.Signal("k", "nobody", "", nil) {
 		t.Fatal("signal from a stranger accepted")
 	}
-	member, want := hub.Doc("k", a.Peer.ID, []byte{1, 2, 3}, false)
-	if !member || want {
-		t.Fatalf("doc = member %v want %v", member, want)
+	want, err := hub.Doc("k", a.Peer.ID, []byte{1, 2, 3}, false)
+	if err != nil || want {
+		t.Fatalf("doc = want %v, %v", want, err)
+	}
+	if _, err := hub.Doc("k", "nobody", []byte{1}, false); !errors.Is(err, service.ErrNotPeer) {
+		t.Fatalf("doc from a stranger returned %v, want ErrNotPeer", err)
 	}
 	if ev := <-b.Events; ev.Type != service.EventDoc {
 		t.Fatalf("b saw %+v", ev)
@@ -163,8 +166,8 @@ func TestRoomHubRelaysAndCompacts(t *testing.T) {
 	if err := json.Unmarshal(hello.Data, &h2); err != nil || len(h2.Doc) != 1 || len(h2.Peers) != 2 {
 		t.Fatalf("late hello = %s", hello.Data)
 	}
-	if _, want := hub.Doc("k", a.Peer.ID, []byte{9}, true); want {
-		t.Fatal("a snapshot still wants a snapshot")
+	if want, err := hub.Doc("k", a.Peer.ID, []byte{9}, true); want || err != nil {
+		t.Fatalf("a snapshot still wants a snapshot: %v %v", want, err)
 	}
 	if ev := <-b.Events; ev.Type != service.EventPeerJoined || ev.From != c.Peer.ID {
 		t.Fatalf("b saw %+v", ev)

@@ -286,16 +286,13 @@ func (s *RoomService) Signal(ctx context.Context, p Principal, key RoomKey, from
 }
 
 // Doc appends a shared-editor update. It reports whether the client should
-// answer with a snapshot to compact the room's log.
+// answer with a snapshot to compact the room's log, and fails with
+// ErrDocLogFull once the log cannot take more without one.
 func (s *RoomService) Doc(ctx context.Context, p Principal, key RoomKey, from string, update []byte, snapshot bool) (wantSnapshot bool, err error) {
 	if _, err := s.Open(ctx, p, key); err != nil {
 		return false, err
 	}
-	member, want := s.Hub.Doc(key.String(), from, update, snapshot)
-	if !member {
-		return false, ErrNotPeer
-	}
-	return want, nil
+	return s.Hub.Doc(key.String(), from, update, snapshot)
 }
 
 // SaveCode persists the editor's language and text.
@@ -397,7 +394,7 @@ func wrapRoom(what string, err error) error {
 		return ErrNotFound
 	case errors.Is(err, ErrNotFound), errors.Is(err, ErrForbidden), errors.Is(err, ErrRoomClosed),
 		errors.Is(err, ErrRoomKind), errors.Is(err, ErrNotPeer), errors.Is(err, ErrRoomLanguage),
-		errors.Is(err, ErrSourceTooBig), errors.Is(err, ErrSprintNotScheduled):
+		errors.Is(err, ErrSourceTooBig), errors.Is(err, ErrSprintNotScheduled), errors.Is(err, ErrDocLogFull):
 		return err
 	}
 	return fmt.Errorf("%s: %w", what, err)

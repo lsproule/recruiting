@@ -25,23 +25,25 @@ func runWorker(logger *slog.Logger, cfg *config.Config, _ []string) error {
 }
 
 // runRunner starts the sandboxed execution service and, alongside it, its
-// own /metrics listener: runRunner's own package (internal/runner/server) is
-// out of this task's scope, so the metrics endpoint the observability
-// contract asks for is served from a second, dedicated listener rather than
-// from the runner's own mux.
+// own /metrics listener on METRICS_ADDR, kept apart from the runner's
+// secret-protected listener so a scraper needs no secret. It serves the
+// runner's own registry (runner_executions_in_flight, runner_queue_depth
+// and the rest; see docs/runner-scaling.md), not internal/observe's, whose
+// series are the app's.
 func runRunner(logger *slog.Logger, cfg *config.Config, _ []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	metricsErrc := make(chan error, 1)
-	go func() { metricsErrc <- serveMetrics(ctx, logger, metricsAddr()) }()
+	go func() { metricsErrc <- serveMetrics(ctx, logger, metricsAddr(), server.MetricsHandler()) }()
 
 	runErr := server.Run(ctx, logger, server.ConfigFromEnv(cfg.RunnerSecret))
 	// server.Run can return before ctx is ever cancelled — a startup
 	// failure such as the configured OCI runtime being unavailable returns
-	// at once. stop() here (safe to call more than once) is what tells the
-	// metrics listener to shut down in that case, so waiting on it below
-	// cannot deadlock against a signal that will never arrive.
+	// at once, and RUNNER_IDLE_EXIT returns nil once the runner has sat
+	// idle for that long. stop() here (safe to call more than once) is what
+	// tells the metrics listener to shut down in those cases, so waiting on
+	// it below cannot deadlock against a signal that will never arrive.
 	stop()
 	if err := <-metricsErrc; err != nil && runErr == nil {
 		return fmt.Errorf("runner: %w", err)

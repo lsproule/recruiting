@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -107,16 +108,26 @@ type ProblemReference struct {
 }
 
 // ProblemTestCase is one case a submission is scored against.
+//
+// A perf case's payload runs to megabytes, so most reads carry the case
+// without it: Input and Expected are empty, Payload is false, and
+// InputBytes and ExpectedBytes say how large they are. Only a path that
+// hands the case to the runner, shows it, or copies it asks for the payload.
 type ProblemTestCase struct {
-	ID         uuid.UUID
-	Position   int
-	Name       string
-	Class      string
-	Input      string
-	Expected   string
-	Visibility string
-	Weight     float64
-	Unordered  bool
+	ID       uuid.UUID
+	Position int
+	Name     string
+	Class    string
+	Input    string
+	Expected string
+	// Payload reports whether Input and Expected are loaded.
+	Payload bool
+	// InputBytes and ExpectedBytes are the payload sizes, loaded or not.
+	InputBytes    int
+	ExpectedBytes int
+	Visibility    string
+	Weight        float64
+	Unordered     bool
 }
 
 // ProblemFilter narrows a bank listing; an empty field means "any".
@@ -204,34 +215,66 @@ func (s *ProblemService) List(ctx context.Context, p Principal, f ProblemFilter)
 // language: the function to fill in, with the wire types spelled the way the
 // language spells them. The other kinds start from an empty editor.
 func (p Problem) Stub(lang string) string {
-	return p.AsImport().Stub(domain.NormalizeLanguageID(lang))
+	if p.Kind != domain.ProblemKindFunction || p.Signature == nil {
+		return ""
+	}
+	return wire.Stub(domain.NormalizeLanguageID(lang), *p.Signature)
 }
 
 // Stubs is the starting source for every allowed language of a function
-// problem, keyed by language id; nil on the other kinds.
+// problem, keyed by language id; nil on the other kinds. It reads the
+// signature alone, so a problem loaded without its cases has them too.
 func (p Problem) Stubs() map[string]string {
 	if p.Kind != domain.ProblemKindFunction || p.Signature == nil {
 		return nil
 	}
-	imp := p.AsImport()
 	out := make(map[string]string, len(p.AllowedLanguages))
 	for _, lang := range p.AllowedLanguages {
-		if stub := imp.Stub(lang); stub != "" {
+		if stub := wire.Stub(lang, *p.Signature); stub != "" {
 			out[lang] = stub
 		}
 	}
 	return out
 }
 
-// Get loads one problem with its reference solutions and test cases.
+// Get loads one problem with its reference solutions and its test cases'
+// metadata: names, classes, weights, visibility, and payload sizes, but not
+// the payloads. GetWithCases, GetWithPublicCases, GetWithCasesUpTo, and Case
+// are the reads that carry them.
 func (s *ProblemService) Get(ctx context.Context, p Principal, id uuid.UUID) (Problem, error) {
+	return s.get(ctx, p, id, loadProblem)
+}
+
+// GetWithCases loads one problem with every test case's payload: what a
+// copy, an export, or a run against every case needs.
+func (s *ProblemService) GetWithCases(ctx context.Context, p Principal, id uuid.UUID) (Problem, error) {
+	return s.get(ctx, p, id, loadProblemWithCases)
+}
+
+// GetWithPublicCases loads one problem with the payloads of its public cases
+// only, the way a candidate sees it; hidden cases are left out entirely.
+func (s *ProblemService) GetWithPublicCases(ctx context.Context, p Principal, id uuid.UUID) (Problem, error) {
+	return s.get(ctx, p, id, loadProblemWithPublicCases)
+}
+
+// GetWithCasesUpTo loads one problem with every case's metadata and the
+// payloads of the cases whose input and expected output both fit in
+// maxBytes. A larger case carries its sizes and no payload, so a form can
+// show it by reference rather than inline megabytes.
+func (s *ProblemService) GetWithCasesUpTo(ctx context.Context, p Principal, id uuid.UUID, maxBytes int) (Problem, error) {
+	return s.get(ctx, p, id, func(ctx context.Context, tx *store.Tx, id uuid.UUID) (Problem, error) {
+		return loadProblemWithCasesUpTo(ctx, tx, id, maxBytes)
+	})
+}
+
+func (s *ProblemService) get(ctx context.Context, p Principal, id uuid.UUID, load func(context.Context, *store.Tx, uuid.UUID) (Problem, error)) (Problem, error) {
 	if err := requireRecruiter(p); err != nil {
 		return Problem{}, err
 	}
 	var out Problem
 	err := s.st.WithTx(ctx, p, func(ctx context.Context, tx *store.Tx) error {
 		var err error
-		out, err = loadProblem(ctx, tx, id)
+		out, err = load(ctx, tx, id)
 		return err
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -239,6 +282,31 @@ func (s *ProblemService) Get(ctx context.Context, p Principal, id uuid.UUID) (Pr
 	}
 	if err != nil {
 		return Problem{}, fmt.Errorf("get problem: %w", err)
+	}
+	return out, nil
+}
+
+// Case loads one test case of a problem with its payload. It is the read
+// behind the explicit case resource, which is how a payload too large to
+// inline is fetched.
+func (s *ProblemService) Case(ctx context.Context, p Principal, problemID, caseID uuid.UUID) (ProblemTestCase, error) {
+	if err := requireRecruiter(p); err != nil {
+		return ProblemTestCase{}, err
+	}
+	var out ProblemTestCase
+	err := s.st.WithTx(ctx, p, func(ctx context.Context, tx *store.Tx) error {
+		row, err := tx.Q.GetTestCase(ctx, db.GetTestCaseParams{ProblemID: problemID, ID: caseID})
+		if err != nil {
+			return err
+		}
+		out = testCaseOf(row)
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ProblemTestCase{}, ErrNotFound
+	}
+	if err != nil {
+		return ProblemTestCase{}, fmt.Errorf("get test case: %w", err)
 	}
 	return out, nil
 }
@@ -389,8 +457,14 @@ func (s *ProblemService) Import(ctx context.Context, p Principal, doc []byte) ([
 // no tenant may write the platform org, so the admin CLI is the only way in.
 // Every seed problem is re-imported by title, so a second run refreshes the
 // bank rather than duplicating it.
+//
+// The bank is walked one directory at a time — parsed, checked against the
+// runner, written, and let go before the next — because its perf cases make
+// a problem megabytes wide and the whole bank held at once is several times
+// that. Every failing problem is still reported together, and one failure
+// stores nothing: the caller's transaction is what commits.
 func (s *ProblemService) ImportPlatformSeed(ctx context.Context, tx *store.Tx) ([]Problem, error) {
-	problems, err := SeedProblems()
+	dirs, err := SeedProblemDirs()
 	if err != nil {
 		return nil, err
 	}
@@ -399,12 +473,44 @@ func (s *ProblemService) ImportPlatformSeed(ctx context.Context, tx *store.Tx) (
 	}
 	ctx, cancel := context.WithTimeout(ctx, ImportTimeout)
 	defer cancel()
-	if err := validateProblemReferences(ctx, s.exec, s.concurrency(), problems); err != nil {
-		return nil, err
+	out := make([]Problem, 0, len(dirs))
+	var report domain.ProblemImportErrors
+	seen := map[string]int{}
+	for i, dir := range dirs {
+		problem, err := SeedProblem(dir)
+		var faults domain.ProblemImportErrors
+		switch {
+		case errors.As(err, &faults):
+			report = append(report, seedFault(faults, i))
+			continue
+		case err != nil:
+			return nil, fmt.Errorf("seed problems: %s: %w", path.Base(dir), err)
+		}
+		if msg := seedDuplicate(seen, problem.Title, i); msg != "" {
+			report = append(report, domain.ProblemImportError{Index: i, Title: problem.Title, Errors: []string{msg}})
+			continue
+		}
+		batch := []domain.ImportProblem{problem}
+		err = validateProblemReferences(ctx, s.exec, s.concurrency(), batch)
+		switch {
+		case errors.As(err, &faults):
+			report = append(report, seedFault(faults, i))
+			continue
+		case err != nil:
+			return nil, err
+		case len(report) > 0:
+			// Nothing will be stored; the rest are still checked so the
+			// report names every broken problem.
+			continue
+		}
+		stored, err := replaceProblems(ctx, tx, PlatformOrgID, batch)
+		if err != nil {
+			return nil, problemWriteError("seed problems", err)
+		}
+		out = append(out, stored...)
 	}
-	out, err := replaceProblems(ctx, tx, PlatformOrgID, problems)
-	if err != nil {
-		return nil, problemWriteError("seed problems", err)
+	if len(report) > 0 {
+		return nil, report
 	}
 	return out, nil
 }
@@ -703,7 +809,99 @@ func writeProblem(ctx context.Context, tx *store.Tx, orgID, id uuid.UUID, in dom
 	return loadProblem(ctx, tx, row.ID)
 }
 
+// loadProblem reads a problem, its reference solutions, and its test cases'
+// metadata: everything but the payloads, whose sizes stand in for them. It
+// is the loader behind the assessment, the candidate session, the poll, the
+// review, and the score, none of which reads a payload — and a seed problem's
+// perf cases make a payload megabytes wide.
 func loadProblem(ctx context.Context, tx *store.Tx, id uuid.UUID) (Problem, error) {
+	out, err := loadProblemHead(ctx, tx, id)
+	if err != nil {
+		return Problem{}, err
+	}
+	cases, err := tx.Q.ListTestCaseMeta(ctx, id)
+	if err != nil {
+		return Problem{}, err
+	}
+	out.CaseCount = len(cases)
+	out.TestCases = make([]ProblemTestCase, 0, len(cases))
+	for _, c := range cases {
+		out.TestCases = append(out.TestCases, ProblemTestCase{
+			ID: c.ID, Position: int(c.Position), Name: c.Name, Class: c.Class,
+			InputBytes: int(c.InputBytes), ExpectedBytes: int(c.ExpectedBytes),
+			Visibility: c.Visibility, Weight: weightOf(c.Weight), Unordered: c.Unordered,
+		})
+	}
+	return out, nil
+}
+
+// loadProblemWithCases reads a problem with every test case's payload. Only
+// the paths that hand the cases on — the runner, a copy, an explicit read —
+// take this one.
+func loadProblemWithCases(ctx context.Context, tx *store.Tx, id uuid.UUID) (Problem, error) {
+	out, err := loadProblemHead(ctx, tx, id)
+	if err != nil {
+		return Problem{}, err
+	}
+	cases, err := tx.Q.ListTestCases(ctx, id)
+	if err != nil {
+		return Problem{}, err
+	}
+	out.CaseCount = len(cases)
+	out.TestCases = testCasesOf(cases)
+	return out, nil
+}
+
+// loadProblemWithPublicCases reads a problem with its public cases only,
+// payloads included; the hidden cases are not on it at all. CaseCount still
+// counts every case.
+func loadProblemWithPublicCases(ctx context.Context, tx *store.Tx, id uuid.UUID) (Problem, error) {
+	out, err := loadProblem(ctx, tx, id)
+	if err != nil {
+		return Problem{}, err
+	}
+	out.TestCases, err = loadPublicCases(ctx, tx, id)
+	if err != nil {
+		return Problem{}, err
+	}
+	return out, nil
+}
+
+// loadProblemWithCasesUpTo reads every case's metadata and the payloads of
+// those small enough to inline: both halves at or under maxBytes.
+func loadProblemWithCasesUpTo(ctx context.Context, tx *store.Tx, id uuid.UUID, maxBytes int) (Problem, error) {
+	out, err := loadProblem(ctx, tx, id)
+	if err != nil {
+		return Problem{}, err
+	}
+	small, err := tx.Q.ListTestCasesWithin(ctx, db.ListTestCasesWithinParams{ProblemID: id, MaxBytes: int32(maxBytes)})
+	if err != nil {
+		return Problem{}, err
+	}
+	byID := make(map[uuid.UUID]db.TestCase, len(small))
+	for _, c := range small {
+		byID[c.ID] = c
+	}
+	for i := range out.TestCases {
+		if c, ok := byID[out.TestCases[i].ID]; ok {
+			out.TestCases[i].Input, out.TestCases[i].Expected, out.TestCases[i].Payload = c.Input, c.ExpectedOutput, true
+		}
+	}
+	return out, nil
+}
+
+// loadPublicCases reads the payloads of a problem's public cases: the worked
+// examples a candidate is shown, small by construction.
+func loadPublicCases(ctx context.Context, tx *store.Tx, id uuid.UUID) ([]ProblemTestCase, error) {
+	cases, err := tx.Q.ListPublicTestCases(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return testCasesOf(cases), nil
+}
+
+// loadProblemHead reads the problem row and its reference solutions.
+func loadProblemHead(ctx context.Context, tx *store.Tx, id uuid.UUID) (Problem, error) {
 	row, err := tx.Q.GetProblem(ctx, id)
 	if err != nil {
 		return Problem{}, err
@@ -716,27 +914,39 @@ func loadProblem(ctx context.Context, tx *store.Tx, id uuid.UUID) (Problem, erro
 	for _, r := range refs {
 		out.References = append(out.References, ProblemReference{Language: r.Language, Source: r.Source})
 	}
-	cases, err := tx.Q.ListTestCases(ctx, id)
-	if err != nil {
-		return Problem{}, err
-	}
-	out.CaseCount = len(cases)
-	for _, c := range cases {
-		weight := 1.0
-		if f, err := c.Weight.Float64Value(); err == nil && f.Valid {
-			weight = f.Float64
-		}
-		out.TestCases = append(out.TestCases, ProblemTestCase{
-			ID: c.ID, Position: int(c.Position), Name: c.Name, Class: c.Class,
-			Input: c.Input, Expected: c.ExpectedOutput,
-			Visibility: c.Visibility, Weight: weight, Unordered: c.Unordered,
-		})
-	}
 	return out, nil
 }
 
+func testCasesOf(rows []db.TestCase) []ProblemTestCase {
+	out := make([]ProblemTestCase, 0, len(rows))
+	for _, c := range rows {
+		out = append(out, testCaseOf(c))
+	}
+	return out
+}
+
+// testCaseOf is a stored case with its payload.
+func testCaseOf(c db.TestCase) ProblemTestCase {
+	return ProblemTestCase{
+		ID: c.ID, Position: int(c.Position), Name: c.Name, Class: c.Class,
+		Input: c.Input, Expected: c.ExpectedOutput, Payload: true,
+		InputBytes: len(c.Input), ExpectedBytes: len(c.ExpectedOutput),
+		Visibility: c.Visibility, Weight: weightOf(c.Weight), Unordered: c.Unordered,
+	}
+}
+
+// weightOf reads a stored weight; one that does not scan is the default.
+func weightOf(n pgtype.Numeric) float64 {
+	if f, err := n.Float64Value(); err == nil && f.Valid {
+		return f.Float64
+	}
+	return 1
+}
+
 // AsImport turns a stored problem back into the import shape, which is what
-// the edit form posts and the import document carries.
+// the edit form posts and the import document carries. The problem must
+// have been loaded with its payloads (GetWithCases): a case read as
+// metadata alone comes out with an empty input and expected output.
 func (p Problem) AsImport() domain.ImportProblem {
 	out := domain.ImportProblem{
 		Kind: p.Kind, Title: p.Title, Statement: p.Statement, Difficulty: p.Difficulty,

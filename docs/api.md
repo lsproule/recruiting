@@ -239,6 +239,21 @@ and, for the talent network, `GET /talent-requests`,
 `GET /talent-profiles`. The served document groups them by tag; each
 operation names the role it needs in its description where one is needed.
 
+### The problem bank
+
+`POST /problems`, `PUT /problems/{id}` and `POST /problems/import` take a
+problem in the import format (`seed/problems/README.md`): every test case
+with its `input` and `expected`, or `args` and `returns` on a function
+problem. A read answers differently. `GET /problems/{id}`, and the record a
+create, update or clone returns, list `test_cases` as metadata only — `id`,
+`position`, `name`, `class`, `visibility`, `weight`, `unordered`, and the
+payload's size as `input_bytes` and `expected_bytes` — because a
+performance case can carry a hundred thousand values, and a bank problem's
+cases together run to megabytes that a listing has no use for. One case is
+read whole from `GET /problems/{id}/cases/{case_id}`, which adds `input` and
+`expected` to the same fields. `stubs` on a function problem is derived from
+its `signature` and is on every read.
+
 ## Versioning
 
 The document's `info.version` is the API's. Additions (new fields, new

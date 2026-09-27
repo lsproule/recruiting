@@ -19,7 +19,8 @@ type ProblemReference struct {
 	Source   string `json:"source" minLength:"1"`
 }
 
-// ProblemTestCase is one case a submission is scored against.
+// ProblemTestCase is one case a submission is scored against, as a problem
+// create, update, or import writes it.
 type ProblemTestCase struct {
 	ID         uuid.UUID `json:"id,omitempty"`
 	Position   int       `json:"position,omitempty"`
@@ -34,7 +35,30 @@ type ProblemTestCase struct {
 	Unordered  bool      `json:"unordered,omitempty" doc:"Compare SQL rows as a multiset"`
 }
 
-// Problem is one bank problem with everything an author edits.
+// ProblemCase is one test case as a problem read returns it: everything
+// but the payload, whose sizes stand in for it. A perf case's input runs to
+// megabytes, so the payload is read from its own resource, get-problem-case.
+type ProblemCase struct {
+	ID            uuid.UUID `json:"id"`
+	Position      int       `json:"position"`
+	Name          string    `json:"name,omitempty"`
+	Class         string    `json:"class,omitempty" enum:"sample,edge,perf,core"`
+	Visibility    string    `json:"visibility" enum:"public,hidden"`
+	Weight        float64   `json:"weight,omitempty"`
+	Unordered     bool      `json:"unordered,omitempty" doc:"Compare SQL rows as a multiset"`
+	InputBytes    int       `json:"input_bytes" doc:"The size of the case's input, which get-problem-case returns"`
+	ExpectedBytes int       `json:"expected_bytes" doc:"The size of the case's expected output, which get-problem-case returns"`
+}
+
+// ProblemCasePayload is one test case with its payload.
+type ProblemCasePayload struct {
+	ProblemCase
+	Input    string `json:"input" doc:"stdin for a code problem, extra SQL for a sql problem, or the canonical JSON argument array of a function problem"`
+	Expected string `json:"expected" doc:"The expected stdout, rows, or the canonical JSON return value"`
+}
+
+// Problem is one bank problem with everything an author edits. Its test
+// cases are listed without their payloads; see ProblemCase.
 type Problem struct {
 	ID               uuid.UUID          `json:"id"`
 	Kind             string             `json:"kind"`
@@ -54,7 +78,7 @@ type Problem struct {
 	Quality          int                `json:"quality" doc:"The quality review score out of 100; below 60 the problem cannot be attached to an assessment"`
 	ProvenLanguages  []string           `json:"proven_languages"`
 	References       []ProblemReference `json:"reference_solutions"`
-	TestCases        []ProblemTestCase  `json:"test_cases"`
+	TestCases        []ProblemCase      `json:"test_cases" doc:"The cases without their payloads; get-problem-case reads one whole"`
 	Platform         bool               `json:"platform" doc:"A platform seed problem, which is read-only"`
 	CreatedAt        time.Time          `json:"created_at"`
 	UpdatedAt        time.Time          `json:"updated_at"`
@@ -134,15 +158,20 @@ func problemView(p service.Problem) Problem {
 	for _, r := range p.References {
 		out.References = append(out.References, ProblemReference{Language: r.Language, Source: r.Source})
 	}
-	out.TestCases = make([]ProblemTestCase, 0, len(p.TestCases))
+	out.TestCases = make([]ProblemCase, 0, len(p.TestCases))
 	for _, c := range p.TestCases {
-		out.TestCases = append(out.TestCases, ProblemTestCase{
-			ID: c.ID, Position: c.Position, Name: c.Name, Class: c.Class,
-			Input: c.Input, Expected: c.Expected,
-			Visibility: c.Visibility, Weight: c.Weight, Unordered: c.Unordered,
-		})
+		out.TestCases = append(out.TestCases, caseView(c))
 	}
 	return out
+}
+
+// caseView is a case without its payload, whatever the service loaded.
+func caseView(c service.ProblemTestCase) ProblemCase {
+	return ProblemCase{
+		ID: c.ID, Position: c.Position, Name: c.Name, Class: c.Class,
+		Visibility: c.Visibility, Weight: c.Weight, Unordered: c.Unordered,
+		InputBytes: c.InputBytes, ExpectedBytes: c.ExpectedBytes,
+	}
 }
 
 func problemViews(in []service.Problem) []Problem {
@@ -174,6 +203,12 @@ func (m *mounter) mountProblems() {
 		OperationID: "get-problem", Method: http.MethodGet, Path: "/problems/{problem_id}",
 		Summary: "One problem", Tags: []string{"problems"},
 	}, h.get)
+	register(m, accessOrg, huma.Operation{
+		OperationID: "get-problem-case", Method: http.MethodGet, Path: "/problems/{problem_id}/cases/{case_id}",
+		Summary: "One test case with its payload", Tags: []string{"problems"},
+		Description: "A problem read lists its cases with the size of each payload rather than the payload itself, " +
+			"because a performance case can carry megabytes. This reads one case whole.",
+	}, h.getCase)
 	register(m, accessOrg, huma.Operation{
 		OperationID: "update-problem", Method: http.MethodPut, Path: "/problems/{problem_id}",
 		Summary: "Edit a problem", Tags: []string{"problems"},
@@ -276,6 +311,21 @@ type problemOutput struct{ Body Problem }
 
 type problemInput struct {
 	ProblemID uuid.UUID `path:"problem_id"`
+}
+
+type problemCaseInput struct {
+	ProblemID uuid.UUID `path:"problem_id"`
+	CaseID    uuid.UUID `path:"case_id"`
+}
+
+type problemCaseOutput struct{ Body ProblemCasePayload }
+
+func (h problemsHandlers) getCase(ctx context.Context, in *problemCaseInput) (*problemCaseOutput, error) {
+	c, err := h.d.Problems.Case(ctx, principal(ctx), in.ProblemID, in.CaseID)
+	if err != nil {
+		return nil, problemDetail(err)
+	}
+	return &problemCaseOutput{Body: ProblemCasePayload{ProblemCase: caseView(c), Input: c.Input, Expected: c.Expected}}, nil
 }
 
 type createProblemInput struct{ Body ProblemInput }

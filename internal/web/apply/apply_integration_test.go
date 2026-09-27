@@ -55,6 +55,7 @@ func (b *memBlob) SignedGetURL(_ context.Context, key, filename string, _ time.D
 type fixture struct {
 	srv        *httptest.Server
 	candidates *service.CandidateService
+	blob       *memBlob
 	orgID      uuid.UUID
 	orgSlug    string
 	openSlug   string
@@ -135,7 +136,8 @@ func newFixture(t *testing.T) *fixture {
 	}
 	seedJob(rivalOrgID, rivalCompanyID, f.rivalTitle, f.openSlug, "open")
 
-	resumes := service.NewResumeService(st, &memBlob{objects: map[string][]byte{}})
+	f.blob = &memBlob{objects: map[string][]byte{}}
+	resumes := service.NewResumeService(st, f.blob)
 	f.candidates = service.NewCandidateService(st, resumes, nil)
 	mux := chi.NewMux()
 	// The body cap goes on before CSRF, which is where an unbounded upload

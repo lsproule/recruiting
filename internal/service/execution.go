@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 
 	"recruiting/internal/queue"
+	"recruiting/internal/runner/client"
 	"recruiting/internal/runner/server"
 	"recruiting/internal/store"
 	"recruiting/internal/store/db"
@@ -48,6 +50,10 @@ func RunnerExecuteHandler(st *store.Store, exec Executor, logger *slog.Logger) q
 	}
 }
 
+// saturatedRetryAfter is the snooze when a saturated runner named no
+// interval of its own.
+const saturatedRetryAfter = 5 * time.Second
+
 // Execute runs the submission the payload names. attempt is the queue's
 // delivery count: while the queue will still retry, a runner that cannot be
 // reached or that returns no verdict is reported as an error so the job comes
@@ -72,6 +78,20 @@ func (s *ExecutionService) Execute(ctx context.Context, p RunnerExecutePayload, 
 		runErr = fmt.Errorf("runner reported %q: %s", res.Status, tailLine(res.CompileOutput))
 	}
 	if runErr != nil {
+		if errors.Is(runErr, client.ErrSaturated) {
+			// The runner is busy, not broken: the job goes back for the
+			// interval the runner asked for and the try costs no attempt.
+			var se *client.SaturatedError
+			retryAfter := saturatedRetryAfter
+			if errors.As(runErr, &se) && se.RetryAfter > 0 {
+				retryAfter = se.RetryAfter
+			}
+			if s.Logger != nil {
+				s.Logger.Info("runner saturated; snoozing the submission",
+					"submission_id", p.SubmissionID, "retry_after", retryAfter)
+			}
+			return queue.Snooze(retryAfter)
+		}
 		if attempt < queue.MaxAttempts {
 			return fmt.Errorf("runner.execute: submission %s: %w", p.SubmissionID, runErr)
 		}
@@ -106,7 +126,14 @@ func (s *ExecutionService) claim(ctx context.Context, p RunnerExecutePayload) (s
 		if sub.Status == SubmissionDone || sub.Status == SubmissionError {
 			return nil
 		}
-		problem, err := loadProblem(ctx, tx, sub.ProblemID)
+		// The runner needs the payloads: every case for a submit, the
+		// public ones for a run. This is the one path a submission's
+		// cases are loaded whole on.
+		load := loadProblemWithCases
+		if sub.Kind == SubmissionRun {
+			load = loadProblemWithPublicCases
+		}
+		problem, err := load(ctx, tx, sub.ProblemID)
 		if err != nil {
 			return err
 		}

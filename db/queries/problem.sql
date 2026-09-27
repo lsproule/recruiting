@@ -48,7 +48,33 @@ insert into test_case (org_id, problem_id, position, input, expected_output, vis
 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning *;
 
 -- name: ListTestCases :many
+-- Every case with its payload. A perf case's input runs to megabytes, so
+-- only a path that hands the cases to the runner reads this; everything
+-- else reads ListTestCaseMeta.
 select * from test_case where problem_id = $1 order by position;
+
+-- name: ListTestCaseMeta :many
+-- Everything about a problem's cases but the payloads: the byte size of
+-- each stands in for it, which is all a poll, a review, or a score needs.
+select id, position, name, class, visibility, weight, unordered,
+    octet_length(input)::int as input_bytes, octet_length(expected_output)::int as expected_bytes
+from test_case where problem_id = $1 order by position;
+
+-- name: ListPublicTestCases :many
+-- The cases a candidate may see, payloads included: the worked examples,
+-- which are small by construction.
+select * from test_case where problem_id = $1 and visibility = 'public' order by position;
+
+-- name: ListTestCasesWithin :many
+-- The cases whose payloads both fit in max_bytes, which is what a form can
+-- inline; the larger ones are edited by reference.
+select * from test_case where problem_id = $1
+  and octet_length(input) <= sqlc.arg(max_bytes)::int
+  and octet_length(expected_output) <= sqlc.arg(max_bytes)::int
+order by position;
+
+-- name: GetTestCase :one
+select * from test_case where problem_id = $1 and id = $2;
 
 -- name: DeleteTestCases :exec
 delete from test_case where problem_id = $1;

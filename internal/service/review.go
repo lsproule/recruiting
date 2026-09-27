@@ -142,13 +142,16 @@ type AttemptReview struct {
 	RiskScore       *float64
 	ErrorCount      int
 	RecordingStatus string
-	StartedAt       time.Time
-	FinishedAt      time.Time
-	Problems        []ReviewProblem
-	ProblemScores   []ProblemScore
-	Signals         []AttemptSignal
-	Submissions     []ReviewSubmission
-	Review          *Review
+	// RecordingTruncated is set when the sitting produced more events than
+	// one attempt may keep, so the replay stops before the candidate did.
+	RecordingTruncated bool
+	StartedAt          time.Time
+	FinishedAt         time.Time
+	Problems           []ReviewProblem
+	ProblemScores      []ProblemScore
+	Signals            []AttemptSignal
+	Submissions        []ReviewSubmission
+	Review             *Review
 	// CanReview is whether the caller may file the verdict. A recruiter or
 	// an admin reads the screen; only the assigned vetter judges it.
 	CanReview bool
@@ -243,7 +246,7 @@ func (s *ReviewService) Attempt(ctx context.Context, p Principal, attemptID uuid
 			AttemptID: att.ID, ApplicationID: att.ApplicationID.UUID, StageID: att.StageID.UUID,
 			CandidateName: card.CandidateName, JobTitle: card.JobTitle, StageName: stage.Name,
 			Status: att.Status, Score: numericPtr(att.Score), RiskScore: numericPtr(att.RiskScore),
-			ErrorCount: int(att.ErrorCount), RecordingStatus: att.RecordingStatus,
+			ErrorCount: int(att.ErrorCount), RecordingStatus: att.RecordingStatus, RecordingTruncated: att.RecordingTruncated,
 			StartedAt: att.StartedAt.Time.UTC(), FinishedAt: att.FinishedAt.Time.UTC(),
 			CanReview: canReview,
 		}

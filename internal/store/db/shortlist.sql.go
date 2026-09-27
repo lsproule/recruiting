@@ -110,7 +110,7 @@ func (q *Queries) GetLatestSentShortlistPacketForJob(ctx context.Context, jobID 
 }
 
 const getScoredAttemptForApplication = `-- name: GetScoredAttemptForApplication :one
-select t.id, t.org_id, t.application_id, t.assessment_id, t.stage_id, t.status, t.invited_at, t.invite_expires_at, t.started_at, t.expires_at, t.finished_at, t.score, t.risk_score, t.recording_status, t.recording_blob_key, t.created_at, t.updated_at, t.last_event_seq, t.problem_scores, t.error_count, t.preview, t.preview_user_id, t.consent_at, t.identity_blob_key from attempt t
+select t.id, t.org_id, t.application_id, t.assessment_id, t.stage_id, t.status, t.invited_at, t.invite_expires_at, t.started_at, t.expires_at, t.finished_at, t.score, t.risk_score, t.recording_status, t.recording_blob_key, t.created_at, t.updated_at, t.last_event_seq, t.problem_scores, t.error_count, t.preview, t.preview_user_id, t.consent_at, t.identity_blob_key, t.recording_events, t.recording_bytes, t.recording_truncated from attempt t
 where t.application_id = $1::uuid and not t.preview and t.score is not null
 order by t.score desc, t.finished_at desc
 limit 1
@@ -146,6 +146,9 @@ func (q *Queries) GetScoredAttemptForApplication(ctx context.Context, applicatio
 		&i.PreviewUserID,
 		&i.ConsentAt,
 		&i.IdentityBlobKey,
+		&i.RecordingEvents,
+		&i.RecordingBytes,
+		&i.RecordingTruncated,
 	)
 	return i, err
 }

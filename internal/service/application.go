@@ -119,6 +119,15 @@ type ApplicationService struct {
 	// Prereqs is consulted before an application leaves an interview or
 	// assessment stage.
 	Prereqs PrereqLoader
+	// OnMove, when set, is told the org of every application that moved,
+	// so caches keyed on the pipeline (the work queue's badge) can drop.
+	OnMove func(orgID uuid.UUID)
+}
+
+func (s *ApplicationService) moved(orgID uuid.UUID) {
+	if s.OnMove != nil {
+		s.OnMove(orgID)
+	}
 }
 
 // NewApplicationService wires the store, the queue the side effects go to,
@@ -193,6 +202,7 @@ func (s *ApplicationService) Move(ctx context.Context, p Principal, req MoveRequ
 	if err != nil {
 		return Application{}, wrapMove("move application", err)
 	}
+	s.moved(p.OrgID)
 	return out, nil
 }
 
@@ -351,7 +361,13 @@ func (s *ApplicationService) AutoDecide(ctx context.Context, tx *store.Tx, orgID
 	_, err = s.moveTx(ctx, tx, orgScoped(orgID), MoveRequest{
 		ApplicationID: applicationID, ToStageID: to.ID, Reason: reason, OverridePrereq: true,
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	// The move commits with the caller's transaction a moment from now; a
+	// badge recomputed in between is refreshed by its own short life.
+	s.moved(orgID)
+	return nil
 }
 
 // scoreText writes a score the way the review screen does.

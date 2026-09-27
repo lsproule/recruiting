@@ -198,8 +198,15 @@ templ detailPage(page layout.Page, p service.Problem) {
 						<td class="num">{ itoa(c.Position) }</td>
 						<td>{ c.Name }</td>
 						<td class="muted">{ c.Class }</td>
-						<td><pre class="cell">{ c.Input }</pre></td>
-						<td><pre class="cell">{ c.Expected }</pre></td>
+						if c.Payload {
+							<td><pre class="cell">{ c.Input }</pre></td>
+							<td><pre class="cell">{ c.Expected }</pre></td>
+						} else {
+							<td colspan="2" class="muted case-by-size">
+								{ caseSizeText(c.InputBytes, c.ExpectedBytes) } — too large to show here;
+								<a href={ templ.SafeURL(casePath(p.ID, c.ID.String())) }>read the case</a>
+							</td>
+						}
 						<td class="muted">{ c.Visibility }</td>
 						<td class="num">{ weightText(c.Weight) }</td>
 					</tr>
@@ -519,16 +526,29 @@ templ stepCasesPanel(f problemForm) {
 						</select>
 					</label>
 				</div>
-				<div class="grid-2">
-					<label>
-						{ f.caseInputLabel() }
-						<textarea name={ rowIndex("tc_input", i) } rows="3" placeholder={ f.caseInputPlaceholder() }>{ tc.Input }</textarea>
-					</label>
-					<label>
-						{ f.caseExpectedLabel() }
-						<textarea name={ rowIndex("tc_expected", i) } rows="3" placeholder={ f.caseExpectedPlaceholder() }>{ tc.Expected }</textarea>
-					</label>
-				</div>
+				if tc.kept() {
+					<input type="hidden" name={ rowIndex("tc_keep", i) } value={ tc.Keep }/>
+					<p class="muted case-by-size">
+						This case is too large to edit here
+						if tc.InputBytes > 0 || tc.ExpectedBytes > 0 {
+							{ " (" + caseSizeText(tc.InputBytes, tc.ExpectedBytes) + ")" }
+						}
+						; saving keeps it as stored.
+						<a href={ templ.SafeURL(casePath(f.ID, tc.Keep)) }>Read the case</a>, or replace it through
+						<a href={ templ.SafeURL(ImportPath) }>JSON import</a>.
+					</p>
+				} else {
+					<div class="grid-2">
+						<label>
+							{ f.caseInputLabel() }
+							<textarea name={ rowIndex("tc_input", i) } rows="3" placeholder={ f.caseInputPlaceholder() }>{ tc.Input }</textarea>
+						</label>
+						<label>
+							{ f.caseExpectedLabel() }
+							<textarea name={ rowIndex("tc_expected", i) } rows="3" placeholder={ f.caseExpectedPlaceholder() }>{ tc.Expected }</textarea>
+						</label>
+					</div>
+				}
 				if f.Kind == domain.ProblemKindSQL {
 					<label class="check">
 						if tc.Unordered {

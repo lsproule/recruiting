@@ -157,9 +157,18 @@ _bank/010-receipt-total/
 ```
 
 Solutions live as source files rather than JSON strings so they can be read,
-diffed, and run like code. `service.SeedProblems` attaches them by file name
+diffed, and run like code. `service.SeedProblem` attaches them by file name
 (`seed/problems/embed.go` is the map); any other file in a problem directory is
-an error, so a typo cannot quietly drop a language. Every function problem
+an error, so a typo cannot quietly drop a language.
+
+A `problem.json` is indented like any other JSON document except inside
+`test_cases`, where each case is written as one compact line: a performance
+case carries a hundred-thousand-element array, and pretty-printing one
+element per line made the bank several times larger than its data. Keep a
+rewritten or added case compact the same way (the top level stays readable;
+a case is `json.dumps(case, separators=(",", ":"))` on its own line). The
+platform seed load reads one directory at a time for the same reason, so
+the bank's size is never held in memory all at once. Every function problem
 ships a solution in all ten languages, C excepted where the signature returns a
 map, and the bank is proven end to end by
 `TestSeedReferencesSolveTheirCases` (the runner alone) and

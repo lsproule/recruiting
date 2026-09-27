@@ -138,6 +138,14 @@ func (s *SQLExecutor) runTest(ctx context.Context, dsn string, req *Request, t T
 	}
 	res.TimeMs = time.Since(start).Milliseconds()
 
+	return judgeRows(res, lines, t)
+}
+
+// judgeRows compares a query's rows with the expected ones. The hash covers
+// the whole result set, as the code harness hashes a program's whole output;
+// what travels back readable is the same bounded head, so a query that
+// returns a million rows is judged in full but never carried in full.
+func judgeRows(res TestResult, lines []string, t Test) TestResult {
 	got, want := lines, strings.Split(strings.TrimSpace(t.Expected), "\n")
 	if strings.TrimSpace(t.Expected) == "" {
 		want = nil
@@ -150,12 +158,25 @@ func (s *SQLExecutor) runTest(ctx context.Context, dsn string, req *Request, t T
 	stdout := strings.TrimSpace(strings.Join(lines, "\n"))
 	h := sha256.Sum256([]byte(stdout))
 	res.StdoutHash = hex.EncodeToString(h[:])
-	res.StdoutTail = stdout
+	res.StdoutTail = clipOutput(stdout, outputTailBytes)
 	res.Status = TestFail
 	if equalLines(got, want) {
 		res.Status = TestPass
 	}
 	return res
+}
+
+// outputTailBytes is the readable output one result carries, the same bound
+// the harness applies to a program's stdout.
+const outputTailBytes = 4096
+
+// clipOutput cuts s to at most n bytes and says so when it had to, exactly
+// as the harness does.
+func clipOutput(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "\n… truncated"
 }
 
 func classify(res TestResult, err error, start time.Time) TestResult {

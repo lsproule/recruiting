@@ -32,7 +32,31 @@ const (
 	// per-test wall limits the harness enforces itself.
 	compileBudget = 90 * time.Second
 	tmpfsSizeMB   = 256
+	// memoryHeadroomMB is added to the candidate's memory limit to size the
+	// container's cgroup. The cgroup is charged for everything in the
+	// sandbox — the harness (which decodes every test's input and holds a
+	// test's output cap in memory), the /tmp tmpfs a compiler writes into,
+	// and a managed runtime's own overhead — so a limit equal to the
+	// candidate's would kill a program that used what it was promised and
+	// blame the candidate. The harness sizes JVM and .NET heaps from the
+	// candidate's limit, not from the cgroup, so they never grow into this
+	// headroom (see runner/harness applyMemoryLimit).
+	memoryHeadroomMB = 128
+	// stdoutCap bounds what the harness may print. A full Response for
+	// MaxTests carries a 4 KiB stdout tail and a stderr tail of about
+	// 5 KiB per test plus compile output; JSON escaping can double that
+	// text in the worst realistic case, so 4 MiB leaves a wide margin
+	// while a harness that streams garbage is cut off long before it hurts.
+	stdoutCap = 4 << 20
+	// stderrTailCap is how much of docker's own stderr is kept for a
+	// diagnostic when the harness produced no result.
+	stderrTailCap = 4096
 )
+
+// containerMemoryMB is the cgroup limit for a candidate limit of memMB.
+func containerMemoryMB(memMB int) int {
+	return memMB + memoryHeadroomMB
+}
 
 func availableRuntimes(ctx context.Context) ([]string, error) {
 	out, err := exec.CommandContext(ctx, "docker", "info", "--format", "{{range $k,$v := .Runtimes}}{{$k}} {{end}}").Output()
@@ -74,8 +98,9 @@ func (d *DockerExecutor) runArgs(name, language string, l Limits) []string {
 		"--cap-drop=ALL",
 		"--security-opt=no-new-privileges",
 		fmt.Sprintf("--pids-limit=%d", l.PIDs),
-		fmt.Sprintf("--memory=%dm", l.MemMB),
-		fmt.Sprintf("--memory-swap=%dm", l.MemMB),
+		// --memory-swap equal to --memory means no swap: the limit is the limit.
+		fmt.Sprintf("--memory=%dm", containerMemoryMB(l.MemMB)),
+		fmt.Sprintf("--memory-swap=%dm", containerMemoryMB(l.MemMB)),
 		fmt.Sprintf("--cpus=%.2f", cpus),
 		"--user=" + sandboxUID,
 		"--env=HOME=/tmp",
@@ -100,9 +125,12 @@ func (d *DockerExecutor) Execute(ctx context.Context, req *Request) *Response {
 	name := containerName(req.ID)
 	cmd := exec.CommandContext(ctx, docker, d.runArgs(name, req.Language, limits)...)
 	cmd.Stdin = bytes.NewReader(spec)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	// Both streams are bounded: a harness or a docker CLI that floods them
+	// must not grow the runner's memory with it.
+	stdout := &boundedBuffer{limit: stdoutCap}
+	stderr := &boundedBuffer{limit: stderrTailCap, keepTail: true}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 	// Cancel kills only the CLI; the container must be removed explicitly.
 	cmd.Cancel = func() error {
 		_ = exec.Command(docker, "rm", "-f", name).Run()
@@ -114,15 +142,20 @@ func (d *DockerExecutor) Execute(ctx context.Context, req *Request) *Response {
 	if ctx.Err() != nil {
 		return &Response{ID: req.ID, Status: StatusTimeout, CompileOutput: "execution exceeded its wall-clock budget", Results: timedOut(req.Tests)}
 	}
+	if stdout.dropped {
+		// Past the cap the document is incomplete whatever it parses as.
+		// That is the harness misbehaving, never the candidate's fault.
+		if d.Logger != nil {
+			d.Logger.Error("harness output exceeded the cap", "id", req.ID, "cap", stdoutCap)
+		}
+		return &Response{ID: req.ID, Status: StatusError, CompileOutput: fmt.Sprintf("harness output exceeded %d bytes", stdoutCap), Results: errored(req.Tests, "runner error")}
+	}
 	var out Response
 	if jsonErr := json.Unmarshal(stdout.Bytes(), &out); jsonErr == nil && out.Status != "" {
 		out.ID = req.ID
 		return &out
 	}
 	tail := strings.TrimSpace(stderr.String())
-	if len(tail) > 4096 {
-		tail = tail[len(tail)-4096:]
-	}
 	if d.Logger != nil {
 		d.Logger.Error("harness produced no result", "id", req.ID, "err", runErr, "stderr", tail)
 	}
@@ -172,3 +205,42 @@ func errored(tests []Test, msg string) []TestResult {
 	}
 	return rs
 }
+
+// boundedBuffer keeps the first limit bytes (or the last, with keepTail)
+// and discards the rest, remembering that it did.
+type boundedBuffer struct {
+	limit    int
+	keepTail bool
+	buf      bytes.Buffer
+	dropped  bool
+}
+
+func (b *boundedBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	if b.keepTail {
+		if len(p) > b.limit {
+			p = p[len(p)-b.limit:]
+			b.dropped = true
+		}
+		b.buf.Write(p)
+		if b.buf.Len() > b.limit {
+			kept := b.buf.Bytes()
+			b.buf = *bytes.NewBuffer(append([]byte(nil), kept[len(kept)-b.limit:]...))
+			b.dropped = true
+		}
+		return n, nil
+	}
+	room := b.limit - b.buf.Len()
+	if len(p) > room {
+		b.dropped = true
+		if room <= 0 {
+			return n, nil
+		}
+		p = p[:room]
+	}
+	b.buf.Write(p)
+	return n, nil
+}
+
+func (b *boundedBuffer) Bytes() []byte  { return b.buf.Bytes() }
+func (b *boundedBuffer) String() string { return b.buf.String() }

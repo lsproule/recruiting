@@ -5,6 +5,7 @@ package problems
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -183,7 +184,9 @@ func (h *handlers) detail(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	problem, err := h.d.Problems.Get(r.Context(), p, id)
+	// The detail shows a case inline while it fits on a screen; a larger
+	// one is shown by size, with a link to read it whole.
+	problem, err := h.d.Problems.GetWithCasesUpTo(r.Context(), p, id, InlineCaseBytes)
 	if err != nil {
 		h.fail(w, r, err)
 		return
@@ -211,11 +214,17 @@ func (h *handlers) step(w http.ResponseWriter, r *http.Request) {
 		// not asked to save yet. Their edits stay on the page either way.
 		form.New, form.Proven = false, verified
 	} else {
-		saved, err := h.d.Problems.SaveDraft(r.Context(), p, form.ID, form.asImport())
+		in, err := h.withKeptCases(r, p, form)
+		if err == nil {
+			var saved service.Problem
+			saved, err = h.d.Problems.SaveDraft(r.Context(), p, form.ID, in)
+			if err == nil {
+				form.ID, form.New = saved.ID, false
+				form.Proven = saved.ProvenLanguages
+			}
+		}
 		switch {
 		case err == nil:
-			form.ID, form.New = saved.ID, false
-			form.Proven = saved.ProvenLanguages
 		case statusFor(err) == http.StatusInternalServerError:
 			h.fail(w, r, err)
 			return
@@ -247,7 +256,11 @@ func (h *handlers) verifiedProven(r *http.Request, p service.Principal, id uuid.
 func (h *handlers) verify(w http.ResponseWriter, r *http.Request) {
 	p, _ := middleware.PrincipalFrom(r.Context())
 	form := readForm(r)
-	verdicts, err := h.d.Problems.Verify(r.Context(), p, form.asImport())
+	var verdicts []service.ReferenceVerdict
+	in, err := h.withKeptCases(r, p, form)
+	if err == nil {
+		verdicts, err = h.d.Problems.Verify(r.Context(), p, in)
+	}
 	if err != nil {
 		if statusFor(err) == http.StatusInternalServerError {
 			h.fail(w, r, err)
@@ -284,7 +297,8 @@ func (h *handlers) tryIt(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	problem, err := h.d.Problems.Get(r.Context(), p, id)
+	// The island runs the public cases, so those are the payloads it needs.
+	problem, err := h.d.Problems.GetWithPublicCases(r.Context(), p, id)
 	if err != nil {
 		h.fail(w, r, err)
 		return
@@ -303,7 +317,9 @@ func (h *handlers) edit(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	problem, err := h.d.Problems.Get(r.Context(), p, id)
+	// A case the form can inline is loaded whole; a larger one comes as
+	// metadata, which formOf turns into a row kept by reference.
+	problem, err := h.d.Problems.GetWithCasesUpTo(r.Context(), p, id, InlineCaseBytes)
 	if err != nil {
 		h.fail(w, r, err)
 		return
@@ -320,7 +336,11 @@ func (h *handlers) create(w http.ResponseWriter, r *http.Request) {
 	form := readForm(r)
 	form.New = true
 	form.Step = lastStep
-	created, err := h.d.Problems.Create(r.Context(), p, form.asImport())
+	in, err := h.withKeptCases(r, p, form)
+	var created service.Problem
+	if err == nil {
+		created, err = h.d.Problems.Create(r.Context(), p, in)
+	}
 	if err != nil {
 		h.renderFormError(w, r, "New problem", form, err)
 		return
@@ -338,7 +358,11 @@ func (h *handlers) update(w http.ResponseWriter, r *http.Request) {
 	form.ID = id
 	form.New = false
 	form.Step = lastStep
-	if _, err := h.d.Problems.Update(r.Context(), p, id, form.asImport()); err != nil {
+	in, err := h.withKeptCases(r, p, form)
+	if err == nil {
+		_, err = h.d.Problems.Update(r.Context(), p, id, in)
+	}
+	if err != nil {
 		h.renderFormError(w, r, "Edit "+form.Title, form, err)
 		return
 	}
@@ -356,6 +380,36 @@ func (h *handlers) remove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, Prefix, http.StatusSeeOther)
+}
+
+// withKeptCases is the posted problem as an import, with every case the
+// page kept by reference filled in from the stored problem: the payload was
+// too large to put on the page, so the post names the case and the save
+// carries it forward unchanged. A kept case must belong to the problem being
+// edited; anything else is refused the way a bad field is.
+func (h *handlers) withKeptCases(r *http.Request, p service.Principal, form problemForm) (domain.ImportProblem, error) {
+	for i := range form.TestCases {
+		row := &form.TestCases[i]
+		if !row.kept() {
+			continue
+		}
+		caseID, err := uuid.Parse(row.Keep)
+		if err != nil || form.ID == uuid.Nil {
+			return domain.ImportProblem{}, domain.ProblemImportErrors{{Index: 0, Title: form.Title,
+				Errors: []string{fmt.Sprintf("test_cases[%d] refers to a stored case this problem does not have", i)}}}
+		}
+		stored, err := h.d.Problems.Case(r.Context(), p, form.ID, caseID)
+		if errors.Is(err, service.ErrNotFound) {
+			return domain.ImportProblem{}, domain.ProblemImportErrors{{Index: 0, Title: form.Title,
+				Errors: []string{fmt.Sprintf("test_cases[%d] refers to a stored case this problem does not have", i)}}}
+		}
+		if err != nil {
+			return domain.ImportProblem{}, err
+		}
+		row.Input, row.Expected = stored.Input, stored.Expected
+		row.InputBytes, row.ExpectedBytes = stored.InputBytes, stored.ExpectedBytes
+	}
+	return form.asImport(), nil
 }
 
 // renderFormError redraws the form with what the author typed and why it was

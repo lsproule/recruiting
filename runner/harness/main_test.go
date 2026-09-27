@@ -110,3 +110,85 @@ func TestStageRejectsAnUnknownLanguage(t *testing.T) {
 		t.Fatalf("err = %v, want unsupported language \"cobol\"", err)
 	}
 }
+
+// A toolchain's diagnostics can run to megabytes; only a bounded tail may
+// travel back as the compile output, or one submission's error text could
+// exhaust the harness and the runner that reads it.
+func TestCompileOutputIsCappedToATail(t *testing.T) {
+	work := t.TempDir()
+	// Print ~1 MiB of numbered lines, then fail, the way a compiler that
+	// cannot stop complaining does.
+	script := `i=0; while [ $i -lt 40000 ]; do echo "error line $i: something is wrong"; i=$((i+1)); done; echo LAST; exit 1`
+	_, out, err := compileWith([]string{"sh", "-c", script}, []string{"noop"}, work)
+	if err == nil {
+		t.Fatal("a failing compile must report an error")
+	}
+	if len(out) > outputTailBytes+64 {
+		t.Fatalf("compile output is %d bytes, want at most the %d-byte tail plus a note", len(out), outputTailBytes)
+	}
+	if !strings.HasSuffix(strings.TrimSpace(out), "LAST") {
+		t.Errorf("the tail must keep the last line, where the actual error is; got %q", out[len(out)-80:])
+	}
+	if !strings.HasPrefix(out, "[earlier output truncated]") {
+		t.Errorf("truncated output must say so; got prefix %q", out[:40])
+	}
+	if strings.Contains(out, "error line 0:") {
+		t.Error("the head of the output should have been dropped")
+	}
+}
+
+func TestCompileOutputShortIsKeptWhole(t *testing.T) {
+	_, out, err := compileWith([]string{"sh", "-c", "echo boom >&2; exit 2"}, []string{"noop"}, t.TempDir())
+	if err == nil || out != "boom\n" {
+		t.Fatalf("out = %q, err = %v; want the whole short output and an error", out, err)
+	}
+}
+
+func TestCappedWriterKeepsTailOrHead(t *testing.T) {
+	tail := &cappedWriter{limit: 4, keepTail: true}
+	for _, chunk := range []string{"ab", "cd", "ef"} {
+		_, _ = tail.Write([]byte(chunk))
+	}
+	if tail.String() != "cdef" || !tail.dropped {
+		t.Errorf("tail writer = %q dropped=%v, want cdef dropped", tail.String(), tail.dropped)
+	}
+	big := &cappedWriter{limit: 4, keepTail: true}
+	_, _ = big.Write([]byte(strings.Repeat("x", 100) + "yz"))
+	if big.String() != "xxyz" || !big.dropped {
+		t.Errorf("one huge write = %q, want its last 4 bytes", big.String())
+	}
+	head := &cappedWriter{limit: 4}
+	_, _ = head.Write([]byte("abcdef"))
+	if head.String() != "abcd" || !head.dropped {
+		t.Errorf("head writer = %q dropped=%v, want abcd dropped", head.String(), head.dropped)
+	}
+	exact := &cappedWriter{limit: 4}
+	_, _ = exact.Write([]byte("abcd"))
+	if exact.dropped {
+		t.Error("a write that fits exactly drops nothing")
+	}
+}
+
+// A managed runtime must size its heap from the spec's limit, not from the
+// container's cgroup, which is deliberately larger (see the runner's docker
+// executor for the headroom the container carries).
+func TestApplyMemoryLimitSizesManagedHeaps(t *testing.T) {
+	argv, env := applyMemoryLimit([]string{"java", "-Xss8m", "-cp", "/tmp/w", "Main"}, 256)
+	if !slices.Equal(argv, []string{"java", "-Xmx192m", "-Xss8m", "-cp", "/tmp/w", "Main"}) || env != nil {
+		t.Errorf("java: argv = %v env = %v", argv, env)
+	}
+	argv, env = applyMemoryLimit([]string{"dotnet", "/tmp/w/out/candidate.dll"}, 256)
+	if !slices.Equal(argv, []string{"dotnet", "/tmp/w/out/candidate.dll"}) || !slices.Equal(env, []string{"DOTNET_GCHeapHardLimit=0xC000000"}) {
+		t.Errorf("dotnet: argv = %v env = %v", argv, env)
+	}
+	argv, env = applyMemoryLimit([]string{"/tmp/w/candidate"}, 256)
+	if !slices.Equal(argv, []string{"/tmp/w/candidate"}) || env != nil {
+		t.Errorf("native: argv = %v env = %v", argv, env)
+	}
+	if argv, _ := applyMemoryLimit([]string{"java", "Main"}, 8); argv[1] != "-Xmx16m" {
+		t.Errorf("tiny limit: argv = %v, want a 16m floor", argv)
+	}
+	if argv, env := applyMemoryLimit([]string{"java", "Main"}, 0); len(argv) != 2 || env != nil {
+		t.Errorf("no limit: argv = %v env = %v, want untouched", argv, env)
+	}
+}

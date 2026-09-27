@@ -199,6 +199,9 @@ func appHandler(ctx context.Context, logger *slog.Logger, cfg *config.Config, st
 	clientAccounts := service.NewClientService(st, applications)
 	workQueue := service.NewWorkQueueService(st)
 	workQueue.Apps, workQueue.Releases = applications, releases
+	// A move made anywhere (board, portal, automation) drops the cached
+	// sidebar badge, so the queue count never trails the pipeline.
+	applications.OnMove = workQueue.Invalidate
 	processService := service.NewProcessService(st)
 	sprintService := service.NewSprintService(st, q, cfg.BaseURL)
 	interviewService := service.NewInterviewService(st)
@@ -206,8 +209,10 @@ func appHandler(ctx context.Context, logger *slog.Logger, cfg *config.Config, st
 	talentService := service.NewTalentService(st, resumes, links, q, cfg.BaseURL)
 	roomDeps := room.Deps{Rooms: roomService, Org: org, ICEServers: cfg.RTCICEServers, Logger: logger}
 
-	// The sidebar's badges are computed once per request, and only when a
-	// page actually draws the sidebar.
+	// The sidebar's badges are read at most once per request, only when a
+	// page actually draws the sidebar, and served from the queue service's
+	// per-user cache (service.NavCountsTTL) between the writes that refresh
+	// it; the queue screen supplies its own from the list it draws.
 	app.Use(layout.WithCounts(workQueue.NavCounts, logger))
 
 	admin.Mount(app, admin.Deps{Org: org, BaseURL: cfg.BaseURL, SendInvite: sendPasswordReset(st, q, cfg.BaseURL)})

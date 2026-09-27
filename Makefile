@@ -1,5 +1,7 @@
 SHELL := /bin/bash
-.DEFAULT_GOAL := check
+# A bare `make` builds. `make check` is the full gate — formatting, vet, lint
+# and build — and lint alone builds golangci-lint from source the first time.
+.DEFAULT_GOAL := build
 
 GO ?= go
 GOFMT := $(shell $(GO) env GOROOT)/bin/gofmt
@@ -77,7 +79,7 @@ generate:
 	else echo "no sqlc queries yet; skipping sqlc"; fi
 	$(GO) generate ./...
 
-## build: build the binary into bin/
+## build: build the binary into bin/ (the default)
 build:
 	$(GO) build -o bin/recruiting ./cmd/recruiting
 

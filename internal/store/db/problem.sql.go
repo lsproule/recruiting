@@ -354,6 +354,34 @@ func (q *Queries) GetProblemByTitle(ctx context.Context, arg GetProblemByTitlePa
 	return i, err
 }
 
+const getTestCase = `-- name: GetTestCase :one
+select id, org_id, problem_id, position, input, expected_output, visibility, weight, unordered, name, class from test_case where problem_id = $1 and id = $2
+`
+
+type GetTestCaseParams struct {
+	ProblemID uuid.UUID
+	ID        uuid.UUID
+}
+
+func (q *Queries) GetTestCase(ctx context.Context, arg GetTestCaseParams) (TestCase, error) {
+	row := q.db.QueryRow(ctx, getTestCase, arg.ProblemID, arg.ID)
+	var i TestCase
+	err := row.Scan(
+		&i.ID,
+		&i.OrgID,
+		&i.ProblemID,
+		&i.Position,
+		&i.Input,
+		&i.ExpectedOutput,
+		&i.Visibility,
+		&i.Weight,
+		&i.Unordered,
+		&i.Name,
+		&i.Class,
+	)
+	return i, err
+}
+
 const listProblemReferences = `-- name: ListProblemReferences :many
 select id, org_id, problem_id, language, source from problem_reference where problem_id = $1 order by language
 `
@@ -384,12 +412,149 @@ func (q *Queries) ListProblemReferences(ctx context.Context, problemID uuid.UUID
 	return items, nil
 }
 
+const listPublicTestCases = `-- name: ListPublicTestCases :many
+select id, org_id, problem_id, position, input, expected_output, visibility, weight, unordered, name, class from test_case where problem_id = $1 and visibility = 'public' order by position
+`
+
+// The cases a candidate may see, payloads included: the worked examples,
+// which are small by construction.
+func (q *Queries) ListPublicTestCases(ctx context.Context, problemID uuid.UUID) ([]TestCase, error) {
+	rows, err := q.db.Query(ctx, listPublicTestCases, problemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []TestCase{}
+	for rows.Next() {
+		var i TestCase
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrgID,
+			&i.ProblemID,
+			&i.Position,
+			&i.Input,
+			&i.ExpectedOutput,
+			&i.Visibility,
+			&i.Weight,
+			&i.Unordered,
+			&i.Name,
+			&i.Class,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTestCaseMeta = `-- name: ListTestCaseMeta :many
+select id, position, name, class, visibility, weight, unordered,
+    octet_length(input)::int as input_bytes, octet_length(expected_output)::int as expected_bytes
+from test_case where problem_id = $1 order by position
+`
+
+type ListTestCaseMetaRow struct {
+	ID            uuid.UUID
+	Position      int32
+	Name          string
+	Class         string
+	Visibility    string
+	Weight        pgtype.Numeric
+	Unordered     bool
+	InputBytes    int32
+	ExpectedBytes int32
+}
+
+// Everything about a problem's cases but the payloads: the byte size of
+// each stands in for it, which is all a poll, a review, or a score needs.
+func (q *Queries) ListTestCaseMeta(ctx context.Context, problemID uuid.UUID) ([]ListTestCaseMetaRow, error) {
+	rows, err := q.db.Query(ctx, listTestCaseMeta, problemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListTestCaseMetaRow{}
+	for rows.Next() {
+		var i ListTestCaseMetaRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Position,
+			&i.Name,
+			&i.Class,
+			&i.Visibility,
+			&i.Weight,
+			&i.Unordered,
+			&i.InputBytes,
+			&i.ExpectedBytes,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTestCases = `-- name: ListTestCases :many
 select id, org_id, problem_id, position, input, expected_output, visibility, weight, unordered, name, class from test_case where problem_id = $1 order by position
 `
 
+// Every case with its payload. A perf case's input runs to megabytes, so
+// only a path that hands the cases to the runner reads this; everything
+// else reads ListTestCaseMeta.
 func (q *Queries) ListTestCases(ctx context.Context, problemID uuid.UUID) ([]TestCase, error) {
 	rows, err := q.db.Query(ctx, listTestCases, problemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []TestCase{}
+	for rows.Next() {
+		var i TestCase
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrgID,
+			&i.ProblemID,
+			&i.Position,
+			&i.Input,
+			&i.ExpectedOutput,
+			&i.Visibility,
+			&i.Weight,
+			&i.Unordered,
+			&i.Name,
+			&i.Class,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTestCasesWithin = `-- name: ListTestCasesWithin :many
+select id, org_id, problem_id, position, input, expected_output, visibility, weight, unordered, name, class from test_case where problem_id = $1
+  and octet_length(input) <= $2::int
+  and octet_length(expected_output) <= $2::int
+order by position
+`
+
+type ListTestCasesWithinParams struct {
+	ProblemID uuid.UUID
+	MaxBytes  int32
+}
+
+// The cases whose payloads both fit in max_bytes, which is what a form can
+// inline; the larger ones are edited by reference.
+func (q *Queries) ListTestCasesWithin(ctx context.Context, arg ListTestCasesWithinParams) ([]TestCase, error) {
+	rows, err := q.db.Query(ctx, listTestCasesWithin, arg.ProblemID, arg.MaxBytes)
 	if err != nil {
 		return nil, err
 	}

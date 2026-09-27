@@ -6,8 +6,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"recruiting/internal/domain"
@@ -219,4 +225,152 @@ func TestExtractTextStopsALongDOCXWhenCancelled(t *testing.T) {
 	if _, err := domain.ExtractText(ctx, domain.ResumeDOCX, long); !errors.Is(err, context.Canceled) {
 		t.Errorf("cancelled extraction returned %v, want context.Canceled", err)
 	}
+}
+
+// TestSniffResumeAtReadsOnlyTheHeadOfAFileThatIsNeitherType proves a file
+// that is not a PDF or a zip is refused after one small read, so an upload
+// of the wrong kind is never pulled into memory to be told so.
+func TestSniffResumeAtReadsOnlyTheHeadOfAFileThatIsNeitherType(t *testing.T) {
+	junk := &countingReaderAt{r: bytes.NewReader(bytes.Repeat([]byte("MZ"), 1<<20))}
+	if got, err := domain.SniffResumeAt(junk, 2<<20); !errors.Is(err, domain.ErrResumeType) {
+		t.Fatalf("junk sniffed as %q, %v; want ErrResumeType", got, err)
+	}
+	if junk.reads.Load() != 1 || junk.bytes.Load() > 512 {
+		t.Errorf("sniffing junk took %d reads of %d bytes; want one read of at most 512", junk.reads.Load(), junk.bytes.Load())
+	}
+	// A PDF is named from its head alone, too.
+	doc := &countingReaderAt{r: bytes.NewReader(pdf(t, "hello"))}
+	if got, err := domain.SniffResumeAt(doc, int64(len(pdf(t, "hello")))); err != nil || got != domain.ResumePDF {
+		t.Fatalf("pdf sniffed as %q, %v", got, err)
+	}
+	if doc.reads.Load() != 1 {
+		t.Errorf("sniffing a pdf took %d reads, want 1", doc.reads.Load())
+	}
+	// A Word file needs its part list, which is small and at the tail.
+	word := docx(t, "hello")
+	if got, err := domain.SniffResumeAt(bytes.NewReader(word), int64(len(word))); err != nil || got != domain.ResumeDOCX {
+		t.Fatalf("docx sniffed as %q, %v", got, err)
+	}
+	if _, err := domain.SniffResumeAt(bytes.NewReader(nil), 0); !errors.Is(err, domain.ErrResumeEmpty) {
+		t.Errorf("empty file returned %v, want ErrResumeEmpty", err)
+	}
+}
+
+// TestExtractTextAtReadsFromAFileOnDisk is the upload path: the part sits in
+// a temporary file and is parsed in place.
+func TestExtractTextAtReadsFromAFileOnDisk(t *testing.T) {
+	for name, data := range map[string][]byte{
+		domain.ResumeDOCX: docx(t, "Ada Lovelace", "Go and Postgres"),
+		domain.ResumePDF:  pdf(t, "Ada Lovelace analytical engines"),
+	} {
+		path := filepath.Join(t.TempDir(), "resume")
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := domain.ExtractTextAt(context.Background(), name, f, int64(len(data)))
+		f.Close()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if !strings.Contains(got, "Ada Lovelace") {
+			t.Errorf("%s: extracted %q, want it to contain the name", name, got)
+		}
+	}
+}
+
+// TestExtractTextBoundsConcurrentParses fills every extraction slot with a
+// parse that is stuck reading, then shows the next caller waits for a slot
+// only as long as its deadline and never touches its file, and that the
+// slots come back once the stuck parses fail.
+func TestExtractTextBoundsConcurrentParses(t *testing.T) {
+	release := make(chan struct{})
+	stuck := &blockingReaderAt{release: release}
+	var wg sync.WaitGroup
+	for range domain.MaxConcurrentExtractions {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = domain.ExtractTextAt(context.Background(), domain.ResumePDF, stuck, 4096)
+		}()
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for stuck.reads.Load() < domain.MaxConcurrentExtractions {
+		if time.Now().After(deadline) {
+			t.Fatalf("only %d of %d parses started", stuck.reads.Load(), domain.MaxConcurrentExtractions)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	waiting := &countingReaderAt{r: bytes.NewReader(pdf(t, "late"))}
+	started := time.Now()
+	_, err := domain.ExtractTextAt(ctx, domain.ResumePDF, waiting, int64(len(pdf(t, "late"))))
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a caller past the slots returned %v, want DeadlineExceeded", err)
+	}
+	if took := time.Since(started); took > 2*time.Second {
+		t.Errorf("a caller past the slots waited %v, want about its 200ms deadline", took)
+	}
+	if waiting.reads.Load() != 0 {
+		t.Errorf("a caller that got no slot still read its file %d times", waiting.reads.Load())
+	}
+
+	close(release)
+	wg.Wait()
+	// The slots are free again: a parse runs and finishes.
+	got, err := domain.ExtractText(context.Background(), domain.ResumeDOCX, docx(t, "after the burst"))
+	if err != nil || !strings.Contains(got, "after the burst") {
+		t.Fatalf("extraction after the burst = %q, %v", got, err)
+	}
+}
+
+// TestExtractTextAtAppliesItsOwnTimeout proves a parse is bounded even when
+// the caller's context has no deadline: the stuck read is abandoned at the
+// extraction timeout rather than held open for good.
+func TestExtractTextAtAppliesItsOwnTimeout(t *testing.T) {
+	if testing.Short() {
+		t.Skip("waits for the extraction timeout")
+	}
+	release := make(chan struct{})
+	stuck := &blockingReaderAt{release: release}
+	defer close(release)
+	started := time.Now()
+	_, err := domain.ExtractTextAt(context.Background(), domain.ResumePDF, stuck, 4096)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("stuck parse returned %v, want DeadlineExceeded", err)
+	}
+	if took := time.Since(started); took < domain.ExtractTimeout || took > domain.ExtractTimeout+2*time.Second {
+		t.Errorf("stuck parse was abandoned after %v, want about %v", took, domain.ExtractTimeout)
+	}
+}
+
+// countingReaderAt records how the parsers read a file.
+type countingReaderAt struct {
+	r     io.ReaderAt
+	reads atomic.Int64
+	bytes atomic.Int64
+}
+
+func (c *countingReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	c.reads.Add(1)
+	c.bytes.Add(int64(len(p)))
+	return c.r.ReadAt(p, off)
+}
+
+// blockingReaderAt holds every read until release is closed, then fails it:
+// a parse that is running for as long as the test wants.
+type blockingReaderAt struct {
+	release chan struct{}
+	reads   atomic.Int64
+}
+
+func (b *blockingReaderAt) ReadAt([]byte, int64) (int, error) {
+	b.reads.Add(1)
+	<-b.release
+	return 0, io.ErrUnexpectedEOF
 }

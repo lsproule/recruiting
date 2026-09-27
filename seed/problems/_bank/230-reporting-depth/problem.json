@@ -17,59 +17,11 @@
   "statement": "An org chart is stored in one table:\n\n```\nemployee(id, name, manager_id)\n```\n\nA null `manager_id` marks someone at the top of a chain. Everyone else reports\nto exactly one manager, and the chart holds no cycles, so following managers\nupward always ends at a null.\n\nWrite one query returning two columns: every employee's `name` and how many\nmanagers sit above them — `0` for someone at the top of a chain, `1` for their\ndirect reports, `2` for the level below that, and so on. Any row order is\naccepted.\n\n**Example**\n\nWith `Root` at the top, `Ada` and `Grace` reporting to `Root`, `Linus` reporting\nto `Ada`, and `Barbara` reporting to `Linus`, the query returns:\n\n```\nRoot\t0\nAda\t1\nGrace\t1\nLinus\t2\nBarbara\t3\n```\n\n**Constraints**\n\n- Return exactly two columns, name first\n- The chart may hold several people with a null `manager_id`\n- A chain may be up to 20 managers deep\n",
   "guidelines": "A recursive CTE anchored on the null managers. A candidate who self-joins a fixed number of times gives the right answer on the seed and the wrong one on a deeper chain, which the last case is for.",
   "test_cases": [
-    {
-      "name": "the seeded chart",
-      "class": "sample",
-      "input": "",
-      "expected": "Root\t0\nAda\t1\nGrace\t1\nLinus\t2\nBarbara\t3",
-      "visibility": "public",
-      "weight": 1,
-      "unordered": true
-    },
-    {
-      "name": "a second person at the top",
-      "class": "sample",
-      "input": "insert into employee (id, name, manager_id) values (6, 'Ken', null);",
-      "expected": "Root\t0\nKen\t0\nAda\t1\nGrace\t1\nLinus\t2\nBarbara\t3",
-      "visibility": "public",
-      "weight": 1,
-      "unordered": true
-    },
-    {
-      "name": "a leaf leaves the chart",
-      "class": "edge",
-      "input": "delete from employee where id = 5;",
-      "expected": "Root\t0\nAda\t1\nGrace\t1\nLinus\t2",
-      "visibility": "hidden",
-      "weight": 2,
-      "unordered": true
-    },
-    {
-      "name": "a whole branch is re-parented",
-      "class": "core",
-      "input": "update employee set manager_id = 5 where id = 3;",
-      "expected": "Root\t0\nAda\t1\nLinus\t2\nBarbara\t3\nGrace\t4",
-      "visibility": "hidden",
-      "weight": 3,
-      "unordered": true
-    },
-    {
-      "name": "one person, no manager",
-      "class": "edge",
-      "input": "delete from employee where id in (5, 4, 3, 2);",
-      "expected": "Root\t0",
-      "visibility": "hidden",
-      "weight": 2,
-      "unordered": true
-    },
-    {
-      "name": "a chain far deeper than the seed",
-      "class": "perf",
-      "input": "insert into employee (id, name, manager_id) values (7, 'Deep1', 5), (8, 'Deep2', 7), (9, 'Deep3', 8), (10, 'Deep4', 9);",
-      "expected": "Root\t0\nAda\t1\nGrace\t1\nLinus\t2\nBarbara\t3\nDeep1\t4\nDeep2\t5\nDeep3\t6\nDeep4\t7",
-      "visibility": "hidden",
-      "weight": 3,
-      "unordered": true
-    }
+    {"name":"the seeded chart","class":"sample","input":"","expected":"Root\t0\nAda\t1\nGrace\t1\nLinus\t2\nBarbara\t3","visibility":"public","weight":1,"unordered":true},
+    {"name":"a second person at the top","class":"sample","input":"insert into employee (id, name, manager_id) values (6, 'Ken', null);","expected":"Root\t0\nKen\t0\nAda\t1\nGrace\t1\nLinus\t2\nBarbara\t3","visibility":"public","weight":1,"unordered":true},
+    {"name":"a leaf leaves the chart","class":"edge","input":"delete from employee where id = 5;","expected":"Root\t0\nAda\t1\nGrace\t1\nLinus\t2","visibility":"hidden","weight":2,"unordered":true},
+    {"name":"a whole branch is re-parented","class":"core","input":"update employee set manager_id = 5 where id = 3;","expected":"Root\t0\nAda\t1\nLinus\t2\nBarbara\t3\nGrace\t4","visibility":"hidden","weight":3,"unordered":true},
+    {"name":"one person, no manager","class":"edge","input":"delete from employee where id in (5, 4, 3, 2);","expected":"Root\t0","visibility":"hidden","weight":2,"unordered":true},
+    {"name":"a chain far deeper than the seed","class":"perf","input":"insert into employee (id, name, manager_id) values (7, 'Deep1', 5), (8, 'Deep2', 7), (9, 'Deep3', 8), (10, 'Deep4', 9);","expected":"Root\t0\nAda\t1\nGrace\t1\nLinus\t2\nBarbara\t3\nDeep1\t4\nDeep2\t5\nDeep3\t6\nDeep4\t7","visibility":"hidden","weight":3,"unordered":true}
   ]
 }

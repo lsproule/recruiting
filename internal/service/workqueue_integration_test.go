@@ -4,6 +4,8 @@ package service_test
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -494,4 +496,113 @@ func TestQueueTalentIntroWaitsUntilSent(t *testing.T) {
 	}
 	f.exec(`update talent_intro set status = 'sent', sent_at = now() where id = $1`, f.waitingIntro)
 	none(t, f.subjects(t, p, service.QueueTalentIntro), "a sent introduction still sits in the queue")
+}
+
+func (f *queueFixture) navCounts(t *testing.T, p service.Principal) map[string]int {
+	t.Helper()
+	nav, err := f.queue.NavCounts(context.Background(), p)
+	if err != nil {
+		t.Fatalf("nav counts: %v", err)
+	}
+	return nav
+}
+
+// The badges are a scan of the queue, and every screen draws them, so they
+// are served from memory: a second read within the TTL runs no query, a
+// decision through the service refreshes them, and the TTL catches whatever
+// was written behind the service's back.
+func TestQueueNavCountsAreCachedUntilAWriteOrTheTTL(t *testing.T) {
+	f := newQueueFixture(t)
+	p := f.recruiter()
+	now := time.Now()
+	f.queue.Now = func() time.Time { return now }
+	want := len(service.QueueKinds)
+	if nav := f.navCounts(t, p); nav["queue"] != want || f.queue.NavLoads() != 1 {
+		t.Fatalf("first read: queue = %d (want %d), loads = %d (want 1)", nav["queue"], want, f.queue.NavLoads())
+	}
+	// A row written directly to the table is not seen: the second read is
+	// answered from memory without a query.
+	f.application(t, "Late Applicant", f.stages[domain.StageGeneric])
+	if nav := f.navCounts(t, p); nav["queue"] != want || f.queue.NavLoads() != 1 {
+		t.Fatalf("second read: queue = %d (want the cached %d), loads = %d (want 1)", nav["queue"], want, f.queue.NavLoads())
+	}
+	// A decision through the service drops the cache; the next read scans
+	// again and finds the row written meanwhile. The résumé advanced into
+	// the interview stage is a call to book, so the total grows by one.
+	if err := f.queue.Decide(context.Background(), p, service.DecideRequest{ApplicationID: f.appID, Action: service.QueueActionAdvance, ToStageID: f.stages[domain.StageInterview]}); err != nil {
+		t.Fatalf("advance from the queue: %v", err)
+	}
+	if nav := f.navCounts(t, p); nav["queue"] != want+1 || f.queue.NavLoads() != 2 {
+		t.Fatalf("after decide: queue = %d (want %d), loads = %d (want 2)", nav["queue"], want+1, f.queue.NavLoads())
+	}
+	// Within the TTL a write made elsewhere stays invisible; past it the
+	// badge catches up.
+	f.application(t, "Later Applicant", f.stages[domain.StageGeneric])
+	if nav := f.navCounts(t, p); nav["queue"] != want+1 || f.queue.NavLoads() != 2 {
+		t.Fatalf("within the TTL: queue = %d (want %d), loads = %d (want 2)", nav["queue"], want+1, f.queue.NavLoads())
+	}
+	now = now.Add(service.NavCountsTTL + time.Second)
+	if nav := f.navCounts(t, p); nav["queue"] != want+2 || f.queue.NavLoads() != 3 {
+		t.Fatalf("past the TTL: queue = %d (want %d), loads = %d (want 3)", nav["queue"], want+2, f.queue.NavLoads())
+	}
+	// A snooze refreshes the badges too, and only the snoozer's badge
+	// drops: the colleague's queue is their own read.
+	if err := f.queue.Snooze(context.Background(), p, service.QueueExamReview, f.scoredAttempt, now.Add(service.SnoozeWindow)); err != nil {
+		t.Fatalf("snooze: %v", err)
+	}
+	if nav := f.navCounts(t, p); nav["queue"] != want+1 || f.queue.NavLoads() != 4 {
+		t.Fatalf("after snooze: queue = %d (want %d), loads = %d (want 4)", nav["queue"], want+1, f.queue.NavLoads())
+	}
+	if nav := f.navCounts(t, f.mate()); nav["queue"] != want+2 || f.queue.NavLoads() != 5 {
+		t.Fatalf("colleague: queue = %d (want %d), loads = %d (want 5)", nav["queue"], want+2, f.queue.NavLoads())
+	}
+}
+
+// Many pages opened at once, each drawing the sidebar, share one scan.
+func TestQueueNavCountsShareOneScanAcrossConcurrentReads(t *testing.T) {
+	f := newQueueFixture(t)
+	p := f.recruiter()
+	f.queue.Invalidate(f.orgID)
+	var wg sync.WaitGroup
+	errs := make(chan error, 16)
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			nav, err := f.queue.NavCounts(context.Background(), p)
+			if err == nil && nav["queue"] != len(service.QueueKinds) {
+				err = fmt.Errorf("queue = %d, want %d", nav["queue"], len(service.QueueKinds))
+			}
+			if err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+	if got := f.queue.NavLoads(); got != 1 {
+		t.Fatalf("16 concurrent reads ran %d scans, want 1", got)
+	}
+}
+
+// NavCountsFrom is the queue screen's path: the rows it has already listed
+// count as the badge, only the other badges are read, and the cache takes
+// the result so the next screen is served from memory.
+func TestQueueNavCountsFromTheListPrimesTheCache(t *testing.T) {
+	f := newQueueFixture(t)
+	p := f.recruiter()
+	items := f.list(t, p, "")
+	nav, err := f.queue.NavCountsFrom(context.Background(), p, items[:3])
+	if err != nil {
+		t.Fatalf("nav counts from list: %v", err)
+	}
+	if nav["queue"] != 3 || nav["clients"] != 1 || nav["assessments"] != 1 {
+		t.Fatalf("nav counts = %v, want the three rows given and one client and assessment", nav)
+	}
+	if nav := f.navCounts(t, p); nav["queue"] != 3 || f.queue.NavLoads() != 1 {
+		t.Fatalf("after priming: queue = %d (want 3), loads = %d (want 1)", nav["queue"], f.queue.NavLoads())
+	}
 }

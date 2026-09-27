@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -36,7 +37,17 @@ type Config struct {
 	// posting as failed with a reason, so a worker without it still says
 	// what is missing.
 	JobPostCommand string
+	// WorkerRunnerConcurrency is how many runner.execute jobs one worker
+	// runs at once (WORKER_RUNNER_CONCURRENCY); the runner queues what it
+	// cannot run, so this only needs to cover the runner's capacity plus
+	// its queue, not the worker's whole pool. Defaults to
+	// DefaultWorkerRunnerConcurrency.
+	WorkerRunnerConcurrency int
 }
+
+// DefaultWorkerRunnerConcurrency is WorkerRunnerConcurrency when
+// WORKER_RUNNER_CONCURRENCY is unset.
+const DefaultWorkerRunnerConcurrency = 4
 
 // MissingError reports environment variables that are required but unset.
 type MissingError struct {
@@ -82,6 +93,14 @@ func Load() (*Config, error) {
 	// only swaps the user/password of the one it already has.
 	cfg.RTCICEServers = strings.TrimSpace(os.Getenv("RTC_ICE_SERVERS"))
 	cfg.JobPostCommand = strings.TrimSpace(os.Getenv("JOBPOST_CMD"))
+	cfg.WorkerRunnerConcurrency = DefaultWorkerRunnerConcurrency
+	if v := strings.TrimSpace(os.Getenv("WORKER_RUNNER_CONCURRENCY")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("config: WORKER_RUNNER_CONCURRENCY=%q: want a positive integer", v)
+		}
+		cfg.WorkerRunnerConcurrency = n
+	}
 	cfg.DatabaseURLApp = strings.TrimSpace(os.Getenv("DATABASE_URL_APP"))
 	if cfg.DatabaseURLApp == "" {
 		derived, err := deriveAppURL(cfg.DatabaseURL)

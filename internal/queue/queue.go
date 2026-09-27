@@ -73,9 +73,59 @@ const (
 // stop; longer than that and the job is left for another worker to pick up.
 const shutdownGrace = 30 * time.Second
 
-// queueName is the single queue every kind runs on. Splitting kinds across
-// queues is a throughput decision no deployment has needed yet.
-const queueName = river.QueueDefault
+// Queue names. Every kind runs on the default queue except runner.execute,
+// which has one of its own so that however many workers the generic queue
+// has, only RunnerWorkers of them can be on the runner at once: the runner
+// admits a bounded number of executions and queues the rest, and a worker
+// pool wider than that queue only produces 503s and snoozes.
+const (
+	queueName   = river.QueueDefault
+	QueueRunner = "runner"
+)
+
+// DefaultRunnerWorkers is how many runner.execute jobs a worker runs at once
+// when Config.RunnerWorkers is unset.
+const DefaultRunnerWorkers = 4
+
+// QueueOf is the river queue the kind runs on.
+func QueueOf(kind string) string {
+	if def, ok := defByKind[kind]; ok && def.queue != "" {
+		return def.queue
+	}
+	return queueName
+}
+
+// SnoozeError is the error a handler returns through Snooze: the job is put
+// back for Delay without the try counting as an attempt.
+type SnoozeError struct {
+	Delay time.Duration
+}
+
+func (e *SnoozeError) Error() string {
+	return fmt.Sprintf("queue: snoozed for %s", e.Delay)
+}
+
+// Snooze returns an error a Handler gives back when the job cannot be
+// worked yet through no fault of its own — a dependency that is busy rather
+// than broken. The worker reschedules the job d from now; unlike a failure
+// it consumes no attempt and applies no backoff, so a job may be snoozed as
+// often as the dependency asks. A negative d is treated as zero, which
+// makes the job available again at once.
+func Snooze(d time.Duration) error {
+	if d < 0 {
+		d = 0
+	}
+	return &SnoozeError{Delay: d}
+}
+
+// IsSnooze reports whether err is a Snooze, and for how long.
+func IsSnooze(err error) (time.Duration, bool) {
+	var se *SnoozeError
+	if errors.As(err, &se) {
+		return se.Delay, true
+	}
+	return 0, false
+}
 
 // Job is one unit of work as a handler sees it.
 type Job struct {
@@ -94,8 +144,12 @@ type Handler func(ctx context.Context, job Job) error
 type Config struct {
 	Logger   *slog.Logger
 	Handlers map[string]Handler
-	// Workers is how many jobs run at once; defaults to 10.
+	// Workers is how many jobs run at once on the default queue; defaults
+	// to 10.
 	Workers int
+	// RunnerWorkers is how many runner.execute jobs run at once, on their
+	// own queue; defaults to DefaultRunnerWorkers.
+	RunnerWorkers int
 	// Backoff is the first retry delay; defaults to DefaultBackoff. Tests set
 	// it low so a retry is observable.
 	Backoff time.Duration
@@ -173,6 +227,10 @@ func NewWorker(pool *pgxpool.Pool, cfg Config) (*Client, error) {
 	if workerCount <= 0 {
 		workerCount = 10
 	}
+	runnerWorkers := cfg.RunnerWorkers
+	if runnerWorkers <= 0 {
+		runnerWorkers = DefaultRunnerWorkers
+	}
 	backoff := cfg.Backoff
 	if backoff <= 0 {
 		backoff = DefaultBackoff
@@ -183,8 +241,11 @@ func NewWorker(pool *pgxpool.Pool, cfg Config) (*Client, error) {
 		RetryPolicy:                 &backoffPolicy{base: backoff},
 		CompletedJobRetentionPeriod: CompletedRetention,
 		DiscardedJobRetentionPeriod: DiscardedRetention,
-		Queues:                      map[string]river.QueueConfig{queueName: {MaxWorkers: workerCount}},
-		Workers:                     workers,
+		Queues: map[string]river.QueueConfig{
+			queueName:   {MaxWorkers: workerCount},
+			QueueRunner: {MaxWorkers: runnerWorkers},
+		},
+		Workers: workers,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("queue: worker client: %w", err)
@@ -240,7 +301,7 @@ func (c *Client) enqueue(ctx context.Context, tx pgx.Tx, kind string, payload an
 	if err != nil {
 		return 0, err
 	}
-	opts := &river.InsertOpts{Queue: queueName, MaxAttempts: MaxAttempts}
+	opts := &river.InsertOpts{Queue: QueueOf(kind), MaxAttempts: MaxAttempts}
 	if !runAt.IsZero() {
 		opts.ScheduledAt = runAt.UTC()
 	}

@@ -82,6 +82,16 @@ where id = $1 and status = 'started' returning *;
 -- name: SetAttemptLastEventSeq :exec
 update attempt set last_event_seq = $2, updated_at = now() where id = $1;
 
+-- name: RecordAttemptEventUsage :exec
+-- Advances the accepted seq and charges the batch against the attempt's
+-- recording ceiling.
+update attempt set last_event_seq = $2, recording_events = recording_events + $3,
+    recording_bytes = recording_bytes + $4, updated_at = now()
+where id = $1;
+
+-- name: MarkAttemptRecordingTruncated :exec
+update attempt set recording_truncated = true, updated_at = now() where id = $1;
+
 -- name: AppendAttemptEvent :exec
 insert into attempt_event (org_id, attempt_id, seq, kind, payload, client_ts, problem_id, server_ts)
 values ($1, $2, $3, $4, $5, $6, $7, $8);

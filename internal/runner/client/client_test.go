@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -73,11 +74,49 @@ func TestExecuteGivesUpOnAPermanentlySaturatedRunner(t *testing.T) {
 	defer srv.Close()
 
 	_, err := New(srv.URL, "s").Execute(context.Background(), server.Request{ID: "abc"})
-	if err == nil || !strings.Contains(err.Error(), "saturated") {
-		t.Fatalf("err = %v, want the saturation reported", err)
+	if !errors.Is(err, ErrSaturated) {
+		t.Fatalf("err = %v, want ErrSaturated", err)
+	}
+	var se *SaturatedError
+	if !errors.As(err, &se) || se.RetryAfter != time.Millisecond || se.Attempts != retryLimit {
+		t.Fatalf("err = %#v, want the last Retry-After and the attempt count", err)
 	}
 	if got := calls.Load(); got != retryLimit {
 		t.Errorf("runner called %d times, want the %d-attempt limit", got, retryLimit)
+	}
+}
+
+// A runner asking for a wait longer than what is left of the budget is not
+// waited for: the job is better off snoozed than holding a worker slot.
+func TestExecuteGivesUpAtOnceOnALongRetryAfter(t *testing.T) {
+	var calls atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Retry-After", "600")
+		http.Error(w, "runner saturated; retry later", http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	start := time.Now()
+	_, err := New(srv.URL, "s").Execute(context.Background(), server.Request{ID: "abc"})
+	var se *SaturatedError
+	if !errors.As(err, &se) || se.RetryAfter != 600*time.Second {
+		t.Fatalf("err = %v, want ErrSaturated carrying the 600s Retry-After", err)
+	}
+	if calls.Load() != 1 || time.Since(start) > 5*time.Second {
+		t.Errorf("runner called %d times over %s, want one call and no wait", calls.Load(), time.Since(start))
+	}
+}
+
+// The runner holds a request in its queue for up to server.MaxQueueWait
+// before answering; the client's timeout must leave room for that, or a
+// queued request would be abandoned just as its turn came.
+func TestClientTimeoutOutlastsTheRunnerQueueWait(t *testing.T) {
+	if timeout <= server.MaxQueueWait+30*time.Second {
+		t.Fatalf("client timeout %s must exceed the runner's %s queue wait by a margin", timeout, server.MaxQueueWait)
+	}
+	if retryBudget < server.DefaultQueueWait {
+		t.Fatalf("retry budget %s should absorb at least one queue wait of %s", retryBudget, server.DefaultQueueWait)
 	}
 }
 

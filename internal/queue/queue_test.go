@@ -3,6 +3,8 @@ package queue_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -110,5 +112,54 @@ func TestJobRetentionIsShort(t *testing.T) {
 	}
 	if queue.DiscardedRetention < queue.CompletedRetention {
 		t.Error("a discarded job should be inspectable for at least as long as a completed one")
+	}
+}
+
+// runner.execute has a queue of its own, so a worker pool sized for email
+// and reminders cannot pile onto the runner; everything else stays on the
+// default queue.
+func TestRunnerExecuteRunsOnItsOwnQueue(t *testing.T) {
+	if got := queue.QueueOf(queue.KindRunnerExecute); got != queue.QueueRunner {
+		t.Errorf("QueueOf(runner.execute) = %q, want %q", got, queue.QueueRunner)
+	}
+	for _, k := range queue.Kinds() {
+		if k == queue.KindRunnerExecute {
+			continue
+		}
+		if got := queue.QueueOf(k); got != "default" {
+			t.Errorf("QueueOf(%s) = %q, want the default queue", k, got)
+		}
+	}
+	if queue.QueueOf("nope.invented") != "default" {
+		t.Error("an unknown kind should read as the default queue rather than panic")
+	}
+	if queue.DefaultRunnerWorkers <= 0 {
+		t.Error("the runner queue needs at least one worker by default")
+	}
+}
+
+// A snoozed job is neither done nor failed: the error type carries the
+// delay, and any wrapping of it is still recognised.
+func TestSnoozeIsRecognisedThroughWrapping(t *testing.T) {
+	err := queue.Snooze(30 * time.Second)
+	if d, ok := queue.IsSnooze(err); !ok || d != 30*time.Second {
+		t.Fatalf("IsSnooze(Snooze(30s)) = %v %v", d, ok)
+	}
+	wrapped := fmt.Errorf("runner.execute: %w", err)
+	if d, ok := queue.IsSnooze(wrapped); !ok || d != 30*time.Second {
+		t.Fatalf("a wrapped snooze was not recognised: %v", wrapped)
+	}
+	var se *queue.SnoozeError
+	if !errors.As(wrapped, &se) || se.Delay != 30*time.Second {
+		t.Fatalf("errors.As did not reach the SnoozeError in %v", wrapped)
+	}
+	if d, ok := queue.IsSnooze(queue.Snooze(-time.Second)); !ok || d != 0 {
+		t.Errorf("a negative snooze should clamp to zero, got %v %v", d, ok)
+	}
+	if _, ok := queue.IsSnooze(errors.New("boom")); ok {
+		t.Error("an ordinary error is not a snooze")
+	}
+	if _, ok := queue.IsSnooze(nil); ok {
+		t.Error("nil is not a snooze")
 	}
 }

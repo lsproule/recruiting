@@ -32,13 +32,15 @@ func metricsAddr() string {
 	return defaultMetricsAddr
 }
 
-// serveMetrics runs a standalone /metrics listener until ctx is cancelled.
-// worker and runner have no HTTP server of their own to hang the endpoint
-// off, so each gets this one on its own port; serve mounts observe.Handler
-// directly on its existing mux instead.
-func serveMetrics(ctx context.Context, logger *slog.Logger, addr string) error {
+// serveMetrics runs a standalone /metrics listener until ctx is cancelled,
+// serving handler. worker and runner have no HTTP server of their own to
+// hang the endpoint off, so each gets this one on its own port; serve
+// mounts observe.Handler directly on its existing mux instead. worker
+// serves observe.Handler; runner serves its own registry (runner_*), the
+// series an orchestrator scales it on.
+func serveMetrics(ctx context.Context, logger *slog.Logger, addr string, handler http.Handler) error {
 	mux := http.NewServeMux()
-	mux.Handle("/metrics", observe.Handler())
+	mux.Handle("/metrics", handler)
 	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: metricsReadHeaderTimeout}
 
 	errc := make(chan error, 1)

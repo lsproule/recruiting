@@ -52,10 +52,30 @@ type Resume struct {
 	CreatedAt   time.Time
 }
 
-// ResumeUpload is a file as it arrived from a form.
+// ResumeUpload is a file as it arrived. A form upload arrives as File and
+// Size, read in place from wherever net/http parked the part, so its bytes
+// are never copied into memory; an upload the API already decoded arrives as
+// Data. File wins when both are set. The caller keeps File open until the
+// service call that takes the upload returns.
 type ResumeUpload struct {
 	Filename string
 	Data     []byte
+	File     io.ReaderAt
+	Size     int64
+}
+
+// content is the file as a random-access reader with its length.
+func (u ResumeUpload) content() (io.ReaderAt, int64) {
+	if u.File != nil {
+		return u.File, u.Size
+	}
+	return bytes.NewReader(u.Data), int64(len(u.Data))
+}
+
+// Empty reports whether no file came with the form.
+func (u ResumeUpload) Empty() bool {
+	_, size := u.content()
+	return size == 0
 }
 
 // ResumeService stores resumes and hands out download links.
@@ -95,20 +115,23 @@ func (s *ResumeService) prepare(ctx context.Context, orgID uuid.UUID, up ResumeU
 	if s.blob == nil {
 		return storedResume{}, ErrNoBlobStore
 	}
+	file, size := up.content()
 	out := storedResume{
 		key:         resumeKey(orgID, contentType),
 		filename:    cleanFilename(up.Filename, contentType),
 		contentType: contentType,
-		size:        int64(len(up.Data)),
+		size:        size,
 		status:      ResumeExtracted,
 	}
-	if err := s.blob.Put(ctx, out.key, bytes.NewReader(up.Data), out.size, contentType); err != nil {
+	// The object store streams the file from where it lies, and the extractor
+	// then reads the same file in place: neither takes a copy.
+	if err := s.blob.Put(ctx, out.key, io.NewSectionReader(file, 0, size), size, contentType); err != nil {
 		return storedResume{}, fmt.Errorf("store resume: %w", err)
 	}
 
 	extractCtx, cancel := context.WithTimeout(ctx, domain.ExtractTimeout)
 	defer cancel()
-	body, err := domain.ExtractText(extractCtx, contentType, up.Data)
+	body, err := domain.ExtractTextAt(extractCtx, contentType, file, size)
 	// The column is indexed into a tsvector, which has its own ceiling; the
 	// text is capped again here so no extractor can exceed it.
 	if body = domain.TruncateText(body); err != nil || strings.TrimSpace(body) == "" {
@@ -175,13 +198,14 @@ func (s *ResumeService) DownloadURL(ctx context.Context, p Principal, candidateI
 // ValidateResume decides what an upload is from its bytes alone; the
 // filename an uploader chose proves nothing.
 func ValidateResume(up ResumeUpload) (string, error) {
-	if len(up.Data) == 0 {
+	file, size := up.content()
+	if size == 0 {
 		return "", domain.ErrResumeEmpty
 	}
-	if len(up.Data) > domain.MaxResumeBytes {
+	if size > domain.MaxResumeBytes {
 		return "", domain.ErrResumeTooLarge
 	}
-	return domain.SniffResume(up.Data)
+	return domain.SniffResumeAt(file, size)
 }
 
 func resumeExtension(contentType string) string {

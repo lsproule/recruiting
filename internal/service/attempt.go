@@ -58,6 +58,17 @@ const MaxEventBatch = 500
 // MaxEventDataBytes bounds one event's data.
 const MaxEventDataBytes = 64 << 10
 
+// MaxEventsPerAttempt and MaxRecordingBytes bound one attempt's whole
+// recording: how many events the candidate's client may record and how
+// much data they may carry between them. A batch past either is refused
+// with ErrRecordingFull and the attempt is marked truncated, so a runaway
+// or hostile client cannot grow a recording without bound, and the worker
+// that later compacts and scores it knows what it is holding.
+const (
+	MaxEventsPerAttempt = 200_000
+	MaxRecordingBytes   = 256 << 20
+)
+
 // MaxSourceBytes bounds an editor's text.
 const MaxSourceBytes = 256 << 10
 
@@ -89,6 +100,7 @@ var (
 	ErrSubmissionPending  = errors.New("service: a run of this problem is still in progress")
 	ErrSourceTooLarge     = errors.New("service: the source is larger than 256 KiB")
 	ErrEventInvalid       = errors.New("service: invalid event")
+	ErrRecordingFull      = errors.New("service: the recording has reached its size limit")
 )
 
 // Attempt is one candidate's go at an assessment.
@@ -105,6 +117,9 @@ type Attempt struct {
 	ExpiresAt       time.Time
 	FinishedAt      time.Time
 	LastEventSeq    int64
+	// RecordingTruncated is set once a batch was refused for the recording
+	// ceiling: the replay ends before the session did.
+	RecordingTruncated bool
 	// Preview marks a recruiter's own sitting: it belongs to no application
 	// and nothing downstream reads it.
 	Preview bool
@@ -411,6 +426,9 @@ func (s *AttemptService) Submission(ctx context.Context, p Principal, attemptID,
 		}
 		out = toSubmission(row)
 		if len(row.Result) > 0 {
+			// The poll maps result ids to visibility and position, so it
+			// reads the cases' metadata and never a payload: this runs
+			// every couple of seconds per in-flight submission.
 			problem, err := loadProblem(ctx, tx, row.ProblemID)
 			if err != nil {
 				return err
@@ -476,6 +494,7 @@ func (s *AttemptService) RecordEvents(ctx context.Context, p Principal, attemptI
 		return 0, wrapAttempt("expire attempt", err)
 	}
 	var last int64
+	var full bool
 	err := s.st.WithTx(ctx, p, func(ctx context.Context, tx *store.Tx) error {
 		att, err := tx.Q.GetAttemptForUpdate(ctx, attemptID)
 		if err != nil {
@@ -499,11 +518,20 @@ func (s *AttemptService) RecordEvents(ctx context.Context, p Principal, attemptI
 			}
 			return closedError(att)
 		}
+		if att.RecordingTruncated || recordingFull(att, events) {
+			// The ceiling stands even for a batch that would fit after
+			// it was reached: the recording ends where the flag was set.
+			// The mark commits with the refusal so a reviewer knows the
+			// replay is short.
+			full = true
+			return tx.Q.MarkAttemptRecordingTruncated(ctx, attemptID)
+		}
 		a, err := loadAssessment(ctx, tx, att.AssessmentID)
 		if err != nil {
 			return err
 		}
 		last = att.LastEventSeq
+		var bytes int64
 		for _, ev := range events {
 			if ev.Seq <= last {
 				return fmt.Errorf("%w: seq %d after %d", ErrEventSeq, ev.Seq, last)
@@ -520,13 +548,31 @@ func (s *AttemptService) RecordEvents(ctx context.Context, p Principal, attemptI
 				return err
 			}
 			last = ev.Seq
+			bytes += int64(len(ev.Data))
 		}
-		return tx.Q.SetAttemptLastEventSeq(ctx, db.SetAttemptLastEventSeqParams{ID: attemptID, LastEventSeq: last})
+		return tx.Q.RecordAttemptEventUsage(ctx, db.RecordAttemptEventUsageParams{
+			ID: attemptID, LastEventSeq: last, RecordingEvents: int64(len(events)), RecordingBytes: bytes,
+		})
 	})
 	if err != nil {
 		return 0, wrapAttempt("record events", err)
 	}
+	if full {
+		return 0, fmt.Errorf("%w: %d events or %d bytes", ErrRecordingFull, MaxEventsPerAttempt, MaxRecordingBytes)
+	}
 	return last, nil
+}
+
+// recordingFull reports whether accepting the batch would take the
+// attempt's recording past either ceiling. The whole batch is refused, as
+// a batch is everywhere else, rather than cut mid-way.
+func recordingFull(att db.Attempt, events []AttemptEvent) bool {
+	var bytes int64
+	for _, ev := range events {
+		bytes += int64(len(ev.Data))
+	}
+	return att.RecordingEvents+int64(len(events)) > MaxEventsPerAttempt ||
+		att.RecordingBytes+bytes > MaxRecordingBytes
 }
 
 var sha256Hex = regexp.MustCompile(`^[0-9a-f]{64}$`)
@@ -823,10 +869,14 @@ func (s *AttemptService) session(ctx context.Context, tx *store.Tx, att db.Attem
 			Languages: sessionLanguages(a, p), SQLSchema: p.SQLSchema,
 			Signature: p.Signature, Stubs: p.Stubs(),
 		}
-		for _, tc := range p.TestCases {
-			if tc.Visibility == "public" {
-				sp.PublicTests = append(sp.PublicTests, tc)
-			}
+		// The assessment carries the cases as metadata; the public ones
+		// are shown whole, so their payloads are read here, and only theirs.
+		public, err := loadPublicCases(ctx, tx, p.ID)
+		if err != nil {
+			return AttemptSession{}, err
+		}
+		if len(public) > 0 {
+			sp.PublicTests = public
 		}
 		if src, ok := synced[p.ID]; ok {
 			sp.Language, sp.Source = src.Language, src.Source
@@ -845,7 +895,7 @@ func toAttempt(r db.Attempt) Attempt {
 		Preview: r.Preview,
 		Status:  r.Status, InvitedAt: r.InvitedAt.Time.UTC(), InviteExpiresAt: r.InviteExpiresAt.Time.UTC(),
 		StartedAt: r.StartedAt.Time.UTC(), ExpiresAt: r.ExpiresAt.Time.UTC(), FinishedAt: r.FinishedAt.Time.UTC(),
-		LastEventSeq: r.LastEventSeq,
+		LastEventSeq: r.LastEventSeq, RecordingTruncated: r.RecordingTruncated,
 	}
 }
 

@@ -5,7 +5,6 @@ package candidates
 
 import (
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -209,7 +208,8 @@ func (h *handlers) renderForm(w http.ResponseWriter, r *http.Request, status int
 
 func (h *handlers) create(w http.ResponseWriter, r *http.Request) {
 	p, _ := middleware.PrincipalFrom(r.Context())
-	in, form, err := candidateFromForm(r)
+	in, form, done, err := candidateFromForm(r)
+	defer done()
 	var cand service.Candidate
 	if err == nil {
 		cand, err = h.d.Candidates.Add(r.Context(), p, in)
@@ -237,8 +237,11 @@ func candidateID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 }
 
 // candidateFromForm reads the manual-add form. Both the job and the resume
-// are optional: a recruiter may file a person before there is a role.
-func candidateFromForm(r *http.Request) (service.NewCandidate, candidateForm, error) {
+// are optional: a recruiter may file a person before there is a role. The
+// file is not copied: it stays where the parser parked the part and the
+// service reads it there, so the returned func, which closes it, must run
+// only once the service is done with the input.
+func candidateFromForm(r *http.Request) (service.NewCandidate, candidateForm, func(), error) {
 	in := service.NewCandidate{
 		Name:  r.PostFormValue("name"),
 		Email: r.PostFormValue("email"),
@@ -246,26 +249,22 @@ func candidateFromForm(r *http.Request) (service.NewCandidate, candidateForm, er
 		Links: []string{r.PostFormValue("links")},
 	}
 	form := candidateForm{Name: in.Name, Email: in.Email, Phone: in.Phone, Links: r.PostFormValue("links"), JobID: r.PostFormValue("job_id")}
+	noop := func() {}
 	if raw := strings.TrimSpace(form.JobID); raw != "" {
 		id, err := uuid.Parse(raw)
 		if err != nil {
-			return in, form, service.ErrNotFound
+			return in, form, noop, service.ErrNotFound
 		}
 		in.JobID = id
 	}
 	file, header, err := r.FormFile(resumeField)
 	if err != nil {
-		return in, form, nil
+		return in, form, noop, nil
 	}
-	defer file.Close()
-	// Read one byte past the limit: enough to reject the upload, and nothing
-	// larger ever reaches memory.
-	data, err := io.ReadAll(io.LimitReader(file, domain.MaxResumeBytes+1))
-	if err != nil {
-		return in, form, domain.ErrResumeEmpty
+	if header.Size == 0 {
+		_ = file.Close()
+		return in, form, noop, nil
 	}
-	if len(data) > 0 {
-		in.Resume = &service.ResumeUpload{Filename: header.Filename, Data: data}
-	}
-	return in, form, nil
+	in.Resume = &service.ResumeUpload{Filename: header.Filename, File: file, Size: header.Size}
+	return in, form, func() { _ = file.Close() }, nil
 }

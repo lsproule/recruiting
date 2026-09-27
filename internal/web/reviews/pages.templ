@@ -53,7 +53,13 @@ templ reviewPage(page layout.Page, d service.AttemptReview, config string, csrf 
 				<dt>Attempt score</dt><dd>{ score(d.Score) }</dd>
 				<dt>Risk score</dt><dd>{ score(d.RiskScore) }</dd>
 				<dt>Runner errors</dt><dd>{ itoa(d.ErrorCount) }</dd>
-				<dt>Recording</dt><dd>{ d.RecordingStatus }</dd>
+				<dt>Recording</dt>
+				<dd>
+					{ d.RecordingStatus }
+					if d.RecordingTruncated {
+						<span class="tag" title="The sitting produced more events than one attempt may keep; the replay ends before the candidate did.">cut short</span>
+					}
+				</dd>
 				<dt>Finished</dt><dd>{ at(d.FinishedAt) }</dd>
 			</dl>
 			if len(d.Problems) > 0 {

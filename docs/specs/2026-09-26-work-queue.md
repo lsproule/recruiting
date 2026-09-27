@@ -50,6 +50,36 @@ The screen groups rows by client, so the recruiter reads "for Globex, these
 five things", and filters by step with chips that show only the steps with
 something waiting.
 
+## Reading it cheaply
+
+The queue is derived on every read, and the scan behind it
+(`ListQueueSteps` and the other rules) is the most expensive read in the
+app. Two things keep it off the hot path:
+
+- **The queue screen reads once.** `GET /app/queue` lists the whole queue a
+  single time and takes the rows the filter keeps, the chip counts
+  (`CountItems`), and the sidebar badge (`NavCountsFrom`) off that one
+  list. The screen hands the badges to the layout with
+  `layout.SupplyCounts`, so the counts middleware never computes its own
+  on that request.
+- **Every other screen reads a cache.** `WorkQueueService.NavCounts`, which
+  the counts middleware calls for the sidebar, keeps the five badge numbers
+  (and nothing else, never the rows) in memory per user for
+  `NavCountsTTL` (20 s). Concurrent requests for one user's badges share a
+  single computation. The entries are per user rather than per org because
+  snoozes are per user: the same org's queue reads differently to each
+  recruiter. A decision or a snooze taken through the queue service drops
+  the org's entries at once (`Invalidate`); a move made anywhere else (the
+  board, the client portal, an assessment automation, a scorecard) shows on
+  the badge within the TTL, which is the accepted staleness for a badge. A
+  service that wants the badge exact after its own write can call
+  `Invalidate(orgID)`; it is a map delete.
+
+The per-kind counts stay in Go: the rules in `stepItem` branch on slot,
+attempt, verdict, rating and release state in ways a SQL `count` would
+have to repeat, and two copies of the rules would drift. The cache is what
+makes the Go rules affordable.
+
 ## Decisions on the row
 
 `POST /app/queue/decide` takes `application_id`, `action`

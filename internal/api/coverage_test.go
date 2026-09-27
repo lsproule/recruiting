@@ -70,7 +70,7 @@ var specResources = []resource{
 	},
 	{
 		Name: "problems", List: "list-problems", Get: "get-problem", Create: "create-problem",
-		Extra: []string{"update-problem", "delete-problem", "import-problems", "try-problem", "clone-problem"},
+		Extra: []string{"update-problem", "delete-problem", "import-problems", "try-problem", "clone-problem", "get-problem-case"},
 	},
 	{
 		Name: "assessments", List: "list-assessments", Get: "get-assessment", Create: "create-assessment",

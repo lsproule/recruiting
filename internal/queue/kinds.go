@@ -40,12 +40,20 @@ func (jobPostPublishArgs) Kind() string      { return KindJobPostPublish }
 func (attemptPurgePreviewArgs) Kind() string { return KindAttemptPurgePreview }
 func (snapshotPurgeArgs) Kind() string       { return KindSnapshotPurge }
 
-// kindDef is one row of the kind table: how to build args for an insert and
-// how to bind a handler to river's typed worker registry.
+// kindDef is one row of the kind table: how to build args for an insert,
+// how to bind a handler to river's typed worker registry, and which queue
+// the kind runs on (empty is the default queue).
 type kindDef struct {
 	kind      string
+	queue     string
 	args      func(json.RawMessage) river.JobArgs
 	addWorker func(*river.Workers, Handler) error
+}
+
+// on places the kind on its own queue.
+func (d kindDef) on(queue string) kindDef {
+	d.queue = queue
+	return d
 }
 
 type argsWithPayload interface {
@@ -81,7 +89,7 @@ var registry = []kindDef{
 	define[interviewRemindArgs, *interviewRemindArgs](),
 	define[assessmentInviteArgs, *assessmentInviteArgs](),
 	define[assessmentRemindArgs, *assessmentRemindArgs](),
-	define[runnerExecuteArgs, *runnerExecuteArgs](),
+	define[runnerExecuteArgs, *runnerExecuteArgs]().on(QueueRunner),
 	define[attemptFinalizeArgs, *attemptFinalizeArgs](),
 	define[signalsComputeArgs, *signalsComputeArgs](),
 	define[attemptPurgePreviewArgs, *attemptPurgePreviewArgs](),
@@ -104,10 +112,20 @@ type handlerWorker[T argsWithPayload] struct {
 }
 
 func (w *handlerWorker[T]) Work(ctx context.Context, job *river.Job[T]) error {
-	return w.handler(ctx, Job{
+	return mapSnooze(w.handler(ctx, Job{
 		ID:      job.ID,
 		Kind:    job.Kind,
 		Attempt: job.Attempt,
 		Payload: job.Args.payloadJSON(),
-	})
+	}))
+}
+
+// mapSnooze turns a Snooze into river's own snooze, which reschedules the
+// job without counting the try as an attempt; any other error is a failure
+// river retries with backoff.
+func mapSnooze(err error) error {
+	if d, ok := IsSnooze(err); ok {
+		return river.JobSnooze(d)
+	}
+	return err
 }

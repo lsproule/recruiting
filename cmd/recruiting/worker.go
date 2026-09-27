@@ -71,8 +71,9 @@ func worker(ctx context.Context, logger *slog.Logger, cfg *config.Config) error 
 		return fmt.Errorf("worker: %w", err)
 	}
 	workerClient, err := queue.NewWorker(st.Pool(), queue.Config{
-		Logger:   logger,
-		Handlers: handlers(logger, st, q, renderer, sender, runnerExec, blobStore, blobReader, cfg.BaseURL, jobPoster(logger, cfg)),
+		Logger:        logger,
+		Handlers:      handlers(logger, st, q, renderer, sender, runnerExec, blobStore, blobReader, cfg.BaseURL, jobPoster(logger, cfg)),
+		RunnerWorkers: cfg.WorkerRunnerConcurrency,
 	})
 	if err != nil {
 		return fmt.Errorf("worker: %w", err)
@@ -84,9 +85,10 @@ func worker(ctx context.Context, logger *slog.Logger, cfg *config.Config) error 
 	go queueSnapshotPurge(ctx, q, logger)
 
 	metricsErrc := make(chan error, 1)
-	go func() { metricsErrc <- serveMetrics(ctx, logger, metricsAddr()) }()
+	go func() { metricsErrc <- serveMetrics(ctx, logger, metricsAddr(), observe.Handler()) }()
 
-	logger.Info("working queue", "kinds", queue.Kinds(), "smtp_from", sender.From(), "metrics_addr", metricsAddr())
+	logger.Info("working queue", "kinds", queue.Kinds(), "smtp_from", sender.From(), "metrics_addr", metricsAddr(),
+		"runner_concurrency", cfg.WorkerRunnerConcurrency)
 	runErr := workerClient.Run(ctx)
 	if err := <-metricsErrc; err != nil && runErr == nil {
 		return fmt.Errorf("worker: %w", err)
@@ -208,6 +210,11 @@ func instrumentRunnerExecute(next queue.Handler) queue.Handler {
 	return func(ctx context.Context, job queue.Job) error {
 		start := time.Now()
 		err := next(ctx, job)
+		// A snooze is the runner asking for the job back later, not a
+		// failed execution: it is neither counted nor timed as one.
+		if _, snoozed := queue.IsSnooze(err); snoozed {
+			return err
+		}
 		observe.ObserveRunnerExecute(time.Since(start), err)
 		return err
 	}

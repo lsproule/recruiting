@@ -12,6 +12,12 @@ import (
 // multipart framing.
 const UploadBodyLimit = domain.MaxResumeBytes + 64<<10
 
+// multipartMemory is how much of a parsed form stays in memory; a file part
+// past it is spooled to a temporary file that net/http removes once the
+// request is served. Handlers read a resume from wherever it landed, so a
+// large upload costs the process a file descriptor rather than its bytes.
+const multipartMemory = 1 << 20
+
 // MaxBody caps every request body at limit bytes and answers 413 when a
 // client sends more.
 //
@@ -36,9 +42,10 @@ func MaxBody(limit int64) func(http.Handler) http.Handler {
 				return
 			}
 			r.Body = http.MaxBytesReader(w, r.Body, limit)
-			// maxMemory is the limit itself, so nothing under the cap ever
-			// reaches a temporary file and nothing over it is read at all.
-			if err := r.ParseMultipartForm(limit); err != nil {
+			// The body is already capped, so nothing over the limit is read
+			// at all; what is under it stays in memory only up to
+			// multipartMemory.
+			if err := r.ParseMultipartForm(multipartMemory); err != nil {
 				var tooBig *http.MaxBytesError
 				if errors.As(err, &tooBig) {
 					tooLarge(w, r)

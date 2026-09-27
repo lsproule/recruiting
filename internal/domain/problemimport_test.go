@@ -263,3 +263,51 @@ func TestParseProblemImportAcceptsEmptyExpectedOutput(t *testing.T) {
 		t.Fatalf("an empty expected output was rejected: %v", err)
 	}
 }
+
+// functionProblem is a function problem with one typed case, the way the
+// import document and the API both write it.
+func functionProblem() domain.ImportProblem {
+	return domain.ImportProblem{
+		Kind: "function", Title: "Add", Statement: "Add them.", AllowedLanguages: []string{"python"},
+		Signature:  &domain.Signature{Name: "add", Params: []domain.Param{{Name: "a", Type: "int"}, {Name: "b", Type: "int"}}, Returns: "int"},
+		References: []domain.ImportReference{{Language: "python", Source: "def add(a, b):\n    return a + b\n"}},
+		TestCases:  []domain.ImportTestCase{{Args: []byte(`[1, 2]`), Returns: []byte(`3`), Visibility: "public"}},
+	}
+}
+
+// A function case is decoded against the signature once, by Normalize, and
+// Validate reads that verdict rather than decoding the payload again: after
+// Normalize, the stored text can be changed under Validate's feet without
+// changing its answer.
+func TestNormalizeDecodesAFunctionCaseOnceAndValidateReusesTheVerdict(t *testing.T) {
+	p := functionProblem()
+	p.Normalize()
+	if p.TestCases[0].Input != "[1,2]" || p.TestCases[0].Expected != "3" {
+		t.Fatalf("canonical case = %q / %q", p.TestCases[0].Input, p.TestCases[0].Expected)
+	}
+	if errs := p.Validate(); len(errs) > 0 {
+		t.Fatalf("a good case was refused: %v", errs)
+	}
+	p.TestCases[0].Input, p.TestCases[0].Expected = "not json", "not json"
+	if errs := p.Validate(); len(errs) > 0 {
+		t.Errorf("Validate decoded the payload again: %v", errs)
+	}
+
+	bad := functionProblem()
+	bad.TestCases[0].Args = []byte(`["one", 2]`)
+	bad.Normalize()
+	errs := bad.Validate()
+	if len(errs) != 1 || !strings.Contains(errs[0], "test_cases[0] args") {
+		t.Errorf("a mistyped argument was not reported once from Normalize's verdict: %v", errs)
+	}
+
+	// A case built after Normalize ran — the form's rows, say — is still
+	// checked, from its stored text.
+	late := functionProblem()
+	late.Normalize()
+	late.TestCases = append(late.TestCases, domain.ImportTestCase{Input: `[1]`, Expected: `"x"`, Visibility: "hidden", Class: "core"})
+	errs = late.Validate()
+	if len(errs) != 2 || !strings.Contains(errs[0], "test_cases[1] args") || !strings.Contains(errs[1], "test_cases[1] returns") {
+		t.Errorf("a case added after Normalize was not decoded: %v", errs)
+	}
+}

@@ -306,7 +306,7 @@ func (s *TalentService) Join(ctx context.Context, orgSlug string, in TalentProfi
 	}
 	p := orgScoped(org.ID)
 	var stored *storedResume
-	if in.Resume != nil && len(in.Resume.Data) > 0 {
+	if in.Resume != nil && !in.Resume.Empty() {
 		if s.resumes == nil {
 			return TalentProfile{}, ErrNoBlobStore
 		}
@@ -421,7 +421,7 @@ func (s *TalentService) UpdateProfile(ctx context.Context, p Principal, in Talen
 	}
 	scope := orgScoped(p.OrgID)
 	var stored *storedResume
-	if in.Resume != nil && len(in.Resume.Data) > 0 {
+	if in.Resume != nil && !in.Resume.Empty() {
 		if s.resumes == nil {
 			return TalentProfile{}, ErrNoBlobStore
 		}

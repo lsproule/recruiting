@@ -50,6 +50,9 @@ func TestModesGetPastConfigurationWithCompleteConfig(t *testing.T) {
 		t.Setenv(name, "value-"+name)
 	}
 	t.Setenv("METRICS_ADDR", "127.0.0.1:0")
+	// A developer shell that allows the runc fallback would let runner mode
+	// start for real here and serve until the test times out.
+	t.Setenv("RUNNER_ALLOW_INSECURE_RUNTIME", "")
 	for name := range modes() {
 		err := run([]string{name})
 		if err == nil {

@@ -17,61 +17,12 @@
   "statement": "The billing database holds two tables:\n\n```\ncustomer(id, name, country)\nsubscription(id, customer_id, plan, status)\n```\n\nA subscription's `status` is one of `active`, `cancelled`, or `paused`, and one\ncustomer may hold several subscriptions.\n\nWrite one query returning a single column, the `name` of every customer holding\nat least one `active` subscription, sorted alphabetically. A name appears once\nhowever many active subscriptions the customer holds, and a customer whose\nsubscriptions are all `cancelled` or `paused` does not appear at all.\n\n**Example**\n\nWith `Ada` holding one active and one cancelled subscription, `Grace` holding a\ncancelled and a paused one, and `Linus` and `Barbara` holding one active\nsubscription each, the query returns:\n\n```\nAda\nBarbara\nLinus\n```\n\n`Grace` is left out because nothing she holds is active, and `Ada` is listed\nonce rather than twice.\n\n**Constraints**\n\n- Return exactly one column, in alphabetical order\n- Every `subscription.customer_id` names a customer that exists\n",
   "guidelines": "The de-duplication is the point: a plain join lists Ada twice. Either DISTINCT or an EXISTS subquery is fine; ask which one they would keep once the table holds a million subscriptions.",
   "test_cases": [
-    {
-      "name": "the seeded rota",
-      "class": "sample",
-      "input": "",
-      "expected": "Ada\nBarbara\nLinus",
-      "visibility": "public",
-      "weight": 1
-    },
-    {
-      "name": "one more active customer",
-      "class": "sample",
-      "input": "insert into customer (id, name, country) values (5, 'Ken', 'US');\ninsert into subscription (id, customer_id, plan, status) values (20, 5, 'pro', 'active');",
-      "expected": "Ada\nBarbara\nKen\nLinus",
-      "visibility": "public",
-      "weight": 1
-    },
-    {
-      "name": "names sort, they do not follow ids",
-      "class": "sample",
-      "input": "insert into customer (id, name, country) values (6, 'Zoe', 'NL'), (7, 'Aaron', 'IE');\ninsert into subscription (id, customer_id, plan, status) values (21, 6, 'pro', 'active'), (22, 7, 'team', 'active');",
-      "expected": "Aaron\nAda\nBarbara\nLinus\nZoe",
-      "visibility": "public",
-      "weight": 2
-    },
-    {
-      "name": "cancelling empties the list",
-      "class": "edge",
-      "input": "update subscription set status = 'cancelled' where customer_id in (1, 3);",
-      "expected": "Barbara",
-      "visibility": "hidden",
-      "weight": 2
-    },
-    {
-      "name": "a second active subscription",
-      "class": "edge",
-      "input": "insert into subscription (id, customer_id, plan, status) values (23, 1, 'enterprise', 'active');",
-      "expected": "Ada\nBarbara\nLinus",
-      "visibility": "hidden",
-      "weight": 2
-    },
-    {
-      "name": "pausing one and reviving another",
-      "class": "core",
-      "input": "update subscription set status = 'paused' where customer_id = 4;\nupdate subscription set status = 'active' where id = 6;",
-      "expected": "Ada\nGrace\nLinus",
-      "visibility": "hidden",
-      "weight": 3
-    },
-    {
-      "name": "nobody is subscribed",
-      "class": "edge",
-      "input": "update subscription set status = 'paused';",
-      "expected": "",
-      "visibility": "hidden",
-      "weight": 1
-    }
+    {"name":"the seeded rota","class":"sample","input":"","expected":"Ada\nBarbara\nLinus","visibility":"public","weight":1},
+    {"name":"one more active customer","class":"sample","input":"insert into customer (id, name, country) values (5, 'Ken', 'US');\ninsert into subscription (id, customer_id, plan, status) values (20, 5, 'pro', 'active');","expected":"Ada\nBarbara\nKen\nLinus","visibility":"public","weight":1},
+    {"name":"names sort, they do not follow ids","class":"sample","input":"insert into customer (id, name, country) values (6, 'Zoe', 'NL'), (7, 'Aaron', 'IE');\ninsert into subscription (id, customer_id, plan, status) values (21, 6, 'pro', 'active'), (22, 7, 'team', 'active');","expected":"Aaron\nAda\nBarbara\nLinus\nZoe","visibility":"public","weight":2},
+    {"name":"cancelling empties the list","class":"edge","input":"update subscription set status = 'cancelled' where customer_id in (1, 3);","expected":"Barbara","visibility":"hidden","weight":2},
+    {"name":"a second active subscription","class":"edge","input":"insert into subscription (id, customer_id, plan, status) values (23, 1, 'enterprise', 'active');","expected":"Ada\nBarbara\nLinus","visibility":"hidden","weight":2},
+    {"name":"pausing one and reviving another","class":"core","input":"update subscription set status = 'paused' where customer_id = 4;\nupdate subscription set status = 'active' where id = 6;","expected":"Ada\nGrace\nLinus","visibility":"hidden","weight":3},
+    {"name":"nobody is subscribed","class":"edge","input":"update subscription set status = 'paused';","expected":"","visibility":"hidden","weight":1}
   ]
 }

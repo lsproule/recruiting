@@ -181,7 +181,13 @@ func TestCloneCopiesASeedProblemAndLeavesTheOriginalAlone(t *testing.T) {
 		t.Errorf("clone carries %d cases and %d references", len(copied.TestCases), len(copied.References))
 	}
 
-	edited := copied.AsImport()
+	// A write answers with the cases as metadata; an edit that carries them
+	// forward reads the copy whole first.
+	whole, err := svc.GetWithCases(ctx, f.p, copied.ID)
+	if err != nil {
+		t.Fatalf("read the clone whole: %v", err)
+	}
+	edited := whole.AsImport()
 	edited.Difficulty = "hard"
 	if _, err := svc.Update(ctx, f.p, copied.ID, edited); err != nil {
 		t.Fatalf("editing the clone: %v", err)

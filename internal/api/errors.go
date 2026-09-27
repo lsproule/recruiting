@@ -69,6 +69,7 @@ var statusErrors = map[int][]error{
 		service.ErrRoomKind,
 	},
 	http.StatusConflict: {
+		service.ErrDocLogFull,
 		service.ErrStale,
 		service.ErrSlotTaken,
 		service.ErrTooLate,
@@ -109,6 +110,7 @@ var statusErrors = map[int][]error{
 	http.StatusRequestEntityTooLarge: {
 		domain.ErrResumeTooLarge,
 		service.ErrSnapshotTooLarge,
+		service.ErrRecordingFull,
 		service.ErrSourceTooBig,
 	},
 	// The bytes are not one of the resume formats, whatever the filename

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"os"
@@ -29,7 +30,10 @@ const (
 	cacheMax    = 10000
 	cacheTTL    = time.Hour
 	cacheErrTTL = time.Minute
-	retryAfter  = "5"
+	// DefaultCacheMB bounds the result cache by bytes (RUNNER_CACHE_MB).
+	DefaultCacheMB = 64
+	// cacheSweepPeriod is how often expired results are released.
+	cacheSweepPeriod = time.Minute
 )
 
 // Executor runs one request to completion. Implementations never panic on
@@ -48,8 +52,18 @@ type Config struct {
 	ImagePrefix          string
 	// SQLAdminURL is a Postgres URL with CREATEDB/CREATEROLE used to provision
 	// a throwaway database per SQL execution. Empty disables SQL.
-	SQLAdminURL   string
+	SQLAdminURL string
+	// MaxConcurrent executions run at once; MaxQueue more wait for a slot,
+	// each for at most QueueWait, before being turned away with 503.
 	MaxConcurrent int
+	MaxQueue      int
+	QueueWait     time.Duration
+	// IdleExit makes the process exit 0 once it has run nothing for that
+	// long, so an orchestrator with on-demand start can scale it to zero.
+	// Zero disables it.
+	IdleExit time.Duration
+	// CacheMB bounds the result cache by bytes.
+	CacheMB int
 }
 
 // ConfigFromEnv reads RUNNER_* variables; secret is passed in by the caller
@@ -61,7 +75,26 @@ func ConfigFromEnv(secret string) Config {
 		}
 		return def
 	}
-	n, _ := strconv.Atoi(env("RUNNER_MAX_CONCURRENT", "2"))
+	n, _ := strconv.Atoi(env("RUNNER_MAX_CONCURRENT", strconv.Itoa(DefaultMaxConcurrent)))
+	if n <= 0 {
+		n = DefaultMaxConcurrent
+	}
+	q, err := strconv.Atoi(env("RUNNER_MAX_QUEUE", strconv.Itoa(n*DefaultQueueFactor)))
+	if err != nil || q < 0 {
+		q = n * DefaultQueueFactor
+	}
+	wait, err := time.ParseDuration(env("RUNNER_QUEUE_WAIT", DefaultQueueWait.String()))
+	if err != nil || wait <= 0 {
+		wait = DefaultQueueWait
+	}
+	idle, err := time.ParseDuration(env("RUNNER_IDLE_EXIT", "0"))
+	if err != nil || idle < 0 {
+		idle = 0
+	}
+	cacheMB, err := strconv.Atoi(env("RUNNER_CACHE_MB", strconv.Itoa(DefaultCacheMB)))
+	if err != nil || cacheMB <= 0 {
+		cacheMB = DefaultCacheMB
+	}
 	return Config{
 		Addr:                 env("RUNNER_LISTEN", ":8081"),
 		Secret:               secret,
@@ -70,6 +103,10 @@ func ConfigFromEnv(secret string) Config {
 		ImagePrefix:          env("RUNNER_IMAGE_PREFIX", "recruiting-runner-"),
 		SQLAdminURL:          env("RUNNER_SQL_URL", ""),
 		MaxConcurrent:        n,
+		MaxQueue:             q,
+		QueueWait:            wait,
+		IdleExit:             idle,
+		CacheMB:              cacheMB,
 	}
 }
 
@@ -97,11 +134,13 @@ func Run(ctx context.Context, logger *slog.Logger, cfg Config) error {
 		sqlExec = &SQLExecutor{AdminURL: cfg.SQLAdminURL}
 	}
 	h := NewHandler(cfg.Secret, exec, sqlExec)
-	if cfg.MaxConcurrent > 0 {
-		h.sem = make(chan struct{}, cfg.MaxConcurrent)
+	h.admit = newAdmission(cfg.MaxConcurrent, cfg.MaxQueue, cfg.QueueWait)
+	if cfg.CacheMB > 0 {
+		h.cache = newResultCache(cacheMax, int64(cfg.CacheMB)<<20, cacheTTL, cacheErrTTL)
 	}
+	idle := make(chan struct{})
 	go func() {
-		t := time.NewTicker(time.Minute)
+		t := time.NewTicker(cacheSweepPeriod)
 		defer t.Stop()
 		for {
 			select {
@@ -109,6 +148,10 @@ func Run(ctx context.Context, logger *slog.Logger, cfg Config) error {
 				return
 			case <-t.C:
 				h.cache.sweep()
+				if cfg.IdleExit > 0 && h.admit.idle() >= cfg.IdleExit {
+					close(idle)
+					return
+				}
 			}
 		}
 	}()
@@ -117,14 +160,23 @@ func Run(ctx context.Context, logger *slog.Logger, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	logger.Info("runner listening", "addr", ln.Addr().String(), "runtime", runtime, "sql", sqlExec != nil)
+	logger.Info("runner listening", "addr", ln.Addr().String(), "runtime", runtime, "sql", sqlExec != nil,
+		"max_concurrent", h.admit.capacity, "max_queue", h.admit.queueCap, "queue_wait", h.admit.wait, "idle_exit", cfg.IdleExit)
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()
-	select {
-	case <-ctx.Done():
+	shutdown := func() error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		return srv.Shutdown(shutdownCtx)
+	}
+	select {
+	case <-ctx.Done():
+		return shutdown()
+	case <-idle:
+		// Exit 0 so an on-demand orchestrator reads it as "nothing to do",
+		// not a crash to restart; the next request starts a fresh process.
+		logger.Info("runner idle; exiting", "idle_exit", cfg.IdleExit)
+		return shutdown()
 	case err := <-errc:
 		return err
 	}
@@ -144,26 +196,33 @@ func resolveRuntime(requested string, allowInsecure bool, available []string) (r
 	return "", false, fmt.Errorf("runner: docker runtime %q not installed (have %s); install gVisor or set RUNNER_ALLOW_INSECURE_RUNTIME=1 to run under runc", requested, strings.Join(available, ","))
 }
 
-// Handler serves /execute and /healthz.
+// Handler serves /execute, /status and /healthz.
 type Handler struct {
 	secret string
 	code   Executor
 	sql    Executor
-	// sem bounds concurrent executions; nil means unbounded.
-	sem chan struct{}
+	// admit is the wait queue in front of the sandboxes.
+	admit *admission
 
 	mu       sync.Mutex
 	inflight map[string]*entry
 	cache    *resultCache
 }
 
+// entry is one execution in progress, shared by every request for its id.
+// Once done is closed either resp is set or err says why nothing ran.
 type entry struct {
 	done chan struct{}
 	resp *Response
+	err  error
 }
 
 func NewHandler(secret string, code, sql Executor) *Handler {
-	return &Handler{secret: secret, code: code, sql: sql, inflight: map[string]*entry{}, cache: newResultCache(cacheMax, cacheTTL, cacheErrTTL)}
+	return &Handler{
+		secret: secret, code: code, sql: sql, inflight: map[string]*entry{},
+		admit: newAdmission(DefaultMaxConcurrent, DefaultMaxConcurrent*DefaultQueueFactor, DefaultQueueWait),
+		cache: newResultCache(cacheMax, int64(DefaultCacheMB)<<20, cacheTTL, cacheErrTTL),
+	}
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -173,9 +232,23 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	case r.URL.Path == "/execute" && r.Method == http.MethodPost:
 		h.execute(w, r)
+	case r.URL.Path == "/status" && r.Method == http.MethodGet:
+		h.status(w, r)
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// status reports the queue's occupancy for an orchestrator or a person
+// deciding whether this runner may be stopped; the same numbers are on
+// /metrics. It is secret-protected like /execute.
+func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
+	if !h.authorized(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(h.admit.status())
 }
 
 func (h *Handler) authorized(r *http.Request) bool {
@@ -197,10 +270,15 @@ func (h *Handler) execute(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	resp, code := h.run(r.Context(), &req)
-	if code == http.StatusServiceUnavailable {
-		w.Header().Set("Retry-After", retryAfter)
-		http.Error(w, "runner saturated; retry later", code)
+	resp, err := h.run(r.Context(), &req)
+	if err != nil {
+		if se, ok := isSaturated(err); ok {
+			w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(se.RetryAfter.Seconds()))))
+			http.Error(w, "runner saturated; retry later", http.StatusServiceUnavailable)
+			return
+		}
+		// The client is gone; whatever is written here is never read.
+		http.Error(w, err.Error(), http.StatusRequestTimeout)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -229,66 +307,69 @@ func validate(req *Request) error {
 	return nil
 }
 
-// run executes once per id: a cached or in-flight result is shared with every
-// caller; a new execution needs a free slot (else 503) and a still-connected
-// client, so abandoned requests never reach a container.
-func (h *Handler) run(ctx context.Context, req *Request) (*Response, int) {
+// run executes once per id: a cached or in-flight result is shared with
+// every caller. A new execution first waits for a sandbox slot (see
+// admission); a full queue or an expired wait is a *SaturatedError, and a
+// caller that disconnects while waiting gets ctx.Err() and never reaches a
+// container.
+func (h *Handler) run(ctx context.Context, req *Request) (*Response, error) {
 	if resp, ok := h.cache.get(req.ID); ok {
-		return resp, 0
+		return resp, nil
+	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
 	}
 	h.mu.Lock()
 	e, seen := h.inflight[req.ID]
 	if !seen {
 		if resp, ok := h.cache.get(req.ID); ok {
 			h.mu.Unlock()
-			return resp, 0
-		}
-		if ctx.Err() != nil {
-			h.mu.Unlock()
-			return &Response{ID: req.ID, Status: StatusError, CompileOutput: "client disconnected"}, 0
-		}
-		if h.sem != nil {
-			select {
-			case h.sem <- struct{}{}:
-			default:
-				h.mu.Unlock()
-				return nil, http.StatusServiceUnavailable
-			}
+			return resp, nil
 		}
 		e = &entry{done: make(chan struct{})}
 		h.inflight[req.ID] = e
 	}
 	h.mu.Unlock()
 	if seen {
-		select {
-		case <-e.done:
-			return e.resp, 0
-		case <-ctx.Done():
-			return &Response{ID: req.ID, Status: StatusError, CompileOutput: "client disconnected"}, 0
-		}
+		return h.await(ctx, e)
+	}
+
+	// The entry is registered before the wait so a retry of the same id
+	// joins this one instead of taking a second place in the queue.
+	release, err := h.admit.acquire(ctx)
+	if err != nil {
+		h.mu.Lock()
+		delete(h.inflight, req.ID)
+		h.mu.Unlock()
+		e.err = err
+		close(e.done)
+		return nil, err
 	}
 	// Detached from the request context: once a slot is taken the run
 	// completes and is cached so a retry of the same id gets its result.
 	go func() {
 		defer close(e.done)
-		defer func() {
-			if h.sem != nil {
-				<-h.sem
-			}
-		}()
 		e.resp = h.dispatch(context.Background(), req)
 		h.mu.Lock()
 		h.cache.put(req.ID, e.resp)
 		delete(h.inflight, req.ID)
 		h.mu.Unlock()
+		release(e.resp.Status)
 	}()
+	return h.await(ctx, e)
+}
+
+// await returns an in-flight entry's outcome, or ctx.Err() if the caller
+// leaves first.
+func (h *Handler) await(ctx context.Context, e *entry) (*Response, error) {
 	select {
 	case <-e.done:
-		return e.resp, 0
+		return e.resp, e.err
 	case <-ctx.Done():
-		return &Response{ID: req.ID, Status: StatusError, CompileOutput: "client disconnected"}, 0
+		return nil, ctx.Err()
 	}
 }
+
 func (h *Handler) dispatch(ctx context.Context, req *Request) (resp *Response) {
 	defer func() {
 		if r := recover(); r != nil {

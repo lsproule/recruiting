@@ -44,7 +44,7 @@ func (q *Queries) AppendAttemptEvent(ctx context.Context, arg AppendAttemptEvent
 
 const closeAttempt = `-- name: CloseAttempt :one
 update attempt set status = $2, finished_at = $3, updated_at = now()
-where id = $1 and status = 'started' returning id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key
+where id = $1 and status = 'started' returning id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key, recording_events, recording_bytes, recording_truncated
 `
 
 type CloseAttemptParams struct {
@@ -81,6 +81,9 @@ func (q *Queries) CloseAttempt(ctx context.Context, arg CloseAttemptParams) (Att
 		&i.PreviewUserID,
 		&i.ConsentAt,
 		&i.IdentityBlobKey,
+		&i.RecordingEvents,
+		&i.RecordingBytes,
+		&i.RecordingTruncated,
 	)
 	return i, err
 }
@@ -233,7 +236,7 @@ func (q *Queries) CreateAssessmentProblem(ctx context.Context, arg CreateAssessm
 const createAttempt = `-- name: CreateAttempt :one
 insert into attempt (org_id, application_id, assessment_id, stage_id, invite_expires_at)
 values ($1, $2::uuid, $3, $4::uuid,
-        $5) returning id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key
+        $5) returning id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key, recording_events, recording_bytes, recording_truncated
 `
 
 type CreateAttemptParams struct {
@@ -278,6 +281,9 @@ func (q *Queries) CreateAttempt(ctx context.Context, arg CreateAttemptParams) (A
 		&i.PreviewUserID,
 		&i.ConsentAt,
 		&i.IdentityBlobKey,
+		&i.RecordingEvents,
+		&i.RecordingBytes,
+		&i.RecordingTruncated,
 	)
 	return i, err
 }
@@ -312,7 +318,7 @@ func (q *Queries) CreateIntegritySignal(ctx context.Context, arg CreateIntegrity
 
 const createPreviewAttempt = `-- name: CreatePreviewAttempt :one
 insert into attempt (org_id, assessment_id, preview, preview_user_id, invite_expires_at)
-values ($1, $2, true, $3, $4) returning id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key
+values ($1, $2, true, $3, $4) returning id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key, recording_events, recording_bytes, recording_truncated
 `
 
 type CreatePreviewAttemptParams struct {
@@ -357,6 +363,9 @@ func (q *Queries) CreatePreviewAttempt(ctx context.Context, arg CreatePreviewAtt
 		&i.PreviewUserID,
 		&i.ConsentAt,
 		&i.IdentityBlobKey,
+		&i.RecordingEvents,
+		&i.RecordingBytes,
+		&i.RecordingTruncated,
 	)
 	return i, err
 }
@@ -472,7 +481,7 @@ func (q *Queries) DeleteMagicLinksForSubject(ctx context.Context, arg DeleteMagi
 
 const expireInvitedAttempt = `-- name: ExpireInvitedAttempt :one
 update attempt set status = 'expired', finished_at = $2, updated_at = now()
-where id = $1 and status = 'invited' returning id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key
+where id = $1 and status = 'invited' returning id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key, recording_events, recording_bytes, recording_truncated
 `
 
 type ExpireInvitedAttemptParams struct {
@@ -510,6 +519,9 @@ func (q *Queries) ExpireInvitedAttempt(ctx context.Context, arg ExpireInvitedAtt
 		&i.PreviewUserID,
 		&i.ConsentAt,
 		&i.IdentityBlobKey,
+		&i.RecordingEvents,
+		&i.RecordingBytes,
+		&i.RecordingTruncated,
 	)
 	return i, err
 }
@@ -576,7 +588,7 @@ func (q *Queries) GetAssessment(ctx context.Context, id uuid.UUID) (Assessment, 
 }
 
 const getAttempt = `-- name: GetAttempt :one
-select id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key from attempt where id = $1
+select id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key, recording_events, recording_bytes, recording_truncated from attempt where id = $1
 `
 
 func (q *Queries) GetAttempt(ctx context.Context, id uuid.UUID) (Attempt, error) {
@@ -607,12 +619,15 @@ func (q *Queries) GetAttempt(ctx context.Context, id uuid.UUID) (Attempt, error)
 		&i.PreviewUserID,
 		&i.ConsentAt,
 		&i.IdentityBlobKey,
+		&i.RecordingEvents,
+		&i.RecordingBytes,
+		&i.RecordingTruncated,
 	)
 	return i, err
 }
 
 const getAttemptForApplicationStage = `-- name: GetAttemptForApplicationStage :one
-select id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key from attempt where application_id = $1::uuid and stage_id = $2::uuid
+select id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key, recording_events, recording_bytes, recording_truncated from attempt where application_id = $1::uuid and stage_id = $2::uuid
 order by created_at desc limit 1
 `
 
@@ -649,12 +664,15 @@ func (q *Queries) GetAttemptForApplicationStage(ctx context.Context, arg GetAtte
 		&i.PreviewUserID,
 		&i.ConsentAt,
 		&i.IdentityBlobKey,
+		&i.RecordingEvents,
+		&i.RecordingBytes,
+		&i.RecordingTruncated,
 	)
 	return i, err
 }
 
 const getAttemptForUpdate = `-- name: GetAttemptForUpdate :one
-select id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key from attempt where id = $1 for update
+select id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key, recording_events, recording_bytes, recording_truncated from attempt where id = $1 for update
 `
 
 func (q *Queries) GetAttemptForUpdate(ctx context.Context, id uuid.UUID) (Attempt, error) {
@@ -685,6 +703,9 @@ func (q *Queries) GetAttemptForUpdate(ctx context.Context, id uuid.UUID) (Attemp
 		&i.PreviewUserID,
 		&i.ConsentAt,
 		&i.IdentityBlobKey,
+		&i.RecordingEvents,
+		&i.RecordingBytes,
+		&i.RecordingTruncated,
 	)
 	return i, err
 }
@@ -1167,7 +1188,7 @@ func (q *Queries) ListDueAttemptOrgs(ctx context.Context, at pgtype.Timestamptz)
 }
 
 const listDueAttempts = `-- name: ListDueAttempts :many
-select id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key from attempt where status = 'started' and expires_at <= $1 order by expires_at for update skip locked
+select id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key, recording_events, recording_bytes, recording_truncated from attempt where status = 'started' and expires_at <= $1 order by expires_at for update skip locked
 `
 
 func (q *Queries) ListDueAttempts(ctx context.Context, expiresAt pgtype.Timestamptz) ([]Attempt, error) {
@@ -1204,6 +1225,9 @@ func (q *Queries) ListDueAttempts(ctx context.Context, expiresAt pgtype.Timestam
 			&i.PreviewUserID,
 			&i.ConsentAt,
 			&i.IdentityBlobKey,
+			&i.RecordingEvents,
+			&i.RecordingBytes,
+			&i.RecordingTruncated,
 		); err != nil {
 			return nil, err
 		}
@@ -1375,7 +1399,7 @@ func (q *Queries) ListSnapshotsTakenBefore(ctx context.Context, takenAt pgtype.T
 }
 
 const listStalePreviewAttempts = `-- name: ListStalePreviewAttempts :many
-select id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key from attempt where preview and created_at < $1 order by created_at for update skip locked
+select id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key, recording_events, recording_bytes, recording_truncated from attempt where preview and created_at < $1 order by created_at for update skip locked
 `
 
 func (q *Queries) ListStalePreviewAttempts(ctx context.Context, createdAt pgtype.Timestamptz) ([]Attempt, error) {
@@ -1412,6 +1436,9 @@ func (q *Queries) ListStalePreviewAttempts(ctx context.Context, createdAt pgtype
 			&i.PreviewUserID,
 			&i.ConsentAt,
 			&i.IdentityBlobKey,
+			&i.RecordingEvents,
+			&i.RecordingBytes,
+			&i.RecordingTruncated,
 		); err != nil {
 			return nil, err
 		}
@@ -1556,10 +1583,44 @@ func (q *Queries) ListVetterAttemptReviews(ctx context.Context, vetterID uuid.Nu
 	return items, nil
 }
 
+const markAttemptRecordingTruncated = `-- name: MarkAttemptRecordingTruncated :exec
+update attempt set recording_truncated = true, updated_at = now() where id = $1
+`
+
+func (q *Queries) MarkAttemptRecordingTruncated(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, markAttemptRecordingTruncated, id)
+	return err
+}
+
+const recordAttemptEventUsage = `-- name: RecordAttemptEventUsage :exec
+update attempt set last_event_seq = $2, recording_events = recording_events + $3,
+    recording_bytes = recording_bytes + $4, updated_at = now()
+where id = $1
+`
+
+type RecordAttemptEventUsageParams struct {
+	ID              uuid.UUID
+	LastEventSeq    int64
+	RecordingEvents int64
+	RecordingBytes  int64
+}
+
+// Advances the accepted seq and charges the batch against the attempt's
+// recording ceiling.
+func (q *Queries) RecordAttemptEventUsage(ctx context.Context, arg RecordAttemptEventUsageParams) error {
+	_, err := q.db.Exec(ctx, recordAttemptEventUsage,
+		arg.ID,
+		arg.LastEventSeq,
+		arg.RecordingEvents,
+		arg.RecordingBytes,
+	)
+	return err
+}
+
 const scoreAttempt = `-- name: ScoreAttempt :one
 update attempt set status = 'scored', score = $2, problem_scores = $3, error_count = $4,
     recording_status = $5, recording_blob_key = $6, updated_at = now()
-where id = $1 and status in ('submitted', 'expired') returning id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key
+where id = $1 and status in ('submitted', 'expired') returning id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key, recording_events, recording_bytes, recording_truncated
 `
 
 type ScoreAttemptParams struct {
@@ -1608,13 +1669,16 @@ func (q *Queries) ScoreAttempt(ctx context.Context, arg ScoreAttemptParams) (Att
 		&i.PreviewUserID,
 		&i.ConsentAt,
 		&i.IdentityBlobKey,
+		&i.RecordingEvents,
+		&i.RecordingBytes,
+		&i.RecordingTruncated,
 	)
 	return i, err
 }
 
 const setAttemptConsentAt = `-- name: SetAttemptConsentAt :one
 update attempt set consent_at = $2, updated_at = now()
-where id = $1 and status = 'invited' returning id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key
+where id = $1 and status = 'invited' returning id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key, recording_events, recording_bytes, recording_truncated
 `
 
 type SetAttemptConsentAtParams struct {
@@ -1652,13 +1716,16 @@ func (q *Queries) SetAttemptConsentAt(ctx context.Context, arg SetAttemptConsent
 		&i.PreviewUserID,
 		&i.ConsentAt,
 		&i.IdentityBlobKey,
+		&i.RecordingEvents,
+		&i.RecordingBytes,
+		&i.RecordingTruncated,
 	)
 	return i, err
 }
 
 const setAttemptIdentityBlobKey = `-- name: SetAttemptIdentityBlobKey :one
 update attempt set identity_blob_key = $2, updated_at = now()
-where id = $1 and identity_blob_key is null returning id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key
+where id = $1 and identity_blob_key is null returning id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key, recording_events, recording_bytes, recording_truncated
 `
 
 type SetAttemptIdentityBlobKeyParams struct {
@@ -1695,6 +1762,9 @@ func (q *Queries) SetAttemptIdentityBlobKey(ctx context.Context, arg SetAttemptI
 		&i.PreviewUserID,
 		&i.ConsentAt,
 		&i.IdentityBlobKey,
+		&i.RecordingEvents,
+		&i.RecordingBytes,
+		&i.RecordingTruncated,
 	)
 	return i, err
 }
@@ -1756,7 +1826,7 @@ func (q *Queries) SetStageAssessment(ctx context.Context, arg SetStageAssessment
 
 const startAttempt = `-- name: StartAttempt :one
 update attempt set status = 'started', started_at = $2, expires_at = $3, updated_at = now()
-where id = $1 and status = 'invited' returning id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key
+where id = $1 and status = 'invited' returning id, org_id, application_id, assessment_id, stage_id, status, invited_at, invite_expires_at, started_at, expires_at, finished_at, score, risk_score, recording_status, recording_blob_key, created_at, updated_at, last_event_seq, problem_scores, error_count, preview, preview_user_id, consent_at, identity_blob_key, recording_events, recording_bytes, recording_truncated
 `
 
 type StartAttemptParams struct {
@@ -1793,6 +1863,9 @@ func (q *Queries) StartAttempt(ctx context.Context, arg StartAttemptParams) (Att
 		&i.PreviewUserID,
 		&i.ConsentAt,
 		&i.IdentityBlobKey,
+		&i.RecordingEvents,
+		&i.RecordingBytes,
+		&i.RecordingTruncated,
 	)
 	return i, err
 }

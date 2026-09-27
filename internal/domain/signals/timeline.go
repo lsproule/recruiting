@@ -6,7 +6,6 @@ package signals
 
 import (
 	"encoding/json"
-	"sort"
 	"strings"
 	"time"
 	"unicode/utf16"
@@ -100,71 +99,14 @@ type Timeline struct {
 // Build folds the stream into one timeline per problem. Events are taken in
 // seq order regardless of the order given. initial is each problem's editor
 // text before the first event (starter text, if any); a stream that starts
-// with a retain over it reconstructs only from that.
+// with a retain over it reconstructs only from that. A caller that decodes
+// the recording as it goes folds it into a Stream instead.
 func Build(events []Event, initial map[uuid.UUID]string) map[uuid.UUID]*Timeline {
-	sorted := make([]Event, len(events))
-	copy(sorted, events)
-	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Seq < sorted[j].Seq })
-
-	out := map[uuid.UUID]*Timeline{}
-	docs := map[uuid.UUID][]uint16{}
-	open := map[uuid.UUID]int{} // index of the unclosed blur
-	for _, ev := range sorted {
-		if ev.ProblemID == nil {
-			continue
-		}
-		id := *ev.ProblemID
-		tl := out[id]
-		if tl == nil {
-			tl = &Timeline{ProblemID: id, First: ev.At(), FirstServer: ev.ServerTs, Reconstructed: true}
-			out[id] = tl
-			docs[id] = utf16.Encode([]rune(initial[id]))
-			open[id] = -1
-		}
-		at := ev.At()
-		tl.Last = at
-		switch ev.Kind {
-		case "edit":
-			cs, ok := parseChangeset(ev.Payload)
-			if !ok {
-				tl.Reconstructed = false
-				continue
-			}
-			ins, del, next, applied := cs.apply(docs[id])
-			if applied {
-				docs[id] = next
-			} else {
-				tl.Reconstructed = false
-			}
-			tl.Edits = append(tl.Edits, Edit{Seq: ev.Seq, At: at, Inserted: ins, Deleted: del})
-		case "paste":
-			var p struct {
-				Len      int  `json:"len"`
-				Internal bool `json:"internal"`
-			}
-			_ = json.Unmarshal(ev.Payload, &p)
-			p.Len = max(p.Len, 0)
-			tl.Pastes = append(tl.Pastes, Paste{Seq: ev.Seq, At: at, Len: p.Len, Internal: p.Internal})
-		case "blur":
-			if open[id] < 0 {
-				tl.Blurs = append(tl.Blurs, Blur{Seq: ev.Seq, From: at, To: at})
-				open[id] = len(tl.Blurs) - 1
-			}
-		case "focus":
-			if i := open[id]; i >= 0 {
-				tl.Blurs[i].To = at
-				open[id] = -1
-			}
-		}
+	st := NewStream(initial)
+	for _, ev := range bySeq(events) {
+		st.Add(ev)
 	}
-	for id, tl := range out {
-		if i := open[id]; i >= 0 {
-			tl.Blurs[i].To = tl.Last
-		}
-		tl.Source = string(utf16.Decode(docs[id]))
-		markPastes(tl)
-	}
-	return out
+	return st.Timelines()
 }
 
 // markPastes attributes to each paste the nearest edit that carried its

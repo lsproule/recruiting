@@ -50,7 +50,9 @@ func (s *ProblemService) Try(ctx context.Context, p Principal, id uuid.UUID, lan
 	if s.exec == nil {
 		return TryResult{}, ErrNoExecutor
 	}
-	problem, err := s.Get(ctx, p, id)
+	// The public cases are the only ones a try runs, so they are the only
+	// payloads read; a hidden perf case never leaves the database for this.
+	problem, err := s.GetWithPublicCases(ctx, p, id)
 	if err != nil {
 		return TryResult{}, err
 	}
@@ -269,7 +271,9 @@ func (s *ProblemService) Clone(ctx context.Context, p Principal, id uuid.UUID) (
 	if err := requireRecruiter(p); err != nil {
 		return Problem{}, err
 	}
-	source, err := s.Get(ctx, p, id)
+	// A copy carries every case whole, so this is one of the reads that
+	// loads the payloads.
+	source, err := s.GetWithCases(ctx, p, id)
 	if err != nil {
 		return Problem{}, err
 	}

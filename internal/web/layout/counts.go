@@ -59,6 +59,17 @@ func WithCounts(src CountSource, logger *slog.Logger) func(http.Handler) http.Ha
 	}
 }
 
+// SupplyCounts hands the request the badges a screen has already computed,
+// so the sidebar draws them and the middleware never computes its own. A
+// screen whose read produces the numbers anyway (the queue itself) calls it
+// before rendering; later calls on the same request are ignored, as is a
+// request the middleware is not on.
+func SupplyCounts(ctx context.Context, counts map[string]int) {
+	if l, ok := ctx.Value(countsKey{}).(*liveCounts); ok {
+		l.once.Do(func() { l.counts = counts })
+	}
+}
+
 // counts is what the sidebar draws: the request's live badges, with anything
 // the page set itself on top, since a screen knows its own numbers best.
 func (p Page) counts(ctx context.Context) map[string]int {

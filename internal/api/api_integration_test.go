@@ -91,6 +91,7 @@ func newAPIFixture(t *testing.T) *apiFixture {
 		Tokens:    f.tokens,
 		APITokens: f.tokens,
 		Jobs:      service.NewJobService(st),
+		Problems:  service.NewProblemService(st, passingRunner{}),
 		Portal:    service.NewClientPortalService(st, nil, nil, nil, ""),
 		Talent:    service.NewTalentService(st, nil, nil, nil, ""),
 	})

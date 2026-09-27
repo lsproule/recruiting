@@ -4,7 +4,6 @@ package apply
 
 import (
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -81,7 +80,8 @@ func (h *handlers) submit(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	in, form := inputFromForm(r)
+	in, form, done := inputFromForm(r)
+	defer done()
 	if _, err := h.d.Candidates.Apply(r.Context(), orgSlug, jobSlug, in); err != nil {
 		status := statusFor(err)
 		if status == http.StatusInternalServerError {
@@ -95,9 +95,13 @@ func (h *handlers) submit(w http.ResponseWriter, r *http.Request) {
 	render(w, r, http.StatusOK, thanksPage(page(r, job.Title), job))
 }
 
-// inputFromForm reads the multipart form. The whole file is held in memory:
-// it is capped at 10 MB and the text extractor needs the bytes anyway.
-func inputFromForm(r *http.Request) (service.ApplyInput, applyForm) {
+// inputFromForm reads the multipart form. The file is not copied: it stays
+// where the parser parked the part — in memory when small, on disk past
+// MaxBody's memory cap — and the service reads it there, sniffing its type
+// from the head and refusing an oversized one by its declared size before a
+// byte of it is loaded. The returned func closes the file and must run only
+// once the service is done with the input.
+func inputFromForm(r *http.Request) (service.ApplyInput, applyForm, func()) {
 	in := service.ApplyInput{
 		Name:  r.PostFormValue("name"),
 		Email: r.PostFormValue("email"),
@@ -107,17 +111,10 @@ func inputFromForm(r *http.Request) (service.ApplyInput, applyForm) {
 	form := applyForm{Name: in.Name, Email: in.Email, Phone: in.Phone, Links: r.PostFormValue("links")}
 	file, header, err := r.FormFile(resumeField)
 	if err != nil {
-		return in, form
+		return in, form, func() {}
 	}
-	defer file.Close()
-	// Read one byte past the limit: enough to reject the upload, and nothing
-	// larger ever reaches memory.
-	data, err := io.ReadAll(io.LimitReader(file, domain.MaxResumeBytes+1))
-	if err != nil {
-		return in, form
-	}
-	in.Resume = service.ResumeUpload{Filename: header.Filename, Data: data}
-	return in, form
+	in.Resume = service.ResumeUpload{Filename: header.Filename, File: file, Size: header.Size}
+	return in, form, func() { _ = file.Close() }
 }
 
 // fail answers with the error's status, logging the cause of a 500 rather

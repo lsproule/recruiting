@@ -97,7 +97,12 @@ The following are optional; each has a default suited to local development.
 | `RUNNER_ALLOW_INSECURE_RUNTIME` | unset | Set to `1` to let `runner` fall back to `runc` (no sandbox) when `RUNNER_RUNTIME` is unavailable — **development only** |
 | `RUNNER_IMAGE_PREFIX` | `recruiting-runner-` | Prefix `runner` expects on its per-language execution images |
 | `RUNNER_SQL_URL` | unset | A Postgres URL with `CREATEDB`/`CREATEROLE`, used by `runner` to provision a throwaway database per SQL execution; SQL problems are disabled without it |
-| `RUNNER_MAX_CONCURRENT` | `2` | `runner`'s concurrent execution cap |
+| `RUNNER_MAX_CONCURRENT` | `2` | How many executions `runner` runs at once |
+| `RUNNER_MAX_QUEUE` | 4 × `RUNNER_MAX_CONCURRENT` | How many further requests `runner` holds waiting for a slot before answering 503 |
+| `RUNNER_QUEUE_WAIT` | `20s` | How long one queued request waits for a slot before its 503; clamped to 4m, below the worker's 5m HTTP timeout |
+| `RUNNER_IDLE_EXIT` | unset | A duration after which an idle `runner` (nothing running, nothing queued) exits 0 so an on-demand orchestrator can run none; unset never exits (see `docs/runner-scaling.md`) |
+| `RUNNER_CACHE_MB` | `64` | Byte bound on `runner`'s result cache (results are also capped at 10,000 entries and an hour) |
+| `WORKER_RUNNER_CONCURRENCY` | `4` | How many `runner.execute` jobs one `worker` runs at once, on the queue's own `runner` River queue; the rest of the pool never touches the runner |
 | `JOBPOST_CMD` | unset | The command that runs the job-posting browser automation, e.g. `node tools/jobpost/cli.js`; unset records every posting as failed with a reason. Board credentials and the demo board address are read from the worker's environment (`tools/jobpost/README.md`) |
 | `RTC_ICE_SERVERS` | unset | JSON array of ICE servers interview rooms hand to the browser, e.g. `[{"urls":"stun:stun.example.org:3478"}]`; unset leaves host candidates only, which works on one network and needs STUN or TURN beyond it |
 
@@ -127,6 +132,35 @@ development, logging a warning on every start; production must install
 gVisor rather than set it. `runner` should also run on a network-isolated
 host reached only by the worker, with its own `RUNNER_SQL_URL` database
 separate from the application's.
+
+### Runner capacity, queueing and scale-down
+
+`runner` runs `RUNNER_MAX_CONCURRENT` executions at once and holds up to
+`RUNNER_MAX_QUEUE` more in a wait queue, each for at most `RUNNER_QUEUE_WAIT`.
+Only when the queue is full, or a wait runs out, does it answer `503` with a
+`Retry-After` computed from the queue depth and the recent average execution
+time (2s to 60s). The worker's client absorbs short waits itself; past two
+minutes of them it snoozes the `runner.execute` job for that `Retry-After`
+without charging an attempt, so a busy runner never burns a submission's
+retries. `runner.execute` jobs run on their own River queue, `runner`, with
+`WORKER_RUNNER_CONCURRENCY` workers, so the rest of a worker's pool cannot
+pile onto the runner.
+
+Each sandbox container gets the candidate's memory limit plus a fixed 128 MB
+headroom for the harness, the `/tmp` tmpfs and a managed runtime's own
+overhead; JVM and .NET heaps are sized from the candidate's limit, not the
+container's. Everything the runner reads from a sandbox is bounded: compile
+diagnostics and test stderr are kept as 4 KiB tails, a program's output to
+its `output_kb`, and the harness's whole result document to a few MiB, past
+which the run is a runner error rather than a verdict on the candidate.
+
+`GET /status` (bearer `RUNNER_SECRET`, like `/execute`) answers
+`{in_flight, queued, capacity, queue_capacity, idle_seconds}`, and
+`/metrics` on `METRICS_ADDR` carries the same as `runner_*` series.
+`RUNNER_IDLE_EXIT` makes an idle runner exit 0 so an orchestrator with
+on-demand start can run none; `docs/runner-scaling.md` describes autoscaling
+on `runner_queue_depth` and `runner_executions_in_flight` and how the idle
+exit is meant to be used.
 
 ## Make targets
 
@@ -329,9 +363,10 @@ link until the deadline.
 Every mode logs structured JSON to stdout via `log/slog` and answers
 `/metrics` in Prometheus text exposition format: `serve` on `LISTEN_ADDR`
 alongside its other routes, `worker` and `runner` on their own `METRICS_ADDR`
-listener. All three read from the same metrics registry
+listener. `serve` and `worker` read from the same metrics registry
 (`internal/observe`), registered once so the two-listener split can never
-double-register a name.
+double-register a name; `runner`, deployed apart from the app, serves its
+own `runner_*` registry (`internal/runner/server`).
 
 ### Log fields
 
@@ -357,6 +392,17 @@ into a log line by way of it.
 | `recruiting_runner_execute_failures_total` | counter | `runner.execute` jobs whose handler returned an error |
 | `recruiting_booking_conflicts_total` | counter | Interview-slot bookings refused because the slot was already taken |
 | `recruiting_email_send_failures_total` | counter | `email.send` jobs whose handler returned an error |
+
+The `runner` process exposes its own series on its `METRICS_ADDR`:
+
+| Metric | Kind | Meaning |
+| ------ | ---- | ------- |
+| `runner_executions_in_flight` | gauge | Executions running in a sandbox right now |
+| `runner_queue_depth` | gauge | Requests waiting for a sandbox slot |
+| `runner_executions_total{status}` | counter | Executions by response status (`ok`, `compile_error`, `runtime_error`, `timeout`, `error`), plus `rejected` for 503s |
+| `runner_execution_seconds` | histogram | Duration of one execution, admission to result |
+| `runner_queue_wait_seconds` | histogram | Time a request waited for a slot, rejected waits included |
+| `runner_last_execution_timestamp_seconds` | gauge | Unix time the last execution finished; 0 before the first |
 
 `river_job` is the one table Postgres's row-level security exempts: it
 carries no `org_id` and no tenant data, only job kinds and JSON payloads

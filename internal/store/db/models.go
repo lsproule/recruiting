@@ -76,30 +76,33 @@ type AssessmentProblem struct {
 }
 
 type Attempt struct {
-	ID               uuid.UUID
-	OrgID            uuid.UUID
-	ApplicationID    uuid.NullUUID
-	AssessmentID     uuid.UUID
-	StageID          uuid.NullUUID
-	Status           string
-	InvitedAt        pgtype.Timestamptz
-	InviteExpiresAt  pgtype.Timestamptz
-	StartedAt        pgtype.Timestamptz
-	ExpiresAt        pgtype.Timestamptz
-	FinishedAt       pgtype.Timestamptz
-	Score            pgtype.Numeric
-	RiskScore        pgtype.Numeric
-	RecordingStatus  string
-	RecordingBlobKey *string
-	CreatedAt        pgtype.Timestamptz
-	UpdatedAt        pgtype.Timestamptz
-	LastEventSeq     int64
-	ProblemScores    []byte
-	ErrorCount       int32
-	Preview          bool
-	PreviewUserID    uuid.NullUUID
-	ConsentAt        pgtype.Timestamptz
-	IdentityBlobKey  *string
+	ID                 uuid.UUID
+	OrgID              uuid.UUID
+	ApplicationID      uuid.NullUUID
+	AssessmentID       uuid.UUID
+	StageID            uuid.NullUUID
+	Status             string
+	InvitedAt          pgtype.Timestamptz
+	InviteExpiresAt    pgtype.Timestamptz
+	StartedAt          pgtype.Timestamptz
+	ExpiresAt          pgtype.Timestamptz
+	FinishedAt         pgtype.Timestamptz
+	Score              pgtype.Numeric
+	RiskScore          pgtype.Numeric
+	RecordingStatus    string
+	RecordingBlobKey   *string
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+	LastEventSeq       int64
+	ProblemScores      []byte
+	ErrorCount         int32
+	Preview            bool
+	PreviewUserID      uuid.NullUUID
+	ConsentAt          pgtype.Timestamptz
+	IdentityBlobKey    *string
+	RecordingEvents    int64
+	RecordingBytes     int64
+	RecordingTruncated bool
 }
 
 type AttemptEvent struct {

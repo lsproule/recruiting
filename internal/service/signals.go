@@ -1,8 +1,6 @@
 package service
 
 import (
-	"bufio"
-	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -118,10 +116,9 @@ func (s *SignalsService) load(ctx context.Context, p SignalsComputePayload) (sig
 		if att.StartedAt.Valid {
 			in.StartedAt = att.StartedAt.Time.UTC()
 		}
-		in.Incomplete = att.RecordingStatus == RecordingIncomplete
-		if in.Events, err = s.events(ctx, tx, att); err != nil {
-			return err
-		}
+		// A recording with a gap, or one cut off at the ceiling, is missing
+		// events: every signal is still computed, at low confidence.
+		in.Incomplete = att.RecordingStatus == RecordingIncomplete || att.RecordingTruncated
 		subs, err := tx.Q.ListSubmissions(ctx, p.AttemptID)
 		if err != nil {
 			return err
@@ -131,7 +128,14 @@ func (s *SignalsService) load(ctx context.Context, p SignalsComputePayload) (sig
 		if err != nil {
 			return err
 		}
-		in.InitialSources = initialSources(in.Events, sources)
+		edited, err := editedProblems(ctx, tx, att.ID)
+		if err != nil {
+			return err
+		}
+		in.InitialSources = initialSources(edited, sources)
+		if in.Stream, err = s.stream(ctx, tx, att, in.InitialSources); err != nil {
+			return err
+		}
 		a, err := loadAssessment(ctx, tx, att.AssessmentID)
 		if err != nil {
 			return err
@@ -160,55 +164,34 @@ func (s *SignalsService) load(ctx context.Context, p SignalsComputePayload) (sig
 	return in, weights, err
 }
 
-// events reads the recording: the compacted stream when finalization put
-// it in object storage, the attempt_event rows otherwise. Rows outlive the
-// compaction, so a missing object is not fatal either.
-func (s *SignalsService) events(ctx context.Context, tx *store.Tx, att db.Attempt) ([]signals.Event, error) {
+// stream folds the recording into what the signals read, one event at a
+// time: from the compacted object when finalization put it in object
+// storage, from the attempt_event rows a page at a time otherwise. Rows
+// outlive the compaction, so an object that cannot be read is not fatal;
+// the fold starts over from the rows so nothing is counted twice.
+func (s *SignalsService) stream(ctx context.Context, tx *store.Tx, att db.Attempt, initial map[uuid.UUID]string) (*signals.Stream, error) {
 	if s.blob != nil && att.RecordingBlobKey != nil {
-		events, err := s.readCompacted(ctx, *att.RecordingBlobKey)
+		st := signals.NewStream(initial)
+		err := eachCompactedEvent(ctx, s.blob, *att.RecordingBlobKey, func(ev RecordedEvent) error {
+			st.Add(signals.Event(ev))
+			return nil
+		})
 		if err == nil {
-			return events, nil
+			return st, nil
 		}
 		if s.Logger != nil {
 			s.Logger.Warn("reading the recording from the database instead of object storage", "attempt_id", att.ID, "error", err)
 		}
 	}
-	rows, err := tx.Q.ListAttemptEvents(ctx, att.ID)
+	st := signals.NewStream(initial)
+	_, err := eachAttemptEvent(ctx, tx, att.ID, func(ev RecordedEvent) error {
+		st.Add(signals.Event(ev))
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	out := make([]signals.Event, 0, len(rows))
-	for _, ev := range recordedEvents(rows) {
-		out = append(out, signals.Event(ev))
-	}
-	return out, nil
-}
-
-func (s *SignalsService) readCompacted(ctx context.Context, key string) ([]signals.Event, error) {
-	rc, err := s.blob.Get(ctx, key)
-	if err != nil {
-		return nil, err
-	}
-	defer rc.Close()
-	gz, err := gzip.NewReader(rc)
-	if err != nil {
-		return nil, fmt.Errorf("gunzip %s: %w", key, err)
-	}
-	defer gz.Close()
-	var out []signals.Event
-	sc := bufio.NewScanner(gz)
-	sc.Buffer(make([]byte, 0, 64<<10), MaxEventDataBytes*2)
-	for sc.Scan() {
-		var ev signals.Event
-		if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
-			return nil, fmt.Errorf("decode %s: %w", key, err)
-		}
-		out = append(out, ev)
-	}
-	if err := sc.Err(); err != nil {
-		return nil, fmt.Errorf("read %s: %w", key, err)
-	}
-	return out, nil
+	return st, nil
 }
 
 // signalSubmissions projects the rows to what the signals read: when each
@@ -256,14 +239,10 @@ func finalSource(problemID uuid.UUID, subs []db.Submission, sources []db.Attempt
 // initialSources is the editor text each problem started from. Nothing
 // records the text before the first event, so the synced source stands in
 // only for a problem whose stream holds no edit at all: the text was there
-// before recording began and nothing has changed it since.
-func initialSources(events []signals.Event, sources []db.AttemptSource) map[uuid.UUID]string {
-	edited := map[uuid.UUID]bool{}
-	for _, ev := range events {
-		if ev.Kind == "edit" && ev.ProblemID != nil {
-			edited[*ev.ProblemID] = true
-		}
-	}
+// before recording began and nothing has changed it since. edited is the
+// set of problems the rows hold an edit for, asked of the database so the
+// answer is known before the stream is folded.
+func initialSources(edited map[uuid.UUID]bool, sources []db.AttemptSource) map[uuid.UUID]string {
 	out := map[uuid.UUID]string{}
 	for _, src := range sources {
 		if !edited[src.ProblemID] {

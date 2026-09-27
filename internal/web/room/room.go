@@ -120,7 +120,7 @@ func statusFor(err error) int {
 		return http.StatusForbidden
 	case errors.Is(err, service.ErrNotFound), errors.Is(err, service.ErrRoomKind):
 		return http.StatusNotFound
-	case errors.Is(err, service.ErrRoomClosed), errors.Is(err, service.ErrSprintNotScheduled):
+	case errors.Is(err, service.ErrRoomClosed), errors.Is(err, service.ErrSprintNotScheduled), errors.Is(err, service.ErrDocLogFull):
 		return http.StatusConflict
 	case errors.Is(err, service.ErrRoomLanguage):
 		return http.StatusUnprocessableEntity

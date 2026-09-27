@@ -5,6 +5,7 @@
 package workqueue
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -35,9 +36,18 @@ const DecidePath = Prefix + "/decide"
 // filterParam names the rule the screen is narrowed to; absent means all.
 const filterParam = "kind"
 
+// Queue is what the screen asks of the work queue service: the rows, the
+// badges the rows give, and the two things a row can be done to.
+type Queue interface {
+	List(ctx context.Context, p service.Principal, filter service.QueueKind) ([]service.QueueItem, error)
+	NavCountsFrom(ctx context.Context, p service.Principal, items []service.QueueItem) (map[string]int, error)
+	Decide(ctx context.Context, p service.Principal, req service.DecideRequest) error
+	Snooze(ctx context.Context, p service.Principal, kind service.QueueKind, subjectID uuid.UUID, until time.Time) error
+}
+
 // Deps is what Mount needs. Org supplies the signed-in user's display name.
 type Deps struct {
-	Queue *service.WorkQueueService
+	Queue Queue
 	Org   *service.OrgService
 	// Logger records the errors behind a 500; the visitor only ever sees a
 	// generic message. Nil disables that logging.
@@ -95,20 +105,25 @@ func (h *handlers) show(w http.ResponseWriter, r *http.Request) {
 }
 
 // render draws the queue as it stands, with any flash the last action left.
+// The queue is read once: the chips, the rows the filter keeps, and the
+// sidebar badge all come off that one list.
 func (h *handlers) render(w http.ResponseWriter, r *http.Request, filter service.QueueKind, flashes ...layout.Flash) {
 	p, _ := middleware.PrincipalFrom(r.Context())
-	items, err := h.d.Queue.List(r.Context(), p, filter)
+	all, err := h.d.Queue.List(r.Context(), p, "")
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
-	counts, err := h.d.Queue.Counts(r.Context(), p)
+	nav, err := h.d.Queue.NavCountsFrom(r.Context(), p, all)
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
-	render(w, r, http.StatusOK, queuePage(h.page(r, "Work queue", flashes...), queueView{
-		Items: items, Counts: counts, Filter: filter,
+	layout.SupplyCounts(r.Context(), nav)
+	page := h.page(r, "Work queue", flashes...)
+	page.NavCounts = nav
+	render(w, r, http.StatusOK, queuePage(page, queueView{
+		Items: service.FilterItems(all, filter), Counts: service.CountItems(all), Filter: filter,
 	}, middleware.CSRFToken(r)))
 }
 

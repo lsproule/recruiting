@@ -1,8 +1,6 @@
 package service
 
 import (
-	"bytes"
-	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"os"
 	"time"
 
 	"github.com/google/uuid"
@@ -269,76 +268,73 @@ func (s *ScoringService) now() time.Time {
 
 // compact writes the recording to object storage and reports the key and the
 // recording's status. Without object storage the events stay in Postgres; the
-// attempt is still scored and the gap check still stands.
+// attempt is still scored and the gap check still stands. The stream is
+// walked a page at a time into a gzip spool on disk and uploaded from there
+// with its size known, so a long sitting never sits in the worker's memory:
+// the S3 client buffers an object it is not told the size of.
 func (s *ScoringService) compact(ctx context.Context, p AttemptFinalizePayload, att db.Attempt) (string, string, error) {
-	var events []RecordedEvent
-	var stored int64
-	err := s.st.WithTx(ctx, orgScoped(p.OrgID), func(ctx context.Context, tx *store.Tx) error {
-		rows, err := tx.Q.ListAttemptEvents(ctx, p.AttemptID)
-		if err != nil {
+	if s.blob == nil {
+		var stored int64
+		err := s.st.WithTx(ctx, orgScoped(p.OrgID), func(ctx context.Context, tx *store.Tx) error {
+			var err error
+			stored, err = tx.Q.CountAttemptEvents(ctx, p.AttemptID)
 			return err
+		})
+		if err != nil {
+			return "", RecordingPending, err
 		}
-		events = recordedEvents(rows)
-		stored, err = tx.Q.CountAttemptEvents(ctx, p.AttemptID)
-		return err
-	})
+		if s.Logger != nil {
+			s.Logger.Warn("no object storage configured; the recording stays in the database", "attempt_id", p.AttemptID)
+		}
+		return "", recordingStatus(stored, att.LastEventSeq), nil
+	}
+	spool, err := os.CreateTemp("", "recording-*.jsonl.gz")
+	if err != nil {
+		return "", RecordingPending, fmt.Errorf("compact events: %w", err)
+	}
+	defer os.Remove(spool.Name())
+	defer spool.Close()
+	stored, err := s.spool(ctx, p, spool)
 	if err != nil {
 		return "", RecordingPending, err
 	}
 	status := recordingStatus(stored, att.LastEventSeq)
-	if s.blob == nil {
-		if s.Logger != nil {
-			s.Logger.Warn("no object storage configured; the recording stays in the database", "attempt_id", p.AttemptID)
-		}
-		return "", status, nil
+	size, err := spool.Seek(0, io.SeekEnd)
+	if err != nil {
+		return "", status, fmt.Errorf("compact events: %w", err)
 	}
-	var buf bytes.Buffer
-	if err := compactEvents(&buf, events); err != nil {
-		return "", status, err
+	if _, err := spool.Seek(0, io.SeekStart); err != nil {
+		return "", status, fmt.Errorf("compact events: %w", err)
 	}
 	key := eventsBlobKey(p.AttemptID)
-	if err := s.blob.Put(ctx, key, bytes.NewReader(buf.Bytes()), int64(buf.Len()), eventsContentType); err != nil {
+	if err := s.blob.Put(ctx, key, spool, size, eventsContentType); err != nil {
 		return "", status, err
 	}
 	return key, status, nil
 }
 
+// spool writes the compacted stream to w, a page of rows at a time, and
+// reports how many events it holds.
+func (s *ScoringService) spool(ctx context.Context, p AttemptFinalizePayload, w io.Writer) (int64, error) {
+	rw := newRecordingWriter(w)
+	var stored int64
+	err := s.st.WithTx(ctx, orgScoped(p.OrgID), func(ctx context.Context, tx *store.Tx) error {
+		var err error
+		stored, err = eachAttemptEvent(ctx, tx, p.AttemptID, rw.write)
+		return err
+	})
+	if err != nil {
+		return 0, err
+	}
+	if err := rw.close(); err != nil {
+		return 0, err
+	}
+	return stored, nil
+}
+
 // eventsBlobKey is where an attempt's compacted recording lives.
 func eventsBlobKey(attemptID uuid.UUID) string {
 	return "attempts/" + attemptID.String() + "/events.jsonl.gz"
-}
-
-// compactEvents writes the stream as gzipped JSON lines, one event per line
-// in seq order, which is what the replay viewer reads back.
-func compactEvents(w io.Writer, events []RecordedEvent) error {
-	gz := gzip.NewWriter(w)
-	enc := json.NewEncoder(gz)
-	for _, ev := range events {
-		if err := enc.Encode(ev); err != nil {
-			return fmt.Errorf("compact events: %w", err)
-		}
-	}
-	if err := gz.Close(); err != nil {
-		return fmt.Errorf("compact events: %w", err)
-	}
-	return nil
-}
-
-func recordedEvents(rows []db.AttemptEvent) []RecordedEvent {
-	out := make([]RecordedEvent, 0, len(rows))
-	for _, r := range rows {
-		ev := RecordedEvent{Seq: r.Seq, Kind: r.Kind, ServerTs: r.ServerTs.Time.UTC(), Payload: json.RawMessage(r.Payload)}
-		if r.ProblemID.Valid {
-			id := r.ProblemID.UUID
-			ev.ProblemID = &id
-		}
-		if r.ClientTs.Valid {
-			at := r.ClientTs.Time.UTC()
-			ev.ClientTs = &at
-		}
-		out = append(out, ev)
-	}
-	return out
 }
 
 // recordingStatus compares the events actually stored with the highest seq

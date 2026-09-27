@@ -140,6 +140,17 @@ type ImportTestCase struct {
 	Weight     *float64        `json:"weight"`
 	// Unordered compares SQL result rows as a multiset; ignored for code.
 	Unordered bool `json:"unordered"`
+
+	// typed is the verdict of decoding the case against the signature,
+	// recorded by Normalize so Validate does not decode a multi-megabyte
+	// perf case a second time. Nil until Normalize has run.
+	typed *typedCase
+}
+
+// typedCase is what decoding a function case against its signature found:
+// nil errors when the arguments and the return value fit it.
+type typedCase struct {
+	args, returns error
 }
 
 // WeightValue is the case's weight, 1 when the document omitted one.
@@ -301,25 +312,49 @@ func (p *ImportProblem) Normalize() {
 // arguments, Expected the canonical JSON of the result. A case written with
 // Input and Expected already in that shape is left alone; one whose values
 // do not fit the signature keeps what it was given so Validate can say why.
+//
+// Each half is decoded exactly once, here, and the verdict kept on the
+// case: a perf case carries a hundred thousand values, and decoding it
+// again to validate it would cost as much as reading it did.
 func (p ImportProblem) normalizeFunctionCase(tc *ImportTestCase) {
+	verdict := &typedCase{}
 	if len(tc.Args) > 0 {
-		if args, err := p.Signature.ArgsOf(tc.Args); err == nil {
-			tc.Input = wire.CanonicalJSON(argsList(args))
+		args, err := p.Signature.ArgsOf(tc.Args)
+		if err == nil {
+			tc.Input = wire.CanonicalJSON(args)
 		} else {
 			tc.Input = string(tc.Args)
 		}
+		verdict.args = err
+	} else {
+		_, verdict.args = p.Signature.ArgsOf(json.RawMessage(tc.Input))
 	}
 	if len(tc.Returns) > 0 {
-		if v, err := wire.DecodeTyped(p.Signature.Returns, tc.Returns); err == nil {
+		v, err := wire.DecodeTyped(p.Signature.Returns, tc.Returns)
+		if err == nil {
 			tc.Expected = wire.CanonicalJSON(v)
 		} else {
 			tc.Expected = string(tc.Returns)
 		}
+		verdict.returns = err
+	} else {
+		_, verdict.returns = wire.DecodeTyped(p.Signature.Returns, json.RawMessage(tc.Expected))
 	}
 	tc.Args, tc.Returns = nil, nil
+	tc.typed = verdict
 }
 
-func argsList(args []any) []any { return args }
+// typedVerdict is the case's fit against the signature: what Normalize
+// recorded, or a decode now for a case that was built after it ran.
+func (p ImportProblem) typedVerdict(tc ImportTestCase) typedCase {
+	if tc.typed != nil {
+		return *tc.typed
+	}
+	var v typedCase
+	_, v.args = p.Signature.ArgsOf(json.RawMessage(tc.Input))
+	_, v.returns = wire.DecodeTyped(p.Signature.Returns, json.RawMessage(tc.Expected))
+	return v
+}
 
 // Validate returns every reason the problem cannot be stored, in reading
 // order, so an import report tells the author about all of them at once.
@@ -444,11 +479,12 @@ func (p ImportProblem) validateTestCases() []string {
 			errs = append(errs, fmt.Sprintf("test_cases[%d] has weight %v; a weight must be positive", i, tc.WeightValue()))
 		}
 		if p.Kind == ProblemKindFunction && p.Signature != nil {
-			if _, err := p.Signature.ArgsOf(json.RawMessage(tc.Input)); err != nil {
-				errs = append(errs, fmt.Sprintf("test_cases[%d] args: %v", i, err))
+			verdict := p.typedVerdict(tc)
+			if verdict.args != nil {
+				errs = append(errs, fmt.Sprintf("test_cases[%d] args: %v", i, verdict.args))
 			}
-			if _, err := wire.DecodeTyped(p.Signature.Returns, json.RawMessage(tc.Expected)); err != nil {
-				errs = append(errs, fmt.Sprintf("test_cases[%d] returns: %v", i, err))
+			if verdict.returns != nil {
+				errs = append(errs, fmt.Sprintf("test_cases[%d] returns: %v", i, verdict.returns))
 			}
 		}
 	}

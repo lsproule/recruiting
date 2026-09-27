@@ -1,7 +1,6 @@
 package signals
 
 import (
-	"encoding/json"
 	"fmt"
 	"math"
 	"regexp"
@@ -113,7 +112,14 @@ type Problem struct {
 // Input is everything one attempt's signals are computed from.
 type Input struct {
 	StartedAt time.Time
-	Events    []Event
+	// Events is the whole recording, held in memory. A caller that would
+	// rather not hold it folds the events into Stream as it decodes them
+	// and leaves Events empty.
+	Events []Event
+	// Stream is the recording already folded, event by event, into what the
+	// signals read. Set, it stands in for Events and InitialSources, which
+	// the fold was started with.
+	Stream *Stream
 	// InitialSources is each problem's editor text before its first event.
 	InitialSources map[uuid.UUID]string
 	Submissions    []Submission
@@ -146,7 +152,14 @@ type Signal struct {
 // Compute runs every signal over the input and returns them in a fixed
 // order, one per name, values clamped to 0–1.
 func Compute(in Input) []Signal {
-	timelines := Build(in.Events, in.InitialSources)
+	stream := in.Stream
+	if stream == nil {
+		stream = NewStream(in.InitialSources)
+		for _, ev := range bySeq(in.Events) {
+			stream.Add(ev)
+		}
+	}
+	timelines := stream.Timelines()
 	problems := make([]Problem, 0, len(in.Problems))
 	for _, p := range in.Problems {
 		if p.FinalSource == "" {
@@ -156,8 +169,8 @@ func Compute(in Input) []Signal {
 		}
 		problems = append(problems, p)
 	}
-	in.Submissions = clockSubmissions(in.Events, in.Submissions)
-	ctx := computation{in: in, timelines: timelines, problems: problems}
+	in.Submissions = stream.clockSubmissions(in.Submissions)
+	ctx := computation{in: in, stream: stream, timelines: timelines, problems: problems}
 	sigs := []Signal{
 		ctx.pasteRatio(),
 		ctx.pasteThenPass(),
@@ -184,35 +197,6 @@ func Compute(in Input) []Signal {
 	return sigs
 }
 
-// clockSubmissions gives each submission the client time and seq of the run
-// or submit event that names it, so paste and blur comparisons sit on one
-// clock. One the stream never named is measured on the server's time.
-func clockSubmissions(events []Event, subs []Submission) []Submission {
-	named := map[uuid.UUID]Event{}
-	for _, ev := range events {
-		if ev.Kind != "run" && ev.Kind != "submit" {
-			continue
-		}
-		var data struct {
-			SubmissionID uuid.UUID `json:"submission_id"`
-		}
-		if err := json.Unmarshal(ev.Payload, &data); err == nil && data.SubmissionID != uuid.Nil {
-			named[data.SubmissionID] = ev
-		}
-	}
-	out := make([]Submission, len(subs))
-	for i, sub := range subs {
-		if ev, ok := named[sub.ID]; ok {
-			sub.ClientAt, sub.Seq = ev.At(), ev.Seq
-		}
-		if sub.ClientAt.IsZero() {
-			sub.ClientAt = sub.At
-		}
-		out[i] = sub
-	}
-	return out
-}
-
 func at(t time.Time) *time.Time {
 	if t.IsZero() {
 		return nil
@@ -235,6 +219,7 @@ func Risk(sigs []Signal, weights map[string]float64) float64 {
 
 type computation struct {
 	in        Input
+	stream    *Stream
 	timelines map[uuid.UUID]*Timeline
 	problems  []Problem
 }

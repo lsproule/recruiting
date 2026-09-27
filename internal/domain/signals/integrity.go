@@ -1,7 +1,6 @@
 package signals
 
 import (
-	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -27,45 +26,21 @@ const (
 // session that never enforced fullscreen records neither and stays at 0.
 func (c computation) fullscreenExits() Signal {
 	s := Signal{Name: FullscreenExits}
-	events := bySeq(c.in.Events)
-	if len(events) == 0 {
+	if c.stream.Count() == 0 {
 		return s
 	}
-	end := events[len(events)-1].At()
 	var outside time.Duration
-	var exits int
-	open := -1
-	closeAt := func(when time.Time) {
-		ev := events[open]
-		away := when.Sub(ev.At())
-		if away < 0 {
-			away = 0
-		}
-		outside += away
+	// The stream closed an exit never returned from at its last event: the
+	// candidate was outside for the rest of the recording.
+	for _, exit := range c.stream.exits {
+		outside += exit.Away
 		s.Evidence = append(s.Evidence, Evidence{
-			ProblemID: problemOf(ev), At: at(ev.At()), Seq: ev.Seq,
-			Note:   fmt.Sprintf("left fullscreen for %s", away.Round(time.Second)),
-			Values: map[string]float64{"seconds": away.Seconds()},
+			ProblemID: exit.ProblemID, At: at(exit.At), Seq: exit.Seq,
+			Note:   fmt.Sprintf("left fullscreen for %s", exit.Away.Round(time.Second)),
+			Values: map[string]float64{"seconds": exit.Away.Seconds()},
 		})
-		open = -1
 	}
-	for i, ev := range events {
-		switch ev.Kind {
-		case "fullscreen_exit":
-			if open < 0 {
-				open, exits = i, exits+1
-			}
-		case "fullscreen_enter":
-			if open >= 0 {
-				closeAt(ev.At())
-			}
-		}
-	}
-	if open >= 0 {
-		// Never returned: the candidate was outside for the rest of the
-		// recording.
-		closeAt(end)
-	}
+	exits := len(c.stream.exits)
 	if exits == 0 {
 		return s
 	}
@@ -86,35 +61,16 @@ func (c computation) snapshotGaps() Signal {
 		// The webcam was off: nothing was expected, so nothing is missing.
 		return s
 	}
-	events := bySeq(c.in.Events)
-	if len(events) == 0 {
+	if c.stream.Count() == 0 {
 		s.Confidence = ConfidenceLow
 		return s
 	}
-	var taken, reported int
-	seen := map[int]bool{}
-	for _, ev := range events {
-		if ev.Kind != "snapshot" {
-			continue
-		}
-		var d struct {
-			Seq int  `json:"seq"`
-			OK  bool `json:"ok"`
-		}
-		if err := json.Unmarshal(ev.Payload, &d); err != nil || seen[d.Seq] {
-			continue
-		}
-		seen[d.Seq] = true
-		reported++
-		if d.OK {
-			taken++
-		}
-	}
+	taken, reported := c.stream.taken, c.stream.reported
 	start := c.in.StartedAt
-	if start.IsZero() || events[0].At().Before(start) {
-		start = events[0].At()
+	if start.IsZero() || c.stream.first.Before(start) {
+		start = c.stream.first
 	}
-	covered := events[len(events)-1].At().Sub(start)
+	covered := c.stream.last.Sub(start)
 	expected := max(reported, int(covered/c.in.WebcamEvery))
 	if expected == 0 {
 		s.Confidence = ConfidenceLow

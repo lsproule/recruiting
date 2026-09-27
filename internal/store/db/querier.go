@@ -193,6 +193,7 @@ type Querier interface {
 	GetTalentProfile(ctx context.Context, id uuid.UUID) (GetTalentProfileRow, error)
 	GetTalentProfileByCandidate(ctx context.Context, candidateID uuid.UUID) (TalentProfile, error)
 	GetTalentRequest(ctx context.Context, id uuid.UUID) (GetTalentRequestRow, error)
+	GetTestCase(ctx context.Context, arg GetTestCaseParams) (TestCase, error)
 	HasScorecardForStage(ctx context.Context, arg HasScorecardForStageParams) (bool, error)
 	// Whether any interviewer rated the application in a sprint of this stage.
 	HasSprintRatingForStage(ctx context.Context, arg HasSprintRatingForStageParams) (bool, error)
@@ -282,6 +283,9 @@ type Querier interface {
 	// The default first, so a picker that takes the head takes the org's default.
 	ListPipelineTemplates(ctx context.Context, orgID uuid.UUID) ([]PipelineTemplate, error)
 	ListProblemReferences(ctx context.Context, problemID uuid.UUID) ([]ProblemReference, error)
+	// The cases a candidate may see, payloads included: the worked examples,
+	// which are small by construction.
+	ListPublicTestCases(ctx context.Context, problemID uuid.UUID) ([]TestCase, error)
 	// The client asked a question and no org user has touched the application
 	// since: every recruiter reply lands on the timeline, so a later org_user
 	// event is the answer. The oldest unanswered question per application wins,
@@ -365,7 +369,16 @@ type Querier interface {
 	// how many introductions are waiting to be sent on each.
 	ListTalentRequests(ctx context.Context, orgID uuid.UUID) ([]ListTalentRequestsRow, error)
 	ListTalentRequestsByCompany(ctx context.Context, clientCompanyID uuid.UUID) ([]ListTalentRequestsByCompanyRow, error)
+	// Everything about a problem's cases but the payloads: the byte size of
+	// each stands in for it, which is all a poll, a review, or a score needs.
+	ListTestCaseMeta(ctx context.Context, problemID uuid.UUID) ([]ListTestCaseMetaRow, error)
+	// Every case with its payload. A perf case's input runs to megabytes, so
+	// only a path that hands the cases to the runner reads this; everything
+	// else reads ListTestCaseMeta.
 	ListTestCases(ctx context.Context, problemID uuid.UUID) ([]TestCase, error)
+	// The cases whose payloads both fit in max_bytes, which is what a form can
+	// inline; the larger ones are edited by reference.
+	ListTestCasesWithin(ctx context.Context, arg ListTestCasesWithinParams) ([]TestCase, error)
 	// The interviews waiting on the signed-in vetter, with their own card if they
 	// have already filed one.
 	ListVetterAssignments(ctx context.Context, vetterID uuid.UUID) ([]ListVetterAssignmentsRow, error)
@@ -381,6 +394,7 @@ type Querier interface {
 	LookupOrgUsersByEmail(ctx context.Context, lower string) ([]LookupOrgUsersByEmailRow, error)
 	LookupPasswordReset(ctx context.Context, tokenHash string) (PasswordReset, error)
 	LookupSession(ctx context.Context, tokenHash string) (Session, error)
+	MarkAttemptRecordingTruncated(ctx context.Context, id uuid.UUID) error
 	MarkMagicLinkUsed(ctx context.Context, id uuid.UUID) (int64, error)
 	MarkPasswordResetUsed(ctx context.Context, id uuid.UUID) (int64, error)
 	MarkPasswordResetsUsedForClientUser(ctx context.Context, clientUserID uuid.NullUUID) error
@@ -390,6 +404,9 @@ type Querier interface {
 	// Conditional on the stage the mover saw, so a move decided on a stale read
 	// updates nothing rather than overwriting a concurrent move.
 	MoveApplication(ctx context.Context, arg MoveApplicationParams) (Application, error)
+	// Advances the accepted seq and charges the batch against the attempt's
+	// recording ceiling.
+	RecordAttemptEventUsage(ctx context.Context, arg RecordAttemptEventUsageParams) error
 	RejoinTalentProfile(ctx context.Context, id uuid.UUID) (int64, error)
 	RemoveJobPosting(ctx context.Context, arg RemoveJobPostingParams) (int64, error)
 	RemoveTalentPoolEntry(ctx context.Context, id uuid.UUID) (int64, error)

@@ -77,3 +77,27 @@ func TestLoadHonorsExplicitDatabaseURLApp(t *testing.T) {
 		t.Fatalf("explicit DATABASE_URL_APP not honored: %q", cfg.DatabaseURLApp)
 	}
 }
+
+func TestLoadReadsWorkerRunnerConcurrency(t *testing.T) {
+	for _, name := range required {
+		t.Setenv(name, "value-"+name)
+	}
+	t.Setenv("WORKER_RUNNER_CONCURRENCY", "")
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.WorkerRunnerConcurrency != config.DefaultWorkerRunnerConcurrency {
+		t.Errorf("WorkerRunnerConcurrency = %d, want the default %d", cfg.WorkerRunnerConcurrency, config.DefaultWorkerRunnerConcurrency)
+	}
+	t.Setenv("WORKER_RUNNER_CONCURRENCY", "7")
+	if cfg, err = config.Load(); err != nil || cfg.WorkerRunnerConcurrency != 7 {
+		t.Errorf("WorkerRunnerConcurrency = %d, %v; want 7", cfg.WorkerRunnerConcurrency, err)
+	}
+	for _, bad := range []string{"0", "-1", "many"} {
+		t.Setenv("WORKER_RUNNER_CONCURRENCY", bad)
+		if _, err := config.Load(); err == nil || !strings.Contains(err.Error(), "WORKER_RUNNER_CONCURRENCY") {
+			t.Errorf("WORKER_RUNNER_CONCURRENCY=%q: err = %v, want it named", bad, err)
+		}
+	}
+}

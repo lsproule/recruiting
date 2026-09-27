@@ -2,6 +2,7 @@ package problems
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -156,6 +157,46 @@ type testCaseRow struct {
 	Visibility string
 	Weight     string
 	Unordered  bool
+
+	// Keep is the stored case's id when its payload is too large to put on
+	// the page: the form carries the id instead, and a save keeps the case
+	// as stored. InputBytes and ExpectedBytes say how large it is.
+	Keep          string
+	InputBytes    int
+	ExpectedBytes int
+}
+
+// kept reports whether the row stands for a stored payload the page does
+// not carry.
+func (tc testCaseRow) kept() bool { return tc.Keep != "" }
+
+// InlineCaseBytes is the largest payload half the form puts in a textarea.
+// Anything larger — a performance case with a hundred thousand values — is
+// shown by size and kept by reference, so the page stays small and the post
+// stays inside the server's form limit; such a case is replaced through the
+// JSON import rather than typed.
+const InlineCaseBytes = 16 << 10
+
+// casePath is where one case is read whole: the API's case resource, which
+// the form links to for a payload it does not inline.
+func casePath(problemID uuid.UUID, caseID string) string {
+	return "/api/v1/problems/" + problemID.String() + "/cases/" + caseID
+}
+
+// byteSize renders a payload size for a person.
+func byteSize(n int) string {
+	switch {
+	case n < 1<<10:
+		return strconv.Itoa(n) + " B"
+	case n < 1<<20:
+		return fmt.Sprintf("%.0f KB", float64(n)/(1<<10))
+	}
+	return fmt.Sprintf("%.1f MB", float64(n)/(1<<20))
+}
+
+// caseSizeText names the two halves of a case by size.
+func caseSizeText(inputBytes, expectedBytes int) string {
+	return byteSize(inputBytes) + " in, " + byteSize(expectedBytes) + " expected"
 }
 
 // action is where the form posts a save: a new problem to the collection, an
@@ -270,7 +311,7 @@ func (f problemForm) asImport() domain.ImportProblem {
 		out.References = append(out.References, domain.ImportReference{Language: ref.Language, Source: ref.Source})
 	}
 	for _, tc := range f.TestCases {
-		if strings.TrimSpace(tc.Expected) == "" && strings.TrimSpace(tc.Input) == "" {
+		if !tc.kept() && strings.TrimSpace(tc.Expected) == "" && strings.TrimSpace(tc.Input) == "" {
 			continue
 		}
 		imported := domain.ImportTestCase{
@@ -335,11 +376,18 @@ func formOf(p service.Problem) problemForm {
 		f.References = append(f.References, referenceRow{Language: r.Language, Source: r.Source})
 	}
 	for _, c := range p.TestCases {
-		f.TestCases = append(f.TestCases, testCaseRow{
+		row := testCaseRow{
 			Name: c.Name, Class: c.Class,
 			Input: c.Input, Expected: c.Expected, Visibility: c.Visibility,
 			Weight: strconv.FormatFloat(c.Weight, 'f', -1, 64), Unordered: c.Unordered,
-		})
+			InputBytes: c.InputBytes, ExpectedBytes: c.ExpectedBytes,
+		}
+		if !c.Payload {
+			// Loaded as metadata only: the payload is above the inline
+			// limit, so the row carries the case by reference.
+			row.Keep = c.ID.String()
+		}
+		f.TestCases = append(f.TestCases, row)
 	}
 	f.References = append(f.References, make([]referenceRow, formRows)...)
 	f.TestCases = append(f.TestCases, make([]testCaseRow, formRows)...)
@@ -391,7 +439,9 @@ func readForm(r *http.Request) problemForm {
 	}
 	for i := range maxFormRows {
 		suffix := "_" + strconv.Itoa(i)
-		if _, present := r.PostForm["tc_expected"+suffix]; !present {
+		_, typed := r.PostForm["tc_expected"+suffix]
+		keep := strings.TrimSpace(r.PostFormValue("tc_keep" + suffix))
+		if !typed && keep == "" {
 			break
 		}
 		f.TestCases = append(f.TestCases, testCaseRow{
@@ -402,6 +452,7 @@ func readForm(r *http.Request) problemForm {
 			Visibility: strings.TrimSpace(r.PostFormValue("tc_visibility" + suffix)),
 			Weight:     r.PostFormValue("tc_weight" + suffix),
 			Unordered:  r.PostFormValue("tc_unordered"+suffix) != "",
+			Keep:       keep,
 		})
 	}
 	// Always leave somewhere to add another row after a refused submission.

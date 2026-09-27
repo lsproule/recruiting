@@ -318,9 +318,17 @@ func compileWith(compileArgv, runArgv []string, work string) (cmdline []string, 
 	defer cancel()
 	c := exec.CommandContext(ctx, compileArgv[0], compileArgv[1:]...)
 	c.Dir, c.Env = work, env
-	out, err := c.CombinedOutput()
-	if err != nil {
-		return nil, string(out), err
+	// A toolchain's diagnostics are unbounded (a template error in C++ or a
+	// borrow-checker trace in Rust runs to megabytes), so only the tail
+	// travels back: the last lines are where the actual error is.
+	out := &cappedWriter{limit: outputTailBytes, keepTail: true}
+	c.Stdout, c.Stderr = out, out
+	if err := c.Run(); err != nil {
+		compileOut = out.String()
+		if out.dropped {
+			compileOut = "[earlier output truncated]\n" + compileOut
+		}
+		return nil, compileOut, err
 	}
 	return runArgv, "", nil
 }
@@ -355,21 +363,13 @@ func execute(cmdline []string, work, input, testID string, l limits) (result, []
 	if capBytes <= 0 {
 		capBytes = 64 * 1024
 	}
-	if l.MemMB > 0 {
-		for i, a := range cmdline {
-			if a == "java" {
-				// leave headroom for the JVM itself under the cgroup limit
-				cmdline = append(cmdline[:i+1:i+1], append([]string{fmt.Sprintf("-Xmx%dm", max(l.MemMB*3/4, 16))}, cmdline[i+1:]...)...)
-				break
-			}
-		}
-	}
+	cmdline, memEnv := applyMemoryLimit(cmdline, l.MemMB)
 
 	ctx, cancel := context.WithTimeout(context.Background(), wall)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, cmdline[0], cmdline[1:]...)
 	cmd.Dir = work
-	cmd.Env = append(os.Environ(), "HOME=/tmp")
+	cmd.Env = append(append(os.Environ(), "HOME=/tmp"), memEnv...)
 	cmd.Stdin = strings.NewReader(input)
 	// Own process group: a timeout kills every descendant, not only the leader.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -402,6 +402,32 @@ func execute(cmdline []string, work, input, testID string, l limits) (result, []
 	return res, stdout.buf.Bytes()
 }
 
+// applyMemoryLimit sizes a managed runtime's heap from the candidate's
+// memory limit, the mem_mb the spec carries, rather than letting the runtime
+// read the container's cgroup. The container is given that limit plus a
+// fixed headroom for the harness, the tmpfs and the runtime's own overhead
+// (see the runner's docker executor); a JVM or .NET GC that sized itself
+// from the cgroup would claim that headroom too and get the whole sandbox
+// OOM-killed, blaming the candidate for the harness's memory. The heap gets
+// three quarters of the limit: the rest is the runtime's metaspace, code
+// cache and thread stacks. Unmanaged languages are bounded by the cgroup
+// alone.
+func applyMemoryLimit(cmdline []string, memMB int) (argv, env []string) {
+	if memMB <= 0 || len(cmdline) == 0 {
+		return cmdline, nil
+	}
+	heapMB := max(memMB*3/4, 16)
+	switch filepath.Base(cmdline[0]) {
+	case "java":
+		argv = append(append(append([]string{}, cmdline[0]), fmt.Sprintf("-Xmx%dm", heapMB)), cmdline[1:]...)
+		return argv, nil
+	case "dotnet":
+		// The GC's hard limit is read as a hexadecimal byte count.
+		return cmdline, []string{fmt.Sprintf("DOTNET_GCHeapHardLimit=0x%X", heapMB<<20)}
+	}
+	return cmdline, nil
+}
+
 // outputTailBytes bounds what travels back as readable output. A program that
 // prints a megabyte is still hashed in full; only what a person would read is
 // carried.
@@ -421,19 +447,33 @@ type cappedWriter struct {
 	limit    int
 	keepTail bool
 	buf      bytes.Buffer
+	// dropped reports that something was discarded, so a reader can be
+	// told the text is incomplete.
+	dropped bool
 }
 
 func (w *cappedWriter) Write(p []byte) (int, error) {
 	n := len(p)
 	if w.keepTail {
+		if len(p) > w.limit {
+			// Only the tail of a single huge write can matter; never buffer
+			// the whole of it first.
+			p = p[len(p)-w.limit:]
+			w.dropped = true
+		}
 		w.buf.Write(p)
 		if w.buf.Len() > w.limit {
 			b := w.buf.Bytes()
 			w.buf = *bytes.NewBuffer(append([]byte(nil), b[len(b)-w.limit:]...))
+			w.dropped = true
 		}
 		return n, nil
 	}
-	if room := w.limit - w.buf.Len(); room > 0 {
+	room := w.limit - w.buf.Len()
+	if len(p) > room {
+		w.dropped = true
+	}
+	if room > 0 {
 		if len(p) > room {
 			p = p[:room]
 		}

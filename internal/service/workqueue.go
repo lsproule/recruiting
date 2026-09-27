@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -109,6 +111,13 @@ const (
 // SnoozeWindow is how long "not now" lasts.
 const SnoozeWindow = 24 * time.Hour
 
+// NavCountsTTL is how long the sidebar badges are served from memory before
+// the queue is scanned again for them. Every screen of the app draws the
+// badges, so without it every page view would run the queue's full scan;
+// with it the scan runs at most once per user per TTL, and sooner when a
+// decision or a snooze taken through this service changes the queue.
+const NavCountsTTL = 20 * time.Second
+
 // Where a queue row's primary action lands. The service names the paths
 // because the item carries the link; the web packages own the screens.
 const (
@@ -185,10 +194,34 @@ type WorkQueueService struct {
 	Releases Releaser
 	// Now is the clock the deadlines are measured against; tests replace it.
 	Now func() time.Time
+
+	// nav caches the sidebar badges, one entry per user, for NavCountsTTL.
+	// A user's badges are their own because snoozes are: the same org's
+	// queue reads differently to each recruiter. The entries hold the five
+	// numbers and nothing else.
+	navMu sync.Mutex
+	nav   map[navKey]*navEntry
+	// navLoads counts how many times the badges were computed from the
+	// database rather than served from the cache.
+	navLoads atomic.Int64
+}
+
+// navKey is whose badges an entry holds.
+type navKey struct{ org, user uuid.UUID }
+
+// navEntry is one user's badges. While a computation is in flight, done is
+// open and every other request for the same key waits on it rather than
+// scanning the queue again; once it closes, counts and err are set and the
+// entry serves until expires.
+type navEntry struct {
+	done    chan struct{}
+	counts  map[string]int
+	err     error
+	expires time.Time
 }
 
 func NewWorkQueueService(st *store.Store) *WorkQueueService {
-	return &WorkQueueService{st: st, Now: time.Now}
+	return &WorkQueueService{st: st, Now: time.Now, nav: map[navKey]*navEntry{}}
 }
 
 // List is the queue as one org user sees it, most urgent first. An empty
@@ -211,13 +244,20 @@ func (s *WorkQueueService) List(ctx context.Context, p Principal, filter QueueKi
 	return out, nil
 }
 
-// Counts is how many items each rule holds for this user, for the filter
-// chips and the sidebar badge.
+// Counts is how many items each rule holds for this user. It is a full read
+// of the queue: a screen that already holds the list derives the same
+// numbers from it with CountItems instead of reading twice.
 func (s *WorkQueueService) Counts(ctx context.Context, p Principal) (map[QueueKind]int, error) {
 	items, err := s.List(ctx, p, "")
 	if err != nil {
 		return nil, err
 	}
+	return CountItems(items), nil
+}
+
+// CountItems is how many rows of an unfiltered queue each rule holds, every
+// rule present so a chip can read its zero.
+func CountItems(items []QueueItem) map[QueueKind]int {
 	out := make(map[QueueKind]int, len(QueueKinds))
 	for _, kind := range QueueKinds {
 		out[kind] = 0
@@ -225,7 +265,22 @@ func (s *WorkQueueService) Counts(ctx context.Context, p Principal) (map[QueueKi
 	for _, item := range items {
 		out[item.Kind]++
 	}
-	return out, nil
+	return out
+}
+
+// FilterItems is the rows of one rule out of an unfiltered queue, in the
+// order they came; an empty filter is every row.
+func FilterItems(items []QueueItem, filter QueueKind) []QueueItem {
+	if filter == "" {
+		return items
+	}
+	out := []QueueItem{}
+	for _, item := range items {
+		if item.Kind == filter {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 // Decide takes one of the decisions a row offers: advance or reject the
@@ -239,21 +294,26 @@ func (s *WorkQueueService) Decide(ctx context.Context, p Principal, req DecideRe
 	if req.ApplicationID == uuid.Nil {
 		return ErrNotFound
 	}
+	var err error
 	switch req.Action {
 	case QueueActionAdvance, QueueActionReject:
 		if s.Apps == nil || req.ToStageID == uuid.Nil {
 			return ErrBadDecision
 		}
-		_, err := s.Apps.Move(ctx, p, MoveRequest{ApplicationID: req.ApplicationID, ToStageID: req.ToStageID, Reason: req.Reason})
-		return err
+		_, err = s.Apps.Move(ctx, p, MoveRequest{ApplicationID: req.ApplicationID, ToStageID: req.ToStageID, Reason: req.Reason})
 	case QueueActionRelease:
 		if s.Releases == nil {
 			return ErrBadDecision
 		}
-		_, err := s.Releases.Release(ctx, p, req.ApplicationID)
+		_, err = s.Releases.Release(ctx, p, req.ApplicationID)
+	default:
+		return ErrBadDecision
+	}
+	if err != nil {
 		return err
 	}
-	return ErrBadDecision
+	s.Invalidate(p.OrgID)
+	return nil
 }
 
 // Snooze hides one item from one user until the given moment. Snoozing an
@@ -273,25 +333,125 @@ func (s *WorkQueueService) Snooze(ctx context.Context, p Principal, kind QueueKi
 	if err != nil {
 		return fmt.Errorf("snooze: %w", err)
 	}
+	s.Invalidate(p.OrgID)
 	return nil
 }
 
 // NavCounts is every sidebar badge in one request: the queue's own total and
-// the counts the other nav entries show.
+// the counts the other nav entries show. The badges are served from memory
+// for NavCountsTTL after they are computed, and concurrent requests for the
+// same user's badges share one computation, so the queue's scan runs at most
+// once per user per TTL however many pages are opened. A decision or a
+// snooze taken through this service refreshes them at once; a move made
+// elsewhere (the board, the client portal, an automation) shows on the badge
+// within the TTL unless that caller invalidates.
 func (s *WorkQueueService) NavCounts(ctx context.Context, p Principal) (map[string]int, error) {
 	if p.Kind != PrincipalOrgUser {
 		return nil, ErrForbidden
 	}
-	counts, err := s.Counts(ctx, p)
+	key := navKey{p.OrgID, p.UserID}
+	s.navMu.Lock()
+	e := s.nav[key]
+	if e != nil && e.done == nil && s.now().Before(e.expires) {
+		s.navMu.Unlock()
+		return copyCounts(e.counts), nil
+	}
+	if e != nil && e.done != nil {
+		done := e.done
+		s.navMu.Unlock()
+		select {
+		case <-done:
+			return copyCounts(e.counts), e.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	e = &navEntry{done: make(chan struct{})}
+	s.nav[key] = e
+	s.navMu.Unlock()
+
+	// The computation outlives the request that started it: the ones
+	// waiting on it would otherwise inherit a cancellation none of them
+	// asked for.
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	counts, err := s.loadNavCounts(cctx, p, nil)
+	s.finish(key, e, counts, err)
+	return copyCounts(counts), err
+}
+
+// NavCountsFrom is NavCounts for a screen that has just listed the whole
+// queue: the queue badge is counted off the rows it already holds, only the
+// other badges are read, and the cache takes the fresh numbers.
+func (s *WorkQueueService) NavCountsFrom(ctx context.Context, p Principal, items []QueueItem) (map[string]int, error) {
+	if p.Kind != PrincipalOrgUser {
+		return nil, ErrForbidden
+	}
+	if items == nil {
+		items = []QueueItem{}
+	}
+	counts, err := s.loadNavCounts(ctx, p, items)
 	if err != nil {
 		return nil, err
 	}
-	total := 0
-	for _, n := range counts {
-		total += n
+	s.navMu.Lock()
+	s.nav[navKey{p.OrgID, p.UserID}] = &navEntry{counts: counts, expires: s.now().Add(NavCountsTTL)}
+	s.navMu.Unlock()
+	return copyCounts(counts), nil
+}
+
+// finish publishes one computation's result to whoever waited on it and
+// keeps it for the TTL, unless the entry was invalidated meanwhile, in
+// which case the result is served to the waiters only.
+func (s *WorkQueueService) finish(key navKey, e *navEntry, counts map[string]int, err error) {
+	s.navMu.Lock()
+	defer s.navMu.Unlock()
+	e.counts, e.err, e.expires = counts, err, s.now().Add(NavCountsTTL)
+	close(e.done)
+	if err != nil || s.nav[key] != e {
+		if s.nav[key] == e {
+			delete(s.nav, key)
+		}
+		return
 	}
-	out := map[string]int{"queue": total}
-	err = s.st.WithTx(ctx, p, func(ctx context.Context, tx *store.Tx) error {
+	e.done = nil
+}
+
+// Invalidate drops the cached badges of every user of one org, so the next
+// page they open recomputes them. Every write through this service calls
+// it; a service that moves applications on its own may call it too, and one
+// that does not is covered by the TTL.
+func (s *WorkQueueService) Invalidate(orgID uuid.UUID) {
+	s.navMu.Lock()
+	defer s.navMu.Unlock()
+	// An entry still being computed is left to its waiters; finish sees it
+	// is no longer the map's and does not keep it.
+	for key := range s.nav {
+		if key.org == orgID {
+			delete(s.nav, key)
+		}
+	}
+}
+
+// NavLoads is how many times the badges were computed from the database
+// since the service started: the cache's misses. It is for tests and for
+// anyone watching whether the cache earns its keep.
+func (s *WorkQueueService) NavLoads() int64 { return s.navLoads.Load() }
+
+// loadNavCounts computes the badges: the queue's total from the rows given,
+// or from a read of the queue when none are, and the other four from one
+// count query. The queue rules stay in Go rather than being repeated in SQL
+// for a count: the two would drift.
+func (s *WorkQueueService) loadNavCounts(ctx context.Context, p Principal, items []QueueItem) (map[string]int, error) {
+	s.navLoads.Add(1)
+	if items == nil {
+		var err error
+		if items, err = s.List(ctx, p, ""); err != nil {
+			return nil, err
+		}
+	}
+	out := map[string]int{"queue": len(items)}
+	err := s.st.WithTx(ctx, p, func(ctx context.Context, tx *store.Tx) error {
 		row, err := tx.Q.CountNavSubjects(ctx, p.OrgID)
 		if err != nil {
 			return err
@@ -304,6 +464,18 @@ func (s *WorkQueueService) NavCounts(ctx context.Context, p Principal) (map[stri
 		return nil, fmt.Errorf("nav counts: %w", err)
 	}
 	return out, nil
+}
+
+// copyCounts hands a caller its own map: the cached one is shared.
+func copyCounts(counts map[string]int) map[string]int {
+	if counts == nil {
+		return nil
+	}
+	out := make(map[string]int, len(counts))
+	for key, n := range counts {
+		out[key] = n
+	}
+	return out
 }
 
 func knownQueueKind(kind QueueKind) bool {

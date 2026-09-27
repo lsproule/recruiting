@@ -44,6 +44,18 @@ const (
 // often enough to stop promptly, rarely enough to stay cheap.
 const ctxCheckInterval = 4096
 
+// MaxConcurrentExtractions bounds how many resumes are parsed at once across
+// the process. Each parse holds its file and decompressed streams in memory,
+// so a burst of uploads queues here rather than multiplying that working set;
+// a caller that cannot get a slot before its context ends gets that error.
+const MaxConcurrentExtractions = 4
+
+// extractSlots is the semaphore behind MaxConcurrentExtractions.
+var extractSlots = make(chan struct{}, MaxConcurrentExtractions)
+
+// sniffLen is how much of a file's head decides what it is.
+const sniffLen = 512
+
 var (
 	ErrResumeType     = errors.New("domain: a resume must be a PDF or a Word (.docx) file")
 	ErrResumeTooLarge = errors.New("domain: that resume is larger than 10 MB")
@@ -57,21 +69,38 @@ const docxEntry = "word/document.xml"
 // SniffResume identifies data by its bytes. The uploaded filename is never
 // consulted: an executable renamed resume.pdf must not pass.
 func SniffResume(data []byte) (string, error) {
-	switch {
-	case len(data) == 0:
+	return SniffResumeAt(bytes.NewReader(data), int64(len(data)))
+}
+
+// SniffResumeAt identifies a file of size bytes at r without loading it: the
+// first few bytes name a PDF or a zip, and only a zip has its part list read,
+// from the tail, to tell a Word document from any other archive. A file that
+// starts with neither is refused after one small read.
+func SniffResumeAt(r io.ReaderAt, size int64) (string, error) {
+	if size <= 0 {
 		return "", ErrResumeEmpty
-	case bytes.HasPrefix(data, []byte("%PDF-")):
+	}
+	head := make([]byte, min(sniffLen, size))
+	n, err := r.ReadAt(head, 0)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", fmt.Errorf("domain: sniff resume: %w", err)
+	}
+	head = head[:n]
+	switch {
+	case len(head) == 0:
+		return "", ErrResumeEmpty
+	case bytes.HasPrefix(head, []byte("%PDF-")):
 		return ResumePDF, nil
-	case isDOCX(data):
+	case bytes.HasPrefix(head, []byte("PK\x03\x04")) && isDOCX(r, size):
 		return ResumeDOCX, nil
 	}
 	return "", ErrResumeType
 }
 
-// isDOCX reports whether data is a zip carrying a Word document part. A plain
+// isDOCX reports whether the zip at r carries a Word document part. A plain
 // zip shares the magic number, so the part list decides.
-func isDOCX(data []byte) bool {
-	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+func isDOCX(r io.ReaderAt, size int64) bool {
+	zr, err := zip.NewReader(r, size)
 	if err != nil {
 		return false
 	}
@@ -83,12 +112,29 @@ func isDOCX(data []byte) bool {
 	return false
 }
 
-// ExtractText reads the plain text of a sniffed resume, bounded by ctx and by
-// the decompression and output limits above. Callers treat any error as "no
-// searchable text" rather than a failed upload.
+// ExtractText reads the plain text of a sniffed resume held in memory; see
+// ExtractTextAt.
 func ExtractText(ctx context.Context, contentType string, data []byte) (string, error) {
+	return ExtractTextAt(ctx, contentType, bytes.NewReader(data), int64(len(data)))
+}
+
+// ExtractTextAt reads the plain text of a sniffed resume of size bytes at r,
+// bounded by ctx, by ExtractTimeout, and by the decompression and output
+// limits above. At most MaxConcurrentExtractions run at once; a call that
+// waits past its deadline for a slot fails like one that ran past it. Every
+// read the parsers make goes through ctx, so a parse abandoned by its caller
+// stops at its next read rather than running on. Callers treat any error as
+// "no searchable text" rather than a failed upload.
+func ExtractTextAt(ctx context.Context, contentType string, r io.ReaderAt, size int64) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
+	}
+	ctx, cancel := context.WithTimeout(ctx, ExtractTimeout)
+	defer cancel()
+	select {
+	case extractSlots <- struct{}{}:
+	case <-ctx.Done():
+		return "", ctx.Err()
 	}
 	type result struct {
 		text string
@@ -97,42 +143,43 @@ func ExtractText(ctx context.Context, contentType string, data []byte) (string, 
 	// Buffered so the worker never blocks on a caller that has given up.
 	done := make(chan result, 1)
 	go func() {
+		defer func() { <-extractSlots }()
 		// Third-party parsers panic on malformed input; a resume must never
 		// take the process down.
 		defer func() {
-			if r := recover(); r != nil {
-				done <- result{err: fmt.Errorf("domain: extract %s: %v", contentType, r)}
+			if p := recover(); p != nil {
+				done <- result{err: fmt.Errorf("domain: extract %s: %v", contentType, p)}
 			}
 		}()
-		text, err := extract(ctx, contentType, data)
+		text, err := extract(ctx, contentType, &ctxReaderAt{ctx: ctx, r: r}, size)
 		done <- result{text: text, err: err}
 	}()
 	select {
 	case <-ctx.Done():
 		return "", ctx.Err()
-	case r := <-done:
-		return r.text, r.err
+	case res := <-done:
+		return res.text, res.err
 	}
 }
 
-func extract(ctx context.Context, contentType string, data []byte) (string, error) {
+func extract(ctx context.Context, contentType string, r io.ReaderAt, size int64) (string, error) {
 	switch contentType {
 	case ResumePDF:
-		return extractPDF(ctx, data)
+		return extractPDF(r, size)
 	case ResumeDOCX:
-		return extractDOCX(ctx, data)
+		return extractDOCX(ctx, r, size)
 	}
 	return "", ErrResumeType
 }
 
-func extractPDF(ctx context.Context, data []byte) (string, error) {
-	// The reader is what the parser pulls bytes through, so cancelling ctx
-	// stops the parse rather than only abandoning it.
-	r, err := pdf.NewReader(&ctxReaderAt{ctx: ctx, r: bytes.NewReader(data)}, int64(len(data)))
+func extractPDF(r io.ReaderAt, size int64) (string, error) {
+	// r is what the parser pulls bytes through, and it fails once ctx is
+	// done, so cancelling stops the parse rather than only abandoning it.
+	pr, err := pdf.NewReader(r, size)
 	if err != nil {
 		return "", fmt.Errorf("domain: read pdf: %w", err)
 	}
-	body, err := r.GetPlainText()
+	body, err := pr.GetPlainText()
 	if err != nil {
 		return "", fmt.Errorf("domain: read pdf text: %w", err)
 	}
@@ -157,8 +204,8 @@ func (c *ctxReaderAt) ReadAt(p []byte, off int64) (int, error) {
 	return c.r.ReadAt(p, off)
 }
 
-func extractDOCX(ctx context.Context, data []byte) (string, error) {
-	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+func extractDOCX(ctx context.Context, r io.ReaderAt, size int64) (string, error) {
+	zr, err := zip.NewReader(r, size)
 	if err != nil {
 		return "", fmt.Errorf("domain: read docx: %w", err)
 	}

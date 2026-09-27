@@ -630,3 +630,87 @@ func TestSteppingThroughAVerifiedProblemKeepsItProven(t *testing.T) {
 		t.Fatalf("detail after stepping = %d, body %q", res.StatusCode, body)
 	}
 }
+
+// A case too large for a textarea is not put on the edit form: the row
+// shows its size and links to the case, and carries the case's id so a save
+// keeps it as stored. A seed-derived problem's perf cases would otherwise
+// make the page, and the post back, tens of megabytes.
+func TestEditFormKeepsABigCaseByReference(t *testing.T) {
+	f := newFixture(t, stubRunner{})
+	s := f.browser(t)
+	s.login(f.recruiterEmail)
+
+	big := strings.Repeat("7 ", 2*problems.InlineCaseBytes)
+	form := newProblemForm("Big Case Screen", "print(3)")
+	form.Set("tc_input_1", big)
+	form.Set("tc_name_1", "perf")
+	form.Set("tc_class_1", "perf")
+	res, body := s.post(problems.Prefix+"/", form)
+	if res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("create = %d, body %q", res.StatusCode, body)
+	}
+	detail := res.Header.Get("Location")
+	var caseID uuid.UUID
+	if err := f.sys.QueryRow(context.Background(),
+		`select id from test_case where org_id = $1 and name = 'perf'`, f.orgID).Scan(&caseID); err != nil {
+		t.Fatalf("perf case row: %v", err)
+	}
+	casePath := "/api/v1/problems/" + strings.TrimPrefix(detail, problems.Prefix+"/") + "/cases/" + caseID.String()
+
+	res, body = s.get(detail)
+	if res.StatusCode != http.StatusOK || strings.Contains(body, big) || !strings.Contains(body, casePath) || !strings.Contains(body, "64 KB in") {
+		t.Fatalf("detail = %d; carries the payload: %v; links the case: %v; names the size: %v",
+			res.StatusCode, strings.Contains(body, big), strings.Contains(body, casePath), strings.Contains(body, "64 KB in"))
+	}
+
+	res, body = s.get(detail + "/edit")
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("edit form = %d, body %q", res.StatusCode, body)
+	}
+	if strings.Contains(body, big) || strings.Contains(body, `name="tc_input_1"`) {
+		t.Errorf("the edit form inlines the big case")
+	}
+	if !strings.Contains(body, `name="tc_keep_1" value="`+caseID.String()+`"`) || !strings.Contains(body, casePath) {
+		t.Errorf("the edit form does not keep the big case by reference and link it: %q", body)
+	}
+	if !strings.Contains(body, `name="tc_input_0"`) || !strings.Contains(body, "1 2") {
+		t.Errorf("the small case is no longer editable inline")
+	}
+	if len(body) > 200<<10 {
+		t.Errorf("the edit form is %d bytes for a %d-byte case", len(body), len(big))
+	}
+
+	// Save the form as the browser would post it: the small case typed, the
+	// big one named by its id, a field changed elsewhere.
+	edited := newProblemForm("Big Case Screen", "print(3)")
+	edited.Del("tc_input_1")
+	edited.Del("tc_expected_1")
+	edited.Set("tc_keep_1", caseID.String())
+	edited.Set("tc_name_1", "perf")
+	edited.Set("tc_class_1", "perf")
+	edited.Set("tc_visibility_1", "hidden")
+	edited.Set("tc_weight_1", "3")
+	edited.Set("difficulty", "hard")
+	if res, body := s.post(detail, edited); res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("update = %d, body %q", res.StatusCode, body)
+	}
+	var stored string
+	var weight float64
+	var count int
+	if err := f.sys.QueryRow(context.Background(),
+		`select input, weight, (select count(*) from test_case where org_id = $1) from test_case where org_id = $1 and name = 'perf'`, f.orgID).Scan(&stored, &weight, &count); err != nil {
+		t.Fatalf("perf case after save: %v", err)
+	}
+	if stored != big || weight != 3 || count != 2 {
+		t.Errorf("after the save the perf case holds %d bytes at weight %v among %d cases; want the %d-byte input kept, weight 3, 2 cases", len(stored), weight, count, len(big))
+	}
+
+	// A kept id the problem does not own is refused, not silently dropped.
+	forged := newProblemForm("Big Case Screen", "print(3)")
+	forged.Del("tc_input_1")
+	forged.Del("tc_expected_1")
+	forged.Set("tc_keep_1", uuid.New().String())
+	if res, body := s.post(detail, forged); res.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(body, "stored case") {
+		t.Errorf("a forged keep = %d, want 422 naming the case; body %q", res.StatusCode, body)
+	}
+}
